@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useApiClient } from '../store/apiClient'
-import { useAuth } from '../store/authStore'
+import { useAuth, useAuthActions } from '../store/authStore'
 import CoverPageAnimation from '../../public/assets/lottie-animations/coverPage'
 import { OrganizationSelector } from '../components/OrganizationSelector'
+import OTPVerification from '../../components/OTPVerification'
 
 export default function AuthPage() {
   const [activeTab, setActiveTab] = useState<'login' | 'register'>('login')
@@ -13,18 +14,43 @@ export default function AuthPage() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [selectedOrganization, setSelectedOrganization] = useState<string>('')
+  const [isRedirecting, setIsRedirecting] = useState(false)
+  const [showOTP, setShowOTP] = useState(false)
+  const [otpData, setOtpData] = useState<{
+    email: string;
+    type: 'registration' | 'login';
+    userData?: any;
+  } | null>(null)
   
   const { login, register } = useApiClient()
   const { isAuthenticated } = useAuth()
+  const { login: authLogin } = useAuthActions()
   const router = useRouter()
-  if (isAuthenticated) {
-    router.push('/')
-    return null
+
+  // Handle authentication redirect in useEffect to avoid render-time navigation
+  useEffect(() => {
+    if (isAuthenticated && !isRedirecting) {
+      setIsRedirecting(true)
+      router.push('/dashboard')
+    }
+  }, [isAuthenticated, router, isRedirecting])
+
+  // Show loading state while redirecting
+  if (isAuthenticated && isRedirecting) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-linear-to-br from-blue-50 to-purple-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Redirecting to dashboard...</p>
+        </div>
+      </div>
+    )
   }
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setError(null)
+    setSuccess(null)
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -32,11 +58,28 @@ export default function AuthPage() {
     const password = formData.get('password') as string
 
     try {
-      await login(email, password)
-      setSuccess('Login successful! Redirecting...')
-      setTimeout(() => router.push('/'), 1500)
+      const response = await fetch('/api/user-login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        setSuccess('OTP sent to your email. Please enter OTP to complete login.')
+        setShowOTP(true)
+        setOtpData({
+          email,
+          type: 'login'
+        })
+      } else {
+        setError(data.error || 'Login failed')
+      }
     } catch (err: any) {
-      setError(err.message || 'Login failed')
+      setError('Login failed. Please try again.')
     } finally {
       setIsLoading(false)
     }
@@ -45,6 +88,7 @@ export default function AuthPage() {
   const handleRegister = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setError(null)
+    setSuccess(null)
     setIsLoading(true)
 
     const formData = new FormData(e.currentTarget)
@@ -66,20 +110,92 @@ export default function AuthPage() {
     }
 
     try {
-      await register({
-        name,
-        email,
-        password,
-        organization_domain: selectedOrganization
+      const response = await fetch('/api/register-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name,
+          email,
+          password,
+          organization_domain: selectedOrganization
+        }),
       })
-      setSuccess('Registration successful! Please login with your credentials.')
-      setActiveTab('login')
-      setSelectedOrganization('')
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        setSuccess('OTP sent to your email. Please enter OTP to complete registration.')
+        setShowOTP(true)
+        setOtpData({
+          email,
+          type: 'registration',
+          userData: data.userData
+        })
+      } else {
+        setError(data.error || 'Registration failed')
+      }
     } catch (err: any) {
-      setError(err.message || 'Registration failed')
+      setError('Registration failed. Please try again.')
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleOTPVerificationSuccess = (data: any) => {
+    // Store the authentication data
+    authLogin({
+      user: data.user,
+      organization: data.organization,
+      role: data.role,
+      roles: data.roles,
+      token: data.token
+    })
+    
+    setSuccess('OTP verified successfully! Redirecting to dashboard...')
+    
+    // Redirect will be handled by the useEffect watching isAuthenticated
+  }
+
+  const handleResendOTP = async () => {
+    if (!otpData) return
+
+    try {
+      const response = await fetch('/api/resend-otp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: otpData.email,
+          type: otpData.type
+        }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        setSuccess('New OTP sent successfully!')
+      } else {
+        setError(data.error || 'Failed to resend OTP')
+      }
+    } catch (err) {
+      setError('Failed to resend OTP. Please try again.')
+    }
+  }
+
+  // Show OTP verification if needed
+  if (showOTP && otpData) {
+    return (
+      <OTPVerification
+        email={otpData.email}
+        type={otpData.type}
+        userData={otpData.userData}
+        onVerificationSuccess={handleOTPVerificationSuccess}
+        onResendOTP={handleResendOTP}
+      />
+    )
   }
 
   return (

@@ -111,10 +111,12 @@ const Sidebar = () => {
 
   return (
     <>
-      {/* Mobile overlay */}
+      {/* Dark overlay when sidebar is expanded */}
       {isExpanded && (
         <div 
-          className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+          className="fixed inset-0  bg-opacity-50 z-40 transition-all duration-300 ease-in-out animate-in fade-in"
+          style={{backgroundColor: "rgba(0, 0, 0, 0.5)",}}
+          
           onClick={() => setIsExpanded(false)}
         />
       )}
@@ -141,9 +143,9 @@ const Sidebar = () => {
           {isExpanded && (
             <div className="flex items-center space-x-2">
               <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-                <span className="text-white font-semibold text-sm">SA</span>
+                <span className="text-white font-semibold text-sm">TM</span>
               </div>
-              <span className="font-semibold text-gray-900">SA Ticketing</span>
+              <span className="font-semibold text-gray-900">Ticketing Metrix</span>
             </div>
           )}
         </div>

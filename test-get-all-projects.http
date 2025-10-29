@@ -1,0 +1,29 @@
+### Test Get All Projects API
+
+# Test 1: Get all projects for dropdown (Admin)
+GET http://localhost:3000/api/get-all-projects?format=dropdown
+Authorization: Bearer {{jwt_token}}
+Content-Type: application/json
+
+###
+
+# Test 2: Get all projects with stats (Admin)
+GET http://localhost:3000/api/get-all-projects?includeStats=true
+Authorization: Bearer {{jwt_token}}
+Content-Type: application/json
+
+###
+
+# Test 3: Search projects
+GET http://localhost:3000/api/get-all-projects?format=dropdown&search=test
+Authorization: Bearer {{jwt_token}}
+Content-Type: application/json
+
+###
+
+# Test 4: Manager projects only
+GET http://localhost:3000/api/get-all-projects?format=dropdown
+Authorization: Bearer {{manager_jwt_token}}
+Content-Type: application/json
+
+###

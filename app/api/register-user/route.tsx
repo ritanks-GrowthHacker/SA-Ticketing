@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { supabase } from "@/app/db/connections";
+import { OTPService } from "@/lib/otpService";
 
 export async function POST(req: Request) {
   try {
@@ -40,57 +41,51 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "User already exists" }, { status: 400 });
     }
 
+    // Generate OTP and hash password
+    const otp = OTPService.generateOTP();
+    const otpExpiresAt = OTPService.getExpiryTime();
     const password_hash = await bcrypt.hash(password, 10);
 
+    console.log('Registration OTP Generation Debug:', {
+      email,
+      generatedOTP: otp,
+      expiryTime: otpExpiresAt.toISOString()
+    });
+
+    // Store user with OTP
     const { data: user, error: userError } = await supabase
       .from("users")
-      .insert([{ name, email, password_hash }])
+      .insert([{ 
+        name, 
+        email, 
+        password_hash,
+        otp,
+        otp_expires_at: otpExpiresAt.toISOString()
+      }])
       .select("id, name, email, created_at")
       .single();
 
-    if (userError || !user)
+    if (userError || !user) {
       return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
+    }
 
-    const { data: role } = await supabase
-      .from("roles")
-      .select("id, name")
-      .eq("organization_id", organization_id)
-      .eq("name", "Member")
-      .maybeSingle();
+    // Send OTP email
+    const emailSent = await OTPService.sendOTP(email, otp, 'registration');
+    
+    if (!emailSent) {
+      // Clean up user if email fails
+      await supabase.from("users").delete().eq("id", user.id);
+      return NextResponse.json({ 
+        error: "Failed to send OTP. Please try again." 
+      }, { status: 500 });
+    }
 
-    await supabase
-      .from("user_organization")
-      .insert([{ user_id: user.id, organization_id, role_id: role?.id || null }]);
-
-    const { data: roles } = await supabase
-      .from("roles")
-      .select("name")
-      .in(
-        "id",
-        (
-          await supabase
-            .from("user_organization")
-            .select("role_id")
-            .eq("user_id", user.id)
-        ).data?.map((r: any) => r.role_id) || []
-      );
-
-    const roleNames = roles?.map((r) => r.name) || [];
-
-    const token = jwt.sign(
-      {
-        sub: user.id,
-        email: user.email,
-        name: user.name,
-        org_id: organization_id,
-        roles: roleNames,
-        iss: process.env.JWT_ISSUER,
-      },
-      process.env.JWT_SECRET as string,
-      { expiresIn: "7d" }
-    );
-
-    return NextResponse.json({ user, token }, { status: 201 });
+    return NextResponse.json({ 
+      success: true,
+      message: "Registration initiated. Please check your email for OTP.",
+      email,
+      userData: { name, email, password_hash, organization_id }
+    }, { status: 200 });
   } catch (err) {
     console.error("REGISTER ERROR:", err);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });

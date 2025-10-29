@@ -165,7 +165,7 @@ export const useAuthStore = create<AuthState>()(
       },
     }),
     {
-      name: 'sa-ticketing-auth', // Storage key
+      name: 'ticketing-metrix-auth', // Storage key
       storage: createJSONStorage(() => localStorage),
       
       // Only persist certain fields (exclude loading states)

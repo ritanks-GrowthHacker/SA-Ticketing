@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { supabase } from "@/app/db/connections";
+import { OTPService } from "@/lib/otpService";
 
 export async function POST(req: Request) {
   try {
@@ -64,83 +65,49 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: userOrganizations, error: orgError } = await supabase
-      .from("user_organization")
-      .select(`
-        organization_id,
-        role_id,
-        organizations(id, name, domain),
-        roles(id, name, description)
-      `)
-      .eq("user_id", user.id);
+    // Generate OTP for login verification
+    const otp = OTPService.generateOTP();
+    const otpExpiresAt = OTPService.getExpiryTime();
 
-    if (orgError) {
-      console.error("Organization lookup error:", orgError);
+    console.log('Login OTP Generation Debug:', {
+      email,
+      userId: user.id,
+      generatedOTP: otp,
+      expiryTime: otpExpiresAt.toISOString()
+    });
+
+    // Update user with login OTP
+    const { error: updateError } = await supabase
+      .from("users")
+      .update({
+        otp,
+        otp_expires_at: otpExpiresAt.toISOString()
+      })
+      .eq("id", user.id);
+
+    if (updateError) {
+      console.error("OTP update error:", updateError);
       return NextResponse.json(
-        { error: "Failed to fetch user organizations" }, 
+        { error: "Failed to generate login code" }, 
         { status: 500 }
       );
     }
 
-    if (!userOrganizations || userOrganizations.length === 0) {
-      return NextResponse.json(
-        { error: "User is not associated with any organization" }, 
-        { status: 403 }
-      );
+    // Send OTP email
+    const emailSent = await OTPService.sendOTP(email, otp, 'login');
+    
+    if (!emailSent) {
+      return NextResponse.json({ 
+        error: "Failed to send login OTP. Please try again." 
+      }, { status: 500 });
     }
 
-  
-    const primaryOrg = userOrganizations[0] as any;
-    const organization = primaryOrg.organizations;
-    const role = primaryOrg.roles;
-
-    const allRoles = userOrganizations
-      .map((uo: any) => uo.roles?.name)
-      .filter(Boolean) as string[];
-
-    const tokenPayload = {
-      sub: user.id,
-      email: user.email,
-      name: user.name,
-      org_id: organization.id,
-      org_name: organization.name,
-      org_domain: organization.domain,
-      role: role?.name || "Member",
-      roles: allRoles,
-      iss: process.env.JWT_ISSUER,
-    };
-
-    const token = jwt.sign(
-      tokenPayload,
-      process.env.JWT_SECRET as string,
-      { expiresIn: "7d" }
-    );
-
-    const responseData = {
-      message: "Login successful",
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        created_at: user.created_at
-      },
-      organization: {
-        id: organization.id,
-        name: organization.name,
-        domain: organization.domain
-      },
-      role: role?.name || "Member",
-      roles: allRoles,
-      token,
-      organizations: userOrganizations.map((uo: any) => ({
-        id: uo.organizations.id,
-        name: uo.organizations.name,
-        domain: uo.organizations.domain,
-        role: uo.roles?.name || "Member"
-      }))
-    };
-
-    return NextResponse.json(responseData, { status: 200 });
+    return NextResponse.json({ 
+      success: true,
+      message: "Login OTP sent. Please check your email.",
+      email,
+      userId: user.id
+    }, { status: 200 });
 
   } catch (error) {
     console.error("Login error:", error);

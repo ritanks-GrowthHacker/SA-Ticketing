@@ -1,0 +1,423 @@
+import { NextResponse } from "next/server";
+import jwt from "jsonwebtoken";
+import { supabase } from "@/app/db/connections";
+
+// Helper function to verify JWT token and extract user info
+async function verifyToken(authHeader: string | null) {
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return null;
+  }
+
+  try {
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+    return decoded;
+  } catch (error) {
+    console.error('Token verification failed:', error);
+    return null;
+  }
+}
+
+// Helper function to check if user has permission to manage roles
+function canManageRoles(userRoles: string[]): boolean {
+  const authorizedRoles = ['Admin', 'Manager', 'Team Lead'];
+  return userRoles.some(role => authorizedRoles.includes(role));
+}
+
+// GET - Get all users and their roles in an organization
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const organizationId = searchParams.get('organization_id');
+    
+    // Verify authentication
+    const authHeader = req.headers.get('authorization');
+    const tokenData = await verifyToken(authHeader);
+    
+    if (!tokenData) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Check if user has permission to view roles
+    if (!canManageRoles(tokenData.roles || [])) {
+      return NextResponse.json({ 
+        error: "Access denied. Only Admin, Manager, or Team Lead can manage roles" 
+      }, { status: 403 });
+    }
+
+    const orgId = organizationId || tokenData.org_id;
+    
+    if (!orgId) {
+      return NextResponse.json({ error: "Organization ID is required" }, { status: 400 });
+    }
+
+    // Get all users in the organization with their roles
+    const { data: users, error: usersError } = await supabase
+      .from("user_organization")
+      .select(`
+        user_id,
+        role_id,
+        users(id, name, email, created_at),
+        roles(id, name, description)
+      `)
+      .eq("organization_id", orgId);
+
+    if (usersError) {
+      console.error("Users lookup error:", usersError);
+      return NextResponse.json({ error: "Failed to fetch users" }, { status: 500 });
+    }
+
+    // Get all available roles for this organization
+    const { data: availableRoles, error: rolesError } = await supabase
+      .from("roles")
+      .select("id, name, description")
+      .eq("organization_id", orgId);
+
+    if (rolesError) {
+      console.error("Roles lookup error:", rolesError);
+      return NextResponse.json({ error: "Failed to fetch roles" }, { status: 500 });
+    }
+
+    // Format the response
+    const formattedUsers = users?.map((userOrg: any) => ({
+      userId: userOrg.users.id,
+      name: userOrg.users.name,
+      email: userOrg.users.email,
+      joinedAt: userOrg.users.created_at,
+      currentRole: userOrg.roles ? {
+        id: userOrg.roles.id,
+        name: userOrg.roles.name,
+        description: userOrg.roles.description
+      } : null
+    })) || [];
+
+    return NextResponse.json({
+      success: true,
+      users: formattedUsers,
+      availableRoles: availableRoles || []
+    }, { status: 200 });
+
+  } catch (error) {
+    console.error("GET manage-user-role error:", error);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}
+
+// PUT - Update user role in organization
+export async function PUT(req: Request) {
+  try {
+    const { userId, roleId, organizationId } = await req.json();
+
+    // Verify authentication
+    const authHeader = req.headers.get('authorization');
+    const tokenData = await verifyToken(authHeader);
+    
+    if (!tokenData) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Check if user has permission to manage roles
+    if (!canManageRoles(tokenData.roles || [])) {
+      return NextResponse.json({ 
+        error: "Access denied. Only Admin, Manager, or Team Lead can manage roles" 
+      }, { status: 403 });
+    }
+
+    // Validate required fields
+    if (!userId || !roleId) {
+      return NextResponse.json({ 
+        error: "User ID and Role ID are required" 
+      }, { status: 400 });
+    }
+
+    const orgId = organizationId || tokenData.org_id;
+
+    // Prevent users from modifying their own role (security measure)
+    if (userId === tokenData.sub) {
+      return NextResponse.json({ 
+        error: "You cannot modify your own role" 
+      }, { status: 403 });
+    }
+
+    // Verify the role exists in this organization
+    const { data: role, error: roleError } = await supabase
+      .from("roles")
+      .select("id, name")
+      .eq("id", roleId)
+      .eq("organization_id", orgId)
+      .single();
+
+    if (roleError || !role) {
+      return NextResponse.json({ error: "Invalid role for this organization" }, { status: 400 });
+    }
+
+    // Verify the user exists in this organization
+    const { data: existingUser, error: userError } = await supabase
+      .from("user_organization")
+      .select("user_id")
+      .eq("user_id", userId)
+      .eq("organization_id", orgId)
+      .single();
+
+    if (userError || !existingUser) {
+      return NextResponse.json({ error: "User not found in this organization" }, { status: 404 });
+    }
+
+    // Get user details for activity logging
+    const { data: userDetails } = await supabase
+      .from("users")
+      .select("name, email")
+      .eq("id", userId)
+      .single();
+
+    // Update user role
+    const { error: updateError } = await supabase
+      .from("user_organization")
+      .update({ role_id: roleId })
+      .eq("user_id", userId)
+      .eq("organization_id", orgId);
+
+    if (updateError) {
+      console.error("Role update error:", updateError);
+      return NextResponse.json({ error: "Failed to update user role" }, { status: 500 });
+    }
+
+    // Log the activity
+    await supabase
+      .from("activity_logs")
+      .insert({
+        user_id: tokenData.sub,
+        entity_type: "user_role",
+        entity_id: userId,
+        action: "role_updated",
+        details: {
+          target_user: userDetails?.name || "Unknown User",
+          target_email: userDetails?.email,
+          new_role: role.name,
+          updated_by: tokenData.name || tokenData.email,
+          organization_id: orgId
+        }
+      });
+
+    return NextResponse.json({
+      success: true,
+      message: `User role updated to ${role.name} successfully`,
+      updatedUser: {
+        userId,
+        newRole: {
+          id: role.id,
+          name: role.name
+        }
+      }
+    }, { status: 200 });
+
+  } catch (error) {
+    console.error("PUT manage-user-role error:", error);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}
+
+// POST - Add user to organization with role
+export async function POST(req: Request) {
+  try {
+    const { email, roleId, organizationId } = await req.json();
+
+    // Verify authentication
+    const authHeader = req.headers.get('authorization');
+    const tokenData = await verifyToken(authHeader);
+    
+    if (!tokenData) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Check if user has permission to manage roles
+    if (!canManageRoles(tokenData.roles || [])) {
+      return NextResponse.json({ 
+        error: "Access denied. Only Admin, Manager, or Team Lead can manage roles" 
+      }, { status: 403 });
+    }
+
+    // Validate required fields
+    if (!email || !roleId) {
+      return NextResponse.json({ 
+        error: "Email and Role ID are required" 
+      }, { status: 400 });
+    }
+
+    const orgId = organizationId || tokenData.org_id;
+
+    // Check if user exists
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("id, name, email")
+      .eq("email", email.toLowerCase())
+      .single();
+
+    if (userError || !user) {
+      return NextResponse.json({ error: "User not found with this email" }, { status: 404 });
+    }
+
+    // Check if user is already in the organization
+    const { data: existingMember } = await supabase
+      .from("user_organization")
+      .select("user_id")
+      .eq("user_id", user.id)
+      .eq("organization_id", orgId)
+      .single();
+
+    if (existingMember) {
+      return NextResponse.json({ error: "User is already a member of this organization" }, { status: 400 });
+    }
+
+    // Verify the role exists in this organization
+    const { data: role, error: roleError } = await supabase
+      .from("roles")
+      .select("id, name")
+      .eq("id", roleId)
+      .eq("organization_id", orgId)
+      .single();
+
+    if (roleError || !role) {
+      return NextResponse.json({ error: "Invalid role for this organization" }, { status: 400 });
+    }
+
+    // Add user to organization
+    const { error: addError } = await supabase
+      .from("user_organization")
+      .insert({
+        user_id: user.id,
+        organization_id: orgId,
+        role_id: roleId
+      });
+
+    if (addError) {
+      console.error("Add user error:", addError);
+      return NextResponse.json({ error: "Failed to add user to organization" }, { status: 500 });
+    }
+
+    // Log the activity
+    await supabase
+      .from("activity_logs")
+      .insert({
+        user_id: tokenData.sub,
+        entity_type: "user_organization",
+        entity_id: user.id,
+        action: "user_added",
+        details: {
+          added_user: user.name,
+          added_email: user.email,
+          assigned_role: role.name,
+          added_by: tokenData.name || tokenData.email,
+          organization_id: orgId
+        }
+      });
+
+    return NextResponse.json({
+      success: true,
+      message: `User ${user.name} added to organization with role ${role.name}`,
+      addedUser: {
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        role: {
+          id: role.id,
+          name: role.name
+        }
+      }
+    }, { status: 201 });
+
+  } catch (error) {
+    console.error("POST manage-user-role error:", error);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}
+
+// DELETE - Remove user from organization
+export async function DELETE(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const userId = searchParams.get('user_id');
+    const organizationId = searchParams.get('organization_id');
+
+    // Verify authentication
+    const authHeader = req.headers.get('authorization');
+    const tokenData = await verifyToken(authHeader);
+    
+    if (!tokenData) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Check if user has permission to manage roles
+    if (!canManageRoles(tokenData.roles || [])) {
+      return NextResponse.json({ 
+        error: "Access denied. Only Admin, Manager, or Team Lead can manage roles" 
+      }, { status: 403 });
+    }
+
+    if (!userId) {
+      return NextResponse.json({ error: "User ID is required" }, { status: 400 });
+    }
+
+    const orgId = organizationId || tokenData.org_id;
+
+    // Prevent users from removing themselves
+    if (userId === tokenData.sub) {
+      return NextResponse.json({ 
+        error: "You cannot remove yourself from the organization" 
+      }, { status: 403 });
+    }
+
+    // Get user details before removal
+    const { data: userOrg, error: userOrgError } = await supabase
+      .from("user_organization")
+      .select(`
+        users(name, email),
+        roles(name)
+      `)
+      .eq("user_id", userId)
+      .eq("organization_id", orgId)
+      .single();
+
+    if (userOrgError || !userOrg) {
+      return NextResponse.json({ error: "User not found in this organization" }, { status: 404 });
+    }
+
+    // Remove user from organization
+    const { error: deleteError } = await supabase
+      .from("user_organization")
+      .delete()
+      .eq("user_id", userId)
+      .eq("organization_id", orgId);
+
+    if (deleteError) {
+      console.error("Remove user error:", deleteError);
+      return NextResponse.json({ error: "Failed to remove user from organization" }, { status: 500 });
+    }
+
+    // Log the activity
+    await supabase
+      .from("activity_logs")
+      .insert({
+        user_id: tokenData.sub,
+        entity_type: "user_organization",
+        entity_id: userId,
+        action: "user_removed",
+        details: {
+          removed_user: (userOrg as any).users.name,
+          removed_email: (userOrg as any).users.email,
+          previous_role: (userOrg as any).roles?.name,
+          removed_by: tokenData.name || tokenData.email,
+          organization_id: orgId
+        }
+      });
+
+    return NextResponse.json({
+      success: true,
+      message: `User ${(userOrg as any).users.name} removed from organization successfully`
+    }, { status: 200 });
+
+  } catch (error) {
+    console.error("DELETE manage-user-role error:", error);
+    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
+  }
+}

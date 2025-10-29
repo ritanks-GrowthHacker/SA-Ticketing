@@ -1,0 +1,16 @@
+# Dashboard Metrics API Test
+
+### Test Admin Dashboard Metrics
+GET http://localhost:3000/api/get-dashboard-metrics
+Authorization: Bearer YOUR_JWT_TOKEN_HERE
+Content-Type: application/json
+
+### Test Manager Dashboard Metrics (without project)
+GET http://localhost:3000/api/get-dashboard-metrics
+Authorization: Bearer YOUR_MANAGER_JWT_TOKEN_HERE
+Content-Type: application/json
+
+### Test Manager Dashboard Metrics (with specific project)
+GET http://localhost:3000/api/get-dashboard-metrics?project_id=1&type=project
+Authorization: Bearer YOUR_MANAGER_JWT_TOKEN_HERE
+Content-Type: application/json

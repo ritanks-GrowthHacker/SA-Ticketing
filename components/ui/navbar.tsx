@@ -74,7 +74,7 @@ const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
       {/* Left side - can add breadcrumb or page title here */}
       <div className="flex-1">
         <h1 className="text-xl font-semibold text-gray-900">
-          SA Ticketing System
+          Ticketing Metrix System
         </h1>
       </div>
 

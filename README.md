@@ -1,3 +1,7 @@
+# Ticketing Metrix - Support & Project Management System
+
+A comprehensive ticketing and project management system built with Next.js, featuring modern UI components, email notifications, and robust authentication.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

@@ -1,4 +1,4 @@
-# Database Schema Migration for SA-Ticketing
+# Database Schema Migration for Ticketing Metrix
 
 ## Current Schema Analysis
 

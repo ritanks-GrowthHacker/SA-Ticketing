@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SA Ticketing - Support & Project Management",
+  title: "Ticketing Metrix - Support & Project Management",
   description: "Streamline your support workflow with our powerful ticketing system",
 };
 

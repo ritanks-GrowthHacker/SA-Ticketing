@@ -1,4 +1,4 @@
-# Postman Collection - SA-Ticketing Project API
+# Postman Collection - Ticketing Metrix Project API
 
 ## Prerequisites
 1. First, you need to authenticate and get a JWT token
