@@ -9,7 +9,6 @@ export async function GET(req: Request) {
     const entity = searchParams.get('entity'); // 'statuses', 'roles', 'departments', or 'all'
     const authHeader = req.headers.get('authorization');
 
-    // 🔐 Extract JWT token
     let organizationId: string | null = null;
     
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -26,7 +25,6 @@ export async function GET(req: Request) {
       }
     }
 
-    // If no valid token, return error
     if (!organizationId) {
       return NextResponse.json(
         { error: "Authentication required" }, 
@@ -34,11 +32,9 @@ export async function GET(req: Request) {
       );
     }
 
-    // 🔍 Fetch data based on entity parameter
     const entityType = entity || 'all';
     let responseData: any = {};
 
-    // 📊 Fetch Statuses
     if (entityType === 'statuses' || entityType === 'all') {
       let statusQuery = supabase
         .from("statuses")
@@ -48,7 +44,6 @@ export async function GET(req: Request) {
         .order("sort_order", { ascending: true })
         .order("name", { ascending: true });
 
-      // Filter by type if provided
       if (type && (type === 'ticket' || type === 'priority')) {
         statusQuery = statusQuery.eq("type", type);
       }
@@ -70,7 +65,6 @@ export async function GET(req: Request) {
       };
     }
 
-    // � Fetch Roles
     if (entityType === 'roles' || entityType === 'all') {
       const { data: roles, error: rolesError } = await supabase
         .from("roles")
@@ -89,7 +83,6 @@ export async function GET(req: Request) {
       responseData.roles = roles || [];
     }
 
-    // 🏢 Fetch Departments
     if (entityType === 'departments' || entityType === 'all') {
       const { data: departments, error: deptError } = await supabase
         .from("departments")
@@ -108,7 +101,6 @@ export async function GET(req: Request) {
       responseData.departments = departments || [];
     }
 
-    // 📈 Build response with metadata
     const response = {
       message: `${entityType === 'all' ? 'Organization data' : entityType} retrieved successfully`,
       organization_id: organizationId,
@@ -139,7 +131,6 @@ export async function GET(req: Request) {
   }
 }
 
-// 🔧 POST method to create new entities (Admin only)
 export async function POST(req: Request) {
   try {
     const authHeader = req.headers.get('authorization');
@@ -153,7 +144,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // 🔐 Verify JWT and extract user info
     let userInfo: any;
     try {
       const token = authHeader.substring(7);
@@ -165,7 +155,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // 👑 Check if user has admin role
     if (!userInfo.roles?.includes('Admin') && userInfo.role !== 'Admin') {
       return NextResponse.json(
         { error: "Admin privileges required" }, 
@@ -173,7 +162,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // 📝 Parse request body
     let requestBody;
     try {
       requestBody = await req.json();
@@ -186,7 +174,6 @@ export async function POST(req: Request) {
 
     const { name, type, color_code, sort_order, description } = requestBody;
 
-    // Validate required fields
     if (!name) {
       return NextResponse.json(
         { error: "Name is required" }, 
@@ -196,7 +183,6 @@ export async function POST(req: Request) {
 
     let newEntity, createError;
 
-    // 🆕 Create entity based on type
     switch (entity) {
       case 'status':
         if (!type || (type !== 'ticket' && type !== 'priority')) {
