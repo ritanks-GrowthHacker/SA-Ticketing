@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+import { supabase, supabaseAdmin } from "@/app/db/connections";
 
 interface JWTPayload {
   sub: string;        // user ID
@@ -187,6 +187,106 @@ export async function GET(req: Request) {
       });
     }
 
+    // If format is statuses, return only statuses
+    if (format === "statuses") {
+      const { data: projectStatuses, error: statusesError } = await supabase
+        .from("project_statuses")
+        .select("*")
+        .eq("organization_id", decodedToken.org_id)
+        .order("sort_order", { ascending: true });
+
+      // Auto-initialize statuses if none found in DB
+      let statusesToReturn = projectStatuses;
+      if (!projectStatuses || projectStatuses.length === 0) {
+        console.log('🔧 No project statuses found, initializing default statuses for org:', decodedToken.org_id);
+        
+        const defaultStatuses = [
+          {
+            id: "f85e266d-7b75-4b08-b775-2fc17ca4b2a6",
+            name: "Planning",
+            description: "Project is in planning phase", 
+            color_code: "#f59e0b",
+            sort_order: 1,
+            is_active: true,
+            organization_id: decodedToken.org_id,
+            created_by: decodedToken.sub
+          },
+          {
+            id: "d05ef4b9-63be-42e2-b4a2-3d85537b9b7d",
+            name: "Active",
+            description: "Project is actively being worked on",
+            color_code: "#10b981",
+            sort_order: 2,
+            is_active: true,
+            organization_id: decodedToken.org_id,
+            created_by: decodedToken.sub
+          },
+          {
+            id: "9e001b85-22f5-435f-a95e-f546621c0ce3",
+            name: "On Hold",
+            description: "Project is temporarily paused",
+            color_code: "#f97316", 
+            sort_order: 3,
+            is_active: true,
+            organization_id: decodedToken.org_id,
+            created_by: decodedToken.sub
+          },
+          {
+            id: "af968d18-dfcc-4d69-93d9-9e7932155ccd",
+            name: "Review",
+            description: "Project is under review",
+            color_code: "#3b82f6",
+            sort_order: 4,
+            is_active: true,
+            organization_id: decodedToken.org_id,
+            created_by: decodedToken.sub
+          },
+          {
+            id: "66a0ccee-c989-4835-a828-bd9765958cf6",
+            name: "Completed", 
+            description: "Project has been completed",
+            color_code: "#6b7280",
+            sort_order: 5,
+            is_active: true,
+            organization_id: decodedToken.org_id,
+            created_by: decodedToken.sub
+          },
+          {
+            id: "df41226f-a012-4f83-95e0-c91b0f25f70a",
+            name: "Cancelled",
+            description: "Project has been cancelled", 
+            color_code: "#ef4444",
+            sort_order: 6,
+            is_active: true,
+            organization_id: decodedToken.org_id,
+            created_by: decodedToken.sub
+          }
+        ];
+
+        // Insert default statuses into database using admin client to bypass RLS
+        const adminClient = supabaseAdmin || supabase;
+        const { data: insertedStatuses, error: insertError } = await adminClient
+          .from("project_statuses")
+          .insert(defaultStatuses)
+          .select("*")
+          .order("sort_order", { ascending: true });
+
+        if (insertError) {
+          console.error('🔧 Error inserting default statuses:', insertError);
+          // Return fallback statuses without database fields if insert fails
+          statusesToReturn = defaultStatuses.map(({ organization_id, created_by, is_active, ...status }) => status);
+        } else {
+          console.log('✅ Successfully initialized', insertedStatuses?.length || 0, 'project statuses');
+          statusesToReturn = insertedStatuses || defaultStatuses;
+        }
+      }
+
+      return NextResponse.json({
+        message: "Project statuses retrieved successfully",
+        statuses: statusesToReturn
+      });
+    }
+
     // Get all project statuses for the organization first
     console.log('🔍 Fetching project statuses for org:', decodedToken.org_id);
     const { data: projectStatuses, error: statusesError } = await supabase
@@ -221,56 +321,77 @@ export async function GET(req: Request) {
         let projectStats = null;
 
         if (includeStats) {
-          // Get project statistics
-          const [
-            { data: totalTickets },
-            { data: openTickets },
-            { data: completedTickets },
-            { data: teamMembers }
-          ] = await Promise.all([
-            // Total tickets
-            supabase
-              .from('tickets')
-              .select('id', { count: 'exact' })
-              .eq('project_id', project.id),
+          // Get all tickets for this project with their status information
+          const { data: allProjectTickets } = await supabase
+            .from('tickets')
+            .select(`
+              id,
+              status_id,
+              statuses!inner(
+                id,
+                name,
+                type
+              )
+            `)
+            .eq('project_id', project.id);
 
-            // Open tickets (not completed status)
-            supabase
-              .from('tickets')
-              .select('id, statuses!inner(name)', { count: 'exact' })
-              .eq('project_id', project.id)
-              .neq('statuses.name', 'Completed'),
+          // Get team members count
+          const { data: teamMembers } = await supabase
+            .from('user_project')
+            .select(`
+              user_id,
+              users!inner(id, name, email),
+              roles(name)
+            `, { count: 'exact' })
+            .eq('project_id', project.id);
 
-            // Completed tickets
-            supabase
-              .from('tickets')
-              .select('id, statuses!inner(name)', { count: 'exact' })
-              .eq('project_id', project.id)
-              .eq('statuses.name', 'Completed'),
-
-            // Team members
-            supabase
-              .from('user_project')
-              .select(`
-                user_id,
-                users!inner(id, name, email),
-                roles(name)
-              `, { count: 'exact' })
-              .eq('project_id', project.id)
-          ]);
-
-          const totalCount = totalTickets?.length || 0;
-          const completedCount = completedTickets?.length || 0;
+          const totalCount = allProjectTickets?.length || 0;
           const teamMembersCount = teamMembers?.length || 0;
+
+          // Count tickets by status - find completed/closed tickets  
+          const completedTickets = allProjectTickets?.filter(t => {
+            const statusName = (t as any).statuses?.name?.toLowerCase() || '';
+            const statusType = (t as any).statuses?.type?.toLowerCase() || '';
+            return statusName.includes('complete') || 
+                   statusName.includes('done') || 
+                   statusName.includes('closed') ||
+                   statusType === 'completed';
+          }) || [];
+          const completedCount = completedTickets.length;
+          const openCount = totalCount - completedCount;
+          
+          // Create detailed status breakdown for debugging
+          const statusBreakdown: { [key: string]: number } = {};
+          allProjectTickets?.forEach(t => {
+            const statusName = (t as any).statuses?.name || 'No Status';
+            statusBreakdown[statusName] = (statusBreakdown[statusName] || 0) + 1;
+          });
+          
+          console.log('📊 Stats Debug:', {
+            totalTickets: totalCount,
+            openTickets: openCount,
+            completedTickets: completedCount,
+            teamMembers: teamMembersCount,
+            statusBreakdown,
+            allTicketsInProject: allProjectTickets?.map((t: any) => ({ 
+              id: t.id, 
+              status: t.statuses?.name || 'No Status',
+              isCompleted: (t.statuses?.name?.toLowerCase().includes('complete') || 
+                           t.statuses?.name?.toLowerCase().includes('done') ||
+                           t.statuses?.name?.toLowerCase().includes('closed'))
+            })) || []
+          });
           
           projectStats = {
             totalTickets: totalCount,
-            openTickets: openTickets?.length || 0,
+            openTickets: openCount,
             completedTickets: completedCount,
             teamMembers: teamMembersCount,
             completionRate: totalCount > 0 
               ? Math.round((completedCount / totalCount) * 100)
-              : 0
+              : 0,
+            // Add detailed breakdown for frontend display
+            statusBreakdown
           };
 
           console.log('📊 Project stats calculated:', {

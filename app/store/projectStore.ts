@@ -32,6 +32,7 @@ export interface Project {
     completedTickets: number;
     teamMembers: number;
     completionRate: number;
+    statusBreakdown?: { [statusName: string]: number };
   };
 }
 

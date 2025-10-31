@@ -1,0 +1,55 @@
+# Test Project Documents API
+
+### Test the project documents system
+
+### 1. Get project documents (user_id is extracted from JWT token)
+GET http://localhost:3000/api/get-project-docs?project_id=48dd42c2-2c3b-4603-b075-475011d4c5ba
+Authorization: Bearer {{token}}
+
+### 2. Create a new project document (author_id is extracted from JWT token)
+POST http://localhost:3000/api/create-project-doc
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "project_id": "48dd42c2-2c3b-4603-b075-475011d4c5ba",
+  "title": "Project Requirements Document",
+  "content": "This document outlines the key requirements for our project.\n\n1. User Authentication\n2. Role-based Access Control\n3. Project Management\n4. Document Management\n5. Ticket System\n\nEach module should be properly tested and documented.",
+  "visibility": "project",
+  "is_public": false
+}
+
+### 3. Create a public document (author_id is extracted from JWT token)
+POST http://localhost:3000/api/create-project-doc
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "project_id": "48dd42c2-2c3b-4603-b075-475011d4c5ba",
+  "title": "Project Guidelines",
+  "content": "Public guidelines for all team members:\n\n- Follow coding standards\n- Write comprehensive tests\n- Document all APIs\n- Use meaningful commit messages\n- Follow the pull request process",
+  "visibility": "project",
+  "is_public": true
+}
+
+### 4. Update a document (user_id is extracted from JWT token, replace doc_id with actual ID)
+PUT http://localhost:3000/api/update-project-doc
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "doc_id": "your-document-id-here",
+  "title": "Updated Project Requirements Document",
+  "content": "This is the updated version of our requirements document.\n\n1. User Authentication ✓\n2. Role-based Access Control ✓\n3. Project Management ✓\n4. Document Management (In Progress)\n5. Ticket System ✓\n\nNext steps:\n- Complete document management features\n- Add file attachments\n- Implement document versioning",
+  "visibility": "project",
+  "is_public": false
+}
+
+### 5. Delete a document (user_id is extracted from JWT token, replace doc_id with actual ID)
+DELETE http://localhost:3000/api/delete-project-doc
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "doc_id": "your-document-id-here"
+}

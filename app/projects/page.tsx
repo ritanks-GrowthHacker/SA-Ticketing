@@ -2,12 +2,14 @@
 
 import React, { useState, useEffect } from 'react';
 import { Plus, FolderOpen, Users, Calendar, MoreVertical, Grid, List, Loader } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import { useAuthStore } from '../store/authStore';
 import { useProjectStore, Project, ProjectStatus } from '../store/projectStore';
 import ProjectKanban from '../../components/ui/ProjectKanban';
 import { CreateProjectModal } from '../../components/modals';
 
 const Projects = () => {
+  const router = useRouter();
   const { token, organization, roles } = useAuthStore();
   const { 
     getCachedData, 
@@ -175,8 +177,7 @@ const Projects = () => {
   };
 
   const handleProjectClick = (projectId: string) => {
-    console.log('Project clicked:', projectId);
-    // TODO: Navigate to project details or open modal
+    router.push(`/projects/${projectId}`);
   };
 
   const handleCreateProjectSuccess = () => {
@@ -261,9 +262,9 @@ const Projects = () => {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full max-w-full">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between w-full">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
           <p className="text-gray-600 mt-1">Manage and track your ongoing projects</p>
@@ -365,20 +366,31 @@ const Projects = () => {
         />
       ) : (
         /* List View */
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 w-full">
           {projects.length > 0 ? (
             projects.map((project) => (
-              <div key={project.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-md transition-shadow">
+              <div 
+                key={project.id} 
+                className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-md transition-shadow cursor-pointer w-full"
+                onClick={() => handleProjectClick(project.id)}
+              >
                 {/* Project Header */}
                 <div className="p-4">
-                  <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-start justify-between mb-3 w-full">
                     <div 
                       className="w-10 h-10 rounded-lg flex items-center justify-center"
                       style={{ backgroundColor: getStatusColor(project.status_id) }}
                     >
                       <FolderOpen className="w-5 h-5 text-white" />
                     </div>
-                    <button className="p-1 hover:bg-gray-100 rounded">
+                    <button 
+                      className="p-1 hover:bg-gray-100 rounded shrink-0"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // TODO: Add dropdown menu functionality here
+                      }}
+                      title="More actions"
+                    >
                       <MoreVertical className="w-4 h-4 text-gray-400" />
                     </button>
                   </div>
@@ -392,6 +404,31 @@ const Projects = () => {
                   }`}>
                     {getStatusName(project.status_id)}
                   </span>
+                  
+                  {/* Ticket Status Breakdown */}
+                  {project.stats?.statusBreakdown && Object.keys(project.stats.statusBreakdown).length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-100 w-full">
+                      <h4 className="text-xs font-medium text-gray-700 mb-2">Ticket Status</h4>
+                      <div className="space-y-1 w-full">
+                        {Object.entries(project.stats.statusBreakdown).map(([statusName, count]) => (
+                          <div key={statusName} className="flex items-center justify-between text-xs w-full">
+                            <div className="flex items-center space-x-2 grow min-w-0">
+                              <div className={`w-2 h-2 rounded-full ${
+                                statusName.toLowerCase().includes('open') ? 'bg-blue-500' :
+                                statusName.toLowerCase().includes('progress') ? 'bg-yellow-500' :
+                                statusName.toLowerCase().includes('review') ? 'bg-purple-500' :
+                                statusName.toLowerCase().includes('closed') ? 'bg-green-500' :
+                                statusName.toLowerCase().includes('done') ? 'bg-green-500' :
+                                'bg-gray-400'
+                              }`}></div>
+                              <span className="text-gray-600 truncate">{statusName}</span>
+                            </div>
+                            <span className="font-medium text-gray-900">{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Progress Bar */}

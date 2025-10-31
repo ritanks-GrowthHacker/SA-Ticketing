@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase } from '@/app/db/connections';
+import { supabase, supabaseAdmin } from '@/app/db/connections';
 
 interface JWTPayload {
   sub: string;
@@ -34,8 +34,9 @@ export async function POST(req: NextRequest) {
 
     console.log('🔧 Initializing project statuses for org:', decodedToken.org_id);
 
-    // Check if statuses already exist
-    const { data: existingStatuses } = await supabase
+    // Check if statuses already exist using admin client to bypass RLS
+    const adminClient = supabaseAdmin || supabase;
+    const { data: existingStatuses } = await adminClient
       .from('project_statuses')
       .select('id')
       .eq('organization_id', decodedToken.org_id);
@@ -111,7 +112,7 @@ export async function POST(req: NextRequest) {
       }
     ];
 
-    const { data: insertedStatuses, error: insertError } = await supabase
+    const { data: insertedStatuses, error: insertError } = await adminClient
       .from('project_statuses')
       .insert(defaultStatuses)
       .select();

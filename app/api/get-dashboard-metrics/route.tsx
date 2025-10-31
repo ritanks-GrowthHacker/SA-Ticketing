@@ -56,9 +56,70 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get('project_id');
+    const statusId = searchParams.get('status_id');
+    const priorityId = searchParams.get('priority_id');
     const metricType = searchParams.get('type') || 'overview'; // overview, project, team
+    const testMode = searchParams.get('test') === 'true'; // Test mode bypass
     
-    // Verify authentication
+    // Pagination parameters
+    const page = parseInt(searchParams.get('page') || '1');
+    const limit = parseInt(searchParams.get('limit') || '10');
+    const offset = (page - 1) * limit;
+    
+    // Test mode with mock data for pagination testing
+    if (testMode) {
+      console.log('🧪 TEST MODE: Returning mock data for pagination testing');
+      
+      // Generate 15 mock tickets for testing pagination
+      const mockTickets = Array.from({ length: 15 }, (_, i) => ({
+        id: `test-ticket-${i + 1}`,
+        title: `Test Ticket ${i + 1}`,
+        created_at: new Date(Date.now() - (i * 24 * 60 * 60 * 1000)).toISOString(),
+        status_id: 'test-status',
+        priority_id: 'test-priority',
+        created_by: 'test-user',
+        assigned_to: 'test-assignee',
+        projects: { name: 'Test Project' },
+        creator: { name: 'Test Creator' },
+        assignee: { name: 'Test Assignee' },
+        statuses: { name: 'Open', color_code: '#3b82f6' }
+      }));
+      
+      // Apply pagination to mock data
+      const paginatedTickets = mockTickets.slice(offset, offset + limit);
+      const totalPages = Math.ceil(mockTickets.length / limit);
+      
+      return NextResponse.json({
+        success: true,
+        data: {
+          overview: {
+            totalTickets: { value: 15, change: '+5%', changeType: 'positive' },
+            activeProjects: { value: 3, change: '+1', changeType: 'positive' }
+          },
+          recentActivity: paginatedTickets.map(ticket => ({
+            id: ticket.id,
+            title: ticket.title,
+            status: ticket.statuses.name,
+            time: 'just now',
+            project: ticket.projects.name,
+            priority: 'Medium',
+            assignedTo: ticket.assignee.name
+          })),
+          pagination: {
+            currentPage: page,
+            totalPages: totalPages,
+            totalItems: mockTickets.length,
+            itemsPerPage: limit,
+            hasNextPage: page < totalPages,
+            hasPreviousPage: page > 1
+          },
+          chartData: { weekly: [] },
+          quickStats: {}
+        }
+      });
+    }
+    
+    // Verify authentication for normal mode
     const authHeader = req.headers.get('authorization');
     const tokenData = await verifyToken(authHeader);
     
@@ -110,6 +171,14 @@ export async function GET(req: Request) {
       recentActivity: ActivityItem[];
       chartData: { weekly?: ChartDataPoint[] };
       quickStats: Record<string, any>;
+      pagination?: {
+        currentPage: number;
+        totalPages: number;
+        totalItems: number;
+        itemsPerPage: number;
+        hasNextPage: boolean;
+        hasPreviousPage: boolean;
+      };
     } = {
       overview: {},
       recentActivity: [],
@@ -214,7 +283,26 @@ export async function GET(req: Request) {
         avgResolutionHours = totalHours / resolvedTickets.length;
       }
 
-      // Recent Activity
+      // Recent Activity - First get total count for pagination
+      let countQuery = supabase
+        .from('tickets')
+        .select('*, projects!inner(*)', { count: 'exact', head: true })
+        .eq('projects.organization_id', organizationId);
+      
+      if (projectId) {
+        countQuery = countQuery.eq('project_id', projectId);
+      }
+      if (statusId) {
+        countQuery = countQuery.eq('status_id', statusId);
+      }
+      if (priorityId) {
+        countQuery = countQuery.eq('priority_id', priorityId);
+      }
+      
+      const { count: totalTickets } = await countQuery;
+      console.log('🔢 COUNT DEBUG:', { totalTickets, page, limit, offset, organizationId });
+      
+      // Then get paginated results
       let recentTicketsQuery = supabase
         .from('tickets')
         .select(`
@@ -227,18 +315,35 @@ export async function GET(req: Request) {
         `)
         .eq('projects.organization_id', organizationId)
         .order('created_at', { ascending: false })
-        .limit(10);
+        .range(offset, offset + limit - 1);
       
-      // Apply project filter if specified
+      // Apply filters if specified
       if (projectId) {
         recentTicketsQuery = recentTicketsQuery.eq('project_id', projectId);
       }
+      if (statusId) {
+        recentTicketsQuery = recentTicketsQuery.eq('status_id', statusId);
+      }
+      if (priorityId) {
+        recentTicketsQuery = recentTicketsQuery.eq('priority_id', priorityId);
+      }
 
       const { data: recentTickets } = await recentTicketsQuery;
+      
+      // Calculate pagination metadata
+      const totalPages = Math.ceil((totalTickets || 0) / limit);
+      metrics.pagination = {
+        currentPage: page,
+        totalPages: totalPages,
+        totalItems: totalTickets || 0,
+        itemsPerPage: limit,
+        hasNextPage: page < totalPages,
+        hasPreviousPage: page > 1
+      };
 
       metrics.overview = {
         totalTickets: {
-          value: currentTickets?.length || 0,
+          value: totalTickets || 0,
           change: calculatePercentageChange(
             currentTickets?.length || 0,
             previousTickets?.length || 0
@@ -332,7 +437,14 @@ export async function GET(req: Request) {
                                             (t as any).statuses?.name?.toLowerCase().includes('done')).length || 0) / 
            projectTickets.length * 100).toFixed(0) : 0;
 
-        // Recent Project Activity
+        // Recent Project Activity - First get count for pagination
+        const { count: totalProjectTickets } = await supabase
+          .from('tickets')
+          .select('id', { count: 'exact', head: true })
+          .eq('project_id', targetProjectId);
+        console.log('🔢 MANAGER COUNT DEBUG:', { totalProjectTickets, targetProjectId, page, limit });
+        
+        // Then get paginated results
         const { data: recentProjectTickets } = await supabase
           .from('tickets')
           .select(`
@@ -344,7 +456,18 @@ export async function GET(req: Request) {
           `)
           .eq('project_id', targetProjectId)
           .order('created_at', { ascending: false })
-          .limit(8);
+          .range(offset, offset + limit - 1);
+        
+        // Calculate pagination metadata for manager
+        const totalPages = Math.ceil((totalProjectTickets || 0) / limit);
+        metrics.pagination = {
+          currentPage: page,
+          totalPages: totalPages,
+          totalItems: totalProjectTickets || 0,
+          itemsPerPage: limit,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1
+        };
 
         metrics.overview = {
           projectTickets: {

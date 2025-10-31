@@ -28,6 +28,14 @@ export interface DashboardMetrics {
   recentActivity: ActivityItem[];
   chartData: { weekly?: ChartDataPoint[] };
   quickStats: Record<string, any>;
+  pagination?: {
+    currentPage: number;
+    totalPages: number;
+    totalItems: number;
+    itemsPerPage: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+  };
 }
 
 export interface CachedDashboardData {

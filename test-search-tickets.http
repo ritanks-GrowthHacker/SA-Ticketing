@@ -1,0 +1,4 @@
+### Test search tickets API directly
+GET http://localhost:3000/api/search-tickets?page=1&limit=10
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIyNWQxZmY3Yi1iMjNiLTRhMWYtODMyZS02NTJiOTE0YWYyMjUiLCJvcmdhbml6YXRpb25JZCI6IjYxYjU0MDcyLTRjNmUtNDQ4Mi04NTdlLTdhMDBhM2JhYzVlMiIsInJvbGVzIjpbIkFkbWluIl0sImVtYWlsIjoiYWRtaW5AYWRtaW4uY29tIiwiaWF0IjoxNzQyNTY1NDA4LCJleHAiOjE3NDI2NTE4MDh9.gyQrb82bmCb5vgsbfl8kR7twUBjJgAO85qMwRibco-Q
+Content-Type: application/json

@@ -1,229 +1,606 @@
-import React from 'react';
-import { Plus, Search, Filter, MoreVertical, MessageSquare, Clock, AlertCircle } from 'lucide-react';
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Plus, Search, Filter, MoreVertical, MessageSquare, Clock, AlertCircle, ChevronDown, X, FolderOpen } from 'lucide-react';
+import { useAuthStore } from '../store/authStore';
+
+interface Ticket {
+  id: string;
+  title: string;
+  description: string;
+  status_id: string;
+  priority_id: string;
+  created_by: string;
+  assigned_to: string;
+  project_id: string;
+  created_at: string;
+  updated_at: string;
+  projects: { name: string };
+  creator: { name: string; email: string };
+  assignee: { name: string; email: string } | null;
+  statuses: { name: string; color_code: string };
+  priorities: { name: string; color_code: string };
+}
+
+interface FilterOptions {
+  availableProjects: { id: string; name: string }[];
+  availableRoles: string[];
+}
+
+interface UserAccess {
+  role: string;
+  canViewAllTickets: boolean;
+}
+
+interface TicketsResponse {
+  tickets: Ticket[];
+  totalCount: number;
+  pagination: {
+    currentPage: number;
+    totalPages: number;
+    totalItems: number;
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+  };
+  filters: FilterOptions;
+  userAccess: UserAccess;
+}
 
 const Tickets = () => {
-  const tickets = [
-    {
-      id: 'TCK-001',
-      title: 'Database connection timeout error',
-      description: 'Users are experiencing timeout errors when trying to connect to the database during peak hours.',
-      status: 'Open',
-      priority: 'High',
-      assignee: 'John Smith',
-      reporter: 'Sarah Johnson',
-      created: '2024-01-15',
-      updated: '2 hours ago',
-      comments: 5,
-      tags: ['backend', 'database']
-    },
-    {
-      id: 'TCK-002',
-      title: 'Login page UI improvements',
-      description: 'Update the login page design to match the new brand guidelines and improve user experience.',
-      status: 'In Progress',
-      priority: 'Medium',
-      assignee: 'Emily Davis',
-      reporter: 'Mike Wilson',
-      created: '2024-01-14',
-      updated: '1 day ago',
-      comments: 3,
-      tags: ['frontend', 'ui', 'design']
-    },
-    {
-      id: 'TCK-003',
-      title: 'Add dark mode toggle',
-      description: 'Implement a dark mode toggle feature across all pages of the application.',
-      status: 'Open',
-      priority: 'Low',
-      assignee: 'Alex Chen',
-      reporter: 'Lisa Brown',
-      created: '2024-01-13',
-      updated: '3 days ago',
-      comments: 7,
-      tags: ['frontend', 'feature']
-    },
-    {
-      id: 'TCK-004',
-      title: 'API rate limiting implementation',
-      description: 'Implement rate limiting for all API endpoints to prevent abuse and improve performance.',
-      status: 'Closed',
-      priority: 'High',
-      assignee: 'David Kim',
-      reporter: 'Tom Anderson',
-      created: '2024-01-10',
-      updated: '5 days ago',
-      comments: 12,
-      tags: ['backend', 'api', 'security']
-    }
-  ];
+  const { token, organization } = useAuthStore();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '');
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || 'all');
+  const [priorityFilter, setPriorityFilter] = useState(searchParams.get('priority') || 'all');
+  const [projectFilter, setProjectFilter] = useState(searchParams.get('project') || 'all');
+  const [roleFilter, setRoleFilter] = useState(searchParams.get('role') || 'all');
+  const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1'));
+  
+  const [totalCount, setTotalCount] = useState(0);
+  const [pagination, setPagination] = useState<any>(null);
+  const [filterOptions, setFilterOptions] = useState<FilterOptions>({
+    availableProjects: [],
+    availableRoles: []
+  });
+  const [userAccess, setUserAccess] = useState<UserAccess>({
+    role: 'user',
+    canViewAllTickets: false
+  });
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Open':
-        return 'bg-red-100 text-red-800 border-red-200';
-      case 'In Progress':
-        return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-      case 'Closed':
-        return 'bg-green-100 text-green-800 border-green-200';
-      case 'On Hold':
-        return 'bg-gray-100 text-gray-800 border-gray-200';
-      default:
-        return 'bg-gray-100 text-gray-800 border-gray-200';
+  const [statuses, setStatuses] = useState<any[]>([]);
+  const [priorities, setPriorities] = useState<any[]>([]);
+  const [showFilters, setShowFilters] = useState(false);
+
+  // Fetch statuses and priorities
+  const fetchEntities = async () => {
+    try {
+      const response = await fetch('/api/all-get-entities', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setStatuses(data.data?.statuses?.ticket || []);
+        setPriorities(data.data?.priorities?.ticket || []);
+      }
+    } catch (error) {
+      console.error('Error fetching entities:', error);
+    }
+  };
+  // Fetch tickets with search and filters
+  const fetchTickets = async () => {
+    if (!token || !organization?.id) {
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      const params = new URLSearchParams();
+      if (searchQuery) params.set('q', searchQuery);
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (priorityFilter !== 'all') params.set('priority', priorityFilter);
+      if (projectFilter !== 'all') params.set('project', projectFilter);
+      if (roleFilter !== 'all') params.set('role', roleFilter);
+      params.set('page', currentPage.toString());
+      params.set('limit', '10');
+
+      const response = await fetch(`/api/search-tickets?${params.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data: TicketsResponse = await response.json();
+        setTickets(data.tickets);
+        setTotalCount(data.totalCount);
+        setPagination(data.pagination);
+        setFilterOptions(data.filters);
+        setUserAccess(data.userAccess);
+      } else {
+        console.error('Failed to fetch tickets');
+      }
+    } catch (error) {
+      console.error('Error fetching tickets:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const getPriorityIcon = (priority: string) => {
-    switch (priority) {
-      case 'High':
-        return <AlertCircle className="w-4 h-4 text-red-500" />;
-      case 'Medium':
-        return <Clock className="w-4 h-4 text-yellow-500" />;
-      case 'Low':
-        return <Clock className="w-4 h-4 text-green-500" />;
-      default:
-        return <Clock className="w-4 h-4 text-gray-500" />;
+  // Fetch tickets with specific page (for pagination)
+  const fetchTicketsWithPage = async (page: number) => {
+    if (!token || !organization?.id) {
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      const params = new URLSearchParams();
+      if (searchQuery) params.set('q', searchQuery);
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      if (priorityFilter !== 'all') params.set('priority', priorityFilter);
+      if (projectFilter !== 'all') params.set('project', projectFilter);
+      if (roleFilter !== 'all') params.set('role', roleFilter);
+      params.set('page', page.toString());
+      params.set('limit', '10');
+
+      const response = await fetch(`/api/search-tickets?${params.toString()}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data: TicketsResponse = await response.json();
+        setTickets(data.tickets);
+        setTotalCount(data.totalCount);
+        setPagination(data.pagination);
+        setFilterOptions(data.filters);
+        setUserAccess(data.userAccess);
+      } else {
+        console.error('Failed to fetch tickets');
+      }
+    } catch (error) {
+      console.error('Error fetching tickets:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Update URL parameters
+  const updateURL = () => {
+    const params = new URLSearchParams();
+    if (searchQuery) params.set('q', searchQuery);
+    if (statusFilter !== 'all') params.set('status', statusFilter);
+    if (priorityFilter !== 'all') params.set('priority', priorityFilter);
+    if (projectFilter !== 'all') params.set('project', projectFilter);
+    if (roleFilter !== 'all') params.set('role', roleFilter);
+    if (currentPage > 1) params.set('page', currentPage.toString());
+    
+    router.push(`/tickets?${params.toString()}`);
+  };
+
+  // Handle search
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setCurrentPage(1);
+    
+    // Update URL with search query and reset page
+    const params = new URLSearchParams();
+    if (searchQuery) params.set('q', searchQuery);
+    if (statusFilter !== 'all') params.set('status', statusFilter);
+    if (priorityFilter !== 'all') params.set('priority', priorityFilter);
+    if (projectFilter !== 'all') params.set('project', projectFilter);
+    if (roleFilter !== 'all') params.set('role', roleFilter);
+    // Don't add page=1 to URL
+    
+    router.push(`/tickets?${params.toString()}`);
+    fetchTicketsWithPage(1);
+  };
+
+  // Handle filter changes
+  const handleFilterChange = (filterType: string, value: string) => {
+    setCurrentPage(1);
+    
+    switch (filterType) {
+      case 'status':
+        setStatusFilter(value);
+        break;
+      case 'priority':
+        setPriorityFilter(value);
+        break;
+      case 'project':
+        setProjectFilter(value);
+        break;
+      case 'role':
+        setRoleFilter(value);
+        break;
+    }
+  };
+
+  // Handle pagination
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+    
+    // Update URL with new page
+    const params = new URLSearchParams();
+    if (searchQuery) params.set('q', searchQuery);
+    if (statusFilter !== 'all') params.set('status', statusFilter);
+    if (priorityFilter !== 'all') params.set('priority', priorityFilter);
+    if (projectFilter !== 'all') params.set('project', projectFilter);
+    if (roleFilter !== 'all') params.set('role', roleFilter);
+    if (page > 1) params.set('page', page.toString());
+    
+    router.push(`/tickets?${params.toString()}`);
+    
+    // Fetch tickets with new page
+    fetchTicketsWithPage(page);
+  };
+
+  // Reset filters
+  const resetFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setPriorityFilter('all');
+    setProjectFilter('all');
+    setRoleFilter('all');
+    setCurrentPage(1);
+    router.push('/tickets');
+    fetchTickets();
+  };
+
+  // Effects
+  useEffect(() => {
+    if (token && organization?.id) {
+      fetchEntities();
+      fetchTickets();
+    }
+  }, [token, organization?.id]);
+
+  useEffect(() => {
+    if (token && organization?.id) {
+      fetchTickets();
+    }
+  }, [statusFilter, priorityFilter, projectFilter, roleFilter]);
+
+  // Priority color mapping
+  const getPriorityColor = (priority: string) => {
+    switch (priority.toLowerCase()) {
+      case 'high': return 'text-red-600 bg-red-100';
+      case 'medium': return 'text-yellow-600 bg-yellow-100';
+      case 'low': return 'text-green-600 bg-green-100';
+      default: return 'text-gray-600 bg-gray-100';
+    }
+  };
+
+  // Status color mapping  
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'open': return 'text-blue-600 bg-blue-100';
+      case 'in progress': return 'text-yellow-600 bg-yellow-100';
+      case 'closed': return 'text-green-600 bg-green-100';
+      case 'resolved': return 'text-green-600 bg-green-100';
+      default: return 'text-gray-600 bg-gray-100';
     }
   };
 
   return (
-    <div className="space-y-6">
+    <div className="p-6 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tickets</h1>
-          <p className="text-gray-600 mt-1">Track and manage support tickets</p>
+          <p className="text-gray-600 mt-1">
+            {userAccess.canViewAllTickets 
+              ? 'Manage all tickets across projects' 
+              : `Manage tickets for your assigned projects (${userAccess.role})`}
+          </p>
         </div>
-        <button className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+        <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center space-x-2">
           <Plus className="w-4 h-4" />
           <span>Create Ticket</span>
         </button>
       </div>
 
-      {/* Filters and Search */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between space-y-3 md:space-y-0">
-          {/* Search */}
-          <div className="relative flex-1 md:max-w-md">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+      {/* Search and Filters */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-6">
+        {/* Search Bar */}
+        <form onSubmit={handleSearch} className="flex items-center space-x-4 mb-4">
+          <div className="flex-1 relative">
+            <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
             <input
               type="text"
-              placeholder="Search tickets..."
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="Search tickets by title or description..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
+          <button
+            type="submit"
+            className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+          >
+            Search
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowFilters(!showFilters)}
+            className="flex items-center space-x-2 px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50"
+          >
+            <Filter className="w-4 h-4" />
+            <span>Filters</span>
+            <ChevronDown className={`w-4 h-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+          </button>
+        </form>
 
-          {/* Filters */}
-          <div className="flex items-center space-x-3">
-            <button className="flex items-center space-x-2 px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
-              <Filter className="w-4 h-4 text-gray-500" />
-              <span className="text-sm">Filter</span>
-            </button>
-            
-            <select className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option>All Status</option>
-              <option>Open</option>
-              <option>In Progress</option>
-              <option>Closed</option>
-            </select>
-            
-            <select className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option>All Priority</option>
-              <option>High</option>
-              <option>Medium</option>
-              <option>Low</option>
-            </select>
+        {/* Filter Panel */}
+        {showFilters && (
+          <div className="border-t border-gray-200 pt-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+              {/* Status Filter */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => handleFilterChange('status', e.target.value)}
+                  className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All Statuses</option>
+                  {statuses.map((status) => (
+                    <option key={status.id} value={status.id}>
+                      {status.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Priority Filter */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+                <select
+                  value={priorityFilter}
+                  onChange={(e) => handleFilterChange('priority', e.target.value)}
+                  className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All Priorities</option>
+                  {priorities.map((priority) => (
+                    <option key={priority.id} value={priority.id}>
+                      {priority.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Project Filter */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Project</label>
+                <select
+                  value={projectFilter}
+                  onChange={(e) => handleFilterChange('project', e.target.value)}
+                  className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All Projects</option>
+                  {filterOptions.availableProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Role Filter (for users/managers with multiple roles) */}
+              {!userAccess.canViewAllTickets && filterOptions.availableRoles.length > 1 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                  <select
+                    value={roleFilter}
+                    onChange={(e) => handleFilterChange('role', e.target.value)}
+                    className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="all">All Roles</option>
+                    {filterOptions.availableRoles.map((role) => (
+                      <option key={role} value={role}>
+                        {role.charAt(0).toUpperCase() + role.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* Active Filters & Reset */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                {(searchQuery || statusFilter !== 'all' || priorityFilter !== 'all' || 
+                  projectFilter !== 'all' || roleFilter !== 'all') && (
+                  <>
+                    <span className="text-sm text-gray-600">Active filters:</span>
+                    {searchQuery && (
+                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
+                        Search: {searchQuery}
+                      </span>
+                    )}
+                    {statusFilter !== 'all' && (
+                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
+                        Status: {statuses.find(s => s.id === statusFilter)?.name}
+                      </span>
+                    )}
+                    {priorityFilter !== 'all' && (
+                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
+                        Priority: {priorities.find(p => p.id === priorityFilter)?.name}
+                      </span>
+                    )}
+                    {projectFilter !== 'all' && (
+                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
+                        Project: {filterOptions.availableProjects.find(p => p.id === projectFilter)?.name}
+                      </span>
+                    )}
+                    {roleFilter !== 'all' && (
+                      <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
+                        Role: {roleFilter}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+              <button
+                onClick={resetFilters}
+                className="text-sm text-gray-600 hover:text-gray-900 flex items-center space-x-1"
+              >
+                <X className="w-4 h-4" />
+                <span>Reset Filters</span>
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white p-4 rounded-lg border border-gray-200">
-          <div className="text-center">
-            <p className="text-2xl font-bold text-gray-900">127</p>
-            <p className="text-sm text-gray-600">Total Tickets</p>
-          </div>
-        </div>
-        <div className="bg-white p-4 rounded-lg border border-gray-200">
-          <div className="text-center">
-            <p className="text-2xl font-bold text-red-600">23</p>
-            <p className="text-sm text-gray-600">Open</p>
-          </div>
-        </div>
-        <div className="bg-white p-4 rounded-lg border border-gray-200">
-          <div className="text-center">
-            <p className="text-2xl font-bold text-yellow-600">45</p>
-            <p className="text-sm text-gray-600">In Progress</p>
-          </div>
-        </div>
-        <div className="bg-white p-4 rounded-lg border border-gray-200">
-          <div className="text-center">
-            <p className="text-2xl font-bold text-green-600">59</p>
-            <p className="text-sm text-gray-600">Resolved</p>
-          </div>
-        </div>
+      {/* Results Summary */}
+      <div className="mb-4">
+        <p className="text-sm text-gray-600">
+          {loading ? 'Loading...' : `Showing ${totalCount} tickets`}
+        </p>
       </div>
 
       {/* Tickets List */}
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-          <h3 className="text-lg font-medium text-gray-900">Recent Tickets</h3>
-        </div>
-        
-        <div className="divide-y divide-gray-200">
-          {tickets.map((ticket) => (
-            <div key={ticket.id} className="p-6 hover:bg-gray-50 transition-colors">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  {/* Ticket Header */}
-                  <div className="flex items-center space-x-3 mb-2">
-                    <span className="font-mono text-sm text-blue-600 font-medium">{ticket.id}</span>
-                    {getPriorityIcon(ticket.priority)}
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(ticket.status)}`}>
-                      {ticket.status}
-                    </span>
-                  </div>
-                  
-                  {/* Title and Description */}
-                  <h4 className="text-lg font-semibold text-gray-900 mb-1">{ticket.title}</h4>
-                  <p className="text-gray-600 mb-3 line-clamp-2">{ticket.description}</p>
-                  
-                  {/* Tags */}
-                  <div className="flex flex-wrap gap-2 mb-3">
-                    {ticket.tags.map((tag) => (
-                      <span key={tag} className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-blue-100 text-blue-800">
-                        {tag}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+        {loading ? (
+          <div className="p-8 text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+            <p className="text-gray-600 mt-2">Loading tickets...</p>
+          </div>
+        ) : tickets.length === 0 ? (
+          <div className="p-8 text-center">
+            <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-4" />
+            <p className="text-gray-500">No tickets found</p>
+            <p className="text-gray-400 text-sm mt-1">Try adjusting your search or filters</p>
+          </div>
+        ) : (
+          <div className="overflow-hidden">
+            {tickets.map((ticket) => (
+              <div
+                key={ticket.id}
+                className="p-6 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 cursor-pointer"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center space-x-3 mb-2">
+                      <h3 className="text-lg font-semibold text-gray-900 truncate">
+                        {ticket.title}
+                      </h3>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(ticket.statuses?.name || 'Unknown')}`}>
+                        {ticket.statuses?.name || 'Unknown'}
                       </span>
-                    ))}
-                  </div>
-                  
-                  {/* Meta Info */}
-                  <div className="flex items-center space-x-6 text-sm text-gray-500">
-                    <span>Assigned to <strong>{ticket.assignee}</strong></span>
-                    <span>Reported by <strong>{ticket.reporter}</strong></span>
-                    <span>Updated {ticket.updated}</span>
-                    <div className="flex items-center space-x-1">
-                      <MessageSquare className="w-4 h-4" />
-                      <span>{ticket.comments}</span>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPriorityColor(ticket.priorities?.name || 'Unknown')}`}>
+                        {ticket.priorities?.name || 'Unknown'}
+                      </span>
+                    </div>
+                    
+                    <p className="text-gray-600 text-sm mb-3 line-clamp-2">
+                      {ticket.description}
+                    </p>
+                    
+                    <div className="flex items-center space-x-4 text-sm text-gray-500">
+                      <span className="flex items-center">
+                        <FolderOpen className="w-4 h-4 mr-1" />
+                        {ticket.projects.name}
+                      </span>
+                      <span className="flex items-center">
+                        <MessageSquare className="w-4 h-4 mr-1" />
+                        Created by {ticket.creator.name}
+                      </span>
+                      {ticket.assignee && (
+                        <span className="flex items-center">
+                          <Clock className="w-4 h-4 mr-1" />
+                          Assigned to {ticket.assignee.name}
+                        </span>
+                      )}
+                      <span className="flex items-center">
+                        <AlertCircle className="w-4 h-4 mr-1" />
+                        {new Date(ticket.created_at).toLocaleDateString()}
+                      </span>
                     </div>
                   </div>
+                  
+                  <button className="ml-4 p-2 hover:bg-gray-100 rounded-lg">
+                    <MoreVertical className="w-4 h-4 text-gray-400" />
+                  </button>
                 </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {pagination && pagination.totalPages > 1 && (
+          <div className="p-6 border-t border-gray-100">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">
+                Showing {((currentPage - 1) * 10) + 1} to {Math.min(currentPage * 10, totalCount)} of {totalCount} tickets
+              </div>
+              
+              <div className="flex items-center space-x-1">
+                {/* Previous Button */}
+                <button
+                  onClick={() => handlePageChange(Math.max(1, currentPage - 1))}
+                  disabled={!pagination.hasPreviousPage}
+                  className={`px-3 py-1 text-sm rounded ${
+                    pagination.hasPreviousPage
+                      ? 'text-blue-600 hover:bg-blue-50'
+                      : 'text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  ←
+                </button>
                 
-                {/* Action Menu */}
-                <button className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
-                  <MoreVertical className="w-4 h-4 text-gray-400" />
+                {/* Page Numbers */}
+                {Array.from({ length: Math.min(5, pagination.totalPages) }, (_, i) => {
+                  const pageNum = Math.max(1, currentPage - 2) + i;
+                  if (pageNum > pagination.totalPages) return null;
+                  
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => handlePageChange(pageNum)}
+                      className={`px-3 py-1 text-sm rounded ${
+                        pageNum === currentPage
+                          ? 'bg-blue-600 text-white'
+                          : 'text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+                
+                {/* Next Button */}
+                <button
+                  onClick={() => handlePageChange(Math.min(pagination.totalPages, currentPage + 1))}
+                  disabled={!pagination.hasNextPage}
+                  className={`px-3 py-1 text-sm rounded ${
+                    pagination.hasNextPage
+                      ? 'text-blue-600 hover:bg-blue-50'
+                      : 'text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  →
                 </button>
               </div>
             </div>
-          ))}
-        </div>
-        
-        {/* Load More */}
-        <div className="px-6 py-4 border-t border-gray-200 text-center">
-          <button className="text-blue-600 hover:text-blue-800 font-medium text-sm">
-            Load More Tickets
-          </button>
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

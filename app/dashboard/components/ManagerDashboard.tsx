@@ -29,10 +29,14 @@ const ManagerDashboard = () => {
   const [showDragDropView, setShowDragDropView] = useState(false);
   const [statuses, setStatuses] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
   
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(10);
+  
   // Fetch dashboard metrics with caching
   useEffect(() => {
     fetchDashboardMetrics();
-  }, [selectedProject, token]);
+  }, [selectedProject, token, currentPage]);
 
   // Setup cross-tab synchronization
   useEffect(() => {
@@ -138,9 +142,15 @@ const ManagerDashboard = () => {
 
       console.log('🔄 Fetching manager dashboard data from API...');
 
-      const url = selectedProject && selectedProject !== 'all'
-        ? `/api/get-dashboard-metrics?project_id=${selectedProject}`
-        : '/api/get-dashboard-metrics';
+      // Build URL with project filter and pagination
+      const params = new URLSearchParams();
+      if (selectedProject && selectedProject !== 'all') {
+        params.set('project_id', selectedProject);
+      }
+      params.set('page', currentPage.toString());
+      params.set('limit', itemsPerPage.toString());
+      
+      const url = `/api/get-dashboard-metrics?${params.toString()}`;
 
       const response = await fetch(url, {
         headers: {
@@ -417,10 +427,65 @@ const ManagerDashboard = () => {
                 </p>
               </div>
             )}
-            {!showDragDropView && (
-              <button className="w-full mt-4 py-2 text-blue-600 hover:text-blue-800 font-medium text-sm">
-                View All Project Tickets
-              </button>
+            {!showDragDropView && metrics?.pagination && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                {/* Pagination Controls */}
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-gray-600">
+                    Showing {((currentPage - 1) * itemsPerPage) + 1} to {Math.min(currentPage * itemsPerPage, metrics.pagination.totalItems)} of {metrics.pagination.totalItems} tickets
+                  </div>
+                  
+                  {metrics.pagination.totalPages > 1 && (
+                    <div className="flex items-center space-x-1">
+                      {/* Previous Button */}
+                      <button
+                        onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                        disabled={!metrics.pagination.hasPreviousPage}
+                        className={`px-2 py-1 text-sm rounded ${
+                          metrics.pagination.hasPreviousPage
+                            ? 'text-blue-600 hover:bg-blue-50'
+                            : 'text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        ←
+                      </button>
+                      
+                      {/* Page Numbers */}
+                      {Array.from({ length: Math.min(5, metrics.pagination.totalPages) }, (_, i) => {
+                        const pageNum = Math.max(1, currentPage - 2) + i;
+                        if (pageNum > (metrics.pagination?.totalPages || 0)) return null;
+                        
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => setCurrentPage(pageNum)}
+                            className={`px-2 py-1 text-sm rounded ${
+                              pageNum === currentPage
+                                ? 'bg-blue-600 text-white'
+                                : 'text-gray-600 hover:bg-gray-100'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                      
+                      {/* Next Button */}
+                      <button
+                        onClick={() => setCurrentPage(Math.min(metrics.pagination?.totalPages || 1, currentPage + 1))}
+                        disabled={!metrics.pagination.hasNextPage}
+                        className={`px-2 py-1 text-sm rounded ${
+                          metrics.pagination.hasNextPage
+                            ? 'text-blue-600 hover:bg-blue-50'
+                            : 'text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        →
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         </div>

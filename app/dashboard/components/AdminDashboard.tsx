@@ -7,9 +7,15 @@ import { ProjectSelect } from '../../../components/ui/ProjectSelect';
 import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
 import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
+import { useSearchParams, useRouter } from 'next/navigation';
 
 const AdminDashboard = () => {
+  console.log('🎯 ADMIN: AdminDashboard component rendered!');
   const { token, organization, roles } = useAuthStore();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  
+
   const { 
     getCachedData, 
     setCachedData, 
@@ -24,6 +30,8 @@ const AdminDashboard = () => {
   } = useDashboardStore();
   
   const [selectedProject, setSelectedProject] = useState('all');
+  const [selectedStatus, setSelectedStatus] = useState('all');
+  const [selectedPriority, setSelectedPriority] = useState('all');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
@@ -32,11 +40,29 @@ const AdminDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [showDragDropView, setShowDragDropView] = useState(false);
   const [statuses, setStatuses] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
+  const [priorities, setPriorities] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
+  
+  // Pagination state with URL persistence
+  const [currentPage, setCurrentPage] = useState(() => {
+    const pageParam = searchParams.get('page');
+    return pageParam ? parseInt(pageParam, 10) : 1;
+  });
+  const [itemsPerPage] = useState(10);
+  
+  // Add debug state for easy monitoring
+  const [debugInfo, setDebugInfo] = useState('Ready to load metrics...');
   
   // Fetch dashboard metrics with caching
   useEffect(() => {
+    console.log('🔄 ADMIN: useEffect triggered', { selectedProject, selectedStatus, selectedPriority, hasToken: !!token, currentPage, orgId: organization?.id });
     fetchDashboardMetrics();
-  }, [selectedProject, token]);
+  }, [selectedProject, selectedStatus, selectedPriority, token, currentPage]);
+  
+  // Force initial call on mount
+  useEffect(() => {
+    console.log('🚀 ADMIN: Component mounted, forcing initial metrics fetch');
+    setTimeout(() => fetchDashboardMetrics(true), 1000);
+  }, []);
 
   // Setup cross-tab synchronization
   useEffect(() => {
@@ -51,6 +77,23 @@ const AdminDashboard = () => {
       fetchDashboardMetrics();
     }
   }, [lastUpdateTimestamp]);
+
+  // Effect to sync currentPage with URL parameters
+  useEffect(() => {
+    const pageParam = searchParams.get('page');
+    const urlPage = pageParam ? parseInt(pageParam, 10) : 1;
+    if (urlPage !== currentPage) {
+      setCurrentPage(urlPage);
+    }
+  }, [searchParams]);
+
+  // Effect to fetch data when currentPage changes
+  useEffect(() => {
+    if (organization?.id && token && currentPage > 0) {
+      console.log('📄 Page changed, fetching data for page:', currentPage);
+      fetchDashboardMetrics(true);
+    }
+  }, [currentPage, organization?.id, token]);
 
   // Effect to handle cache loading on component mount
   useEffect(() => {
@@ -128,13 +171,16 @@ const AdminDashboard = () => {
         console.log('📊 ADMIN: Full API response:', data);
         
         const ticketStatuses = data.data?.statuses?.ticket || [];
+        const ticketPriorities = data.data?.priorities?.ticket || [];
         console.log('📊 ADMIN: Extracted ticket statuses:', ticketStatuses);
+        console.log('📊 ADMIN: Extracted ticket priorities:', ticketPriorities);
         
         if (ticketStatuses.length === 0) {
           console.warn('⚠️ ADMIN: No ticket statuses found in API response');
         }
         
         setStatuses(ticketStatuses);
+        setPriorities(ticketPriorities);
       } else {
         const errorText = await response.text();
         console.error('❌ ADMIN: Status fetch failed:', {
@@ -152,12 +198,17 @@ const AdminDashboard = () => {
       setLoading(true);
       setDashboardLoading(true);
       
-      if (!token || !organization?.id) return;
+      console.log('🔍 ADMIN: fetchDashboardMetrics called', { token: !!token, orgId: organization?.id });
+      
+      if (!token || !organization?.id) {
+        console.log('❌ ADMIN: No token or org, skipping fetch');
+        return;
+      }
 
       const projectId = selectedProject === 'all' ? null : selectedProject;
       
       // Check cache first (unless force refresh is requested)
-      if (!forceRefresh) {
+      if (!forceRefresh && organization?.id) {
         const cachedMetrics = getCachedData(projectId, organization.id);
         if (cachedMetrics) {
           setMetrics(cachedMetrics);
@@ -170,30 +221,59 @@ const AdminDashboard = () => {
 
       console.log('🔄 Fetching dashboard data from API...');
 
-      // Build URL with project filter if not 'all'
-      const url = selectedProject && selectedProject !== 'all' 
-        ? `/api/get-dashboard-metrics?project_id=${selectedProject}`
-        : '/api/get-dashboard-metrics';
+      // Build URL with filters and pagination
+      const params = new URLSearchParams();
+      if (selectedProject && selectedProject !== 'all') {
+        params.set('project_id', selectedProject);
+      }
+      if (selectedStatus && selectedStatus !== 'all') {
+        params.set('status_id', selectedStatus);
+      }
+      if (selectedPriority && selectedPriority !== 'all') {
+        params.set('priority_id', selectedPriority);
+      }
+      params.set('page', currentPage.toString());
+      params.set('limit', itemsPerPage.toString());
+      
 
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
+      
+      const url = `/api/get-dashboard-metrics?${params.toString()}`;
+
+      const headers: any = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch(url, { headers });
+      setDebugInfo(`API call completed: ${response.status}`);
 
       if (response.ok) {
         const data = await response.json();
         const dashboardMetrics = data.data;
+        
+        console.log('📊 ADMIN: Dashboard data received:', {
+          success: data.success,
+          hasRecentActivity: !!dashboardMetrics?.recentActivity,
+          recentActivityLength: dashboardMetrics?.recentActivity?.length,
+          hasPagination: !!dashboardMetrics?.pagination,
+          paginationData: dashboardMetrics?.pagination,
+          rawData: dashboardMetrics
+        });
         
         // Set metrics in component state
         setMetrics(dashboardMetrics);
         
         // Cache the metrics
         const userRole = roles?.join(',') || 'user';
-        setCachedData(dashboardMetrics, projectId, userRole, organization.id);
+        if (organization?.id) {
+          setCachedData(dashboardMetrics, projectId, userRole, organization.id);
+        }
         
         console.log('✅ Dashboard data fetched and cached');
+        setDebugInfo(`✅ Success! ${dashboardMetrics?.recentActivity?.length || 0} tickets loaded. Pagination: ${JSON.stringify(dashboardMetrics?.pagination)}`);
       }
     } catch (error) {
       console.error('Error fetching dashboard metrics:', error);
@@ -304,6 +384,8 @@ const AdminDashboard = () => {
 
   return (
     <div className="space-y-6">
+      {/* Debug Info - Removed for production */}
+      
       {/* Header with Project Filter */}
       <div className="flex items-center justify-between">
         <div>
@@ -319,6 +401,34 @@ const AdminDashboard = () => {
             placeholder="Select project to filter"
             includeAllOption={true}
           />
+          
+          {/* Status Filter */}
+          <select
+            value={selectedStatus}
+            onChange={(e) => setSelectedStatus(e.target.value)}
+            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+          >
+            <option value="all">All Status</option>
+            {statuses.map((status) => (
+              <option key={status.id} value={status.id}>
+                {status.name}
+              </option>
+            ))}
+          </select>
+          
+          {/* Priority Filter */}
+          <select
+            value={selectedPriority}
+            onChange={(e) => setSelectedPriority(e.target.value)}
+            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+          >
+            <option value="all">All Priority</option>
+            {priorities.map((priority) => (
+              <option key={priority.id} value={priority.id}>
+                {priority.name}
+              </option>
+            ))}
+          </select>
           
           {/* Refresh Button */}
           <button 
@@ -472,17 +582,107 @@ const AdminDashboard = () => {
                 <p className="text-gray-500">No recent tickets found</p>
               </div>
             )}
-            {!showDragDropView && (
-              <button className="w-full mt-4 py-2 text-blue-600 hover:text-blue-800 font-medium text-sm">
-                View All Tickets
-              </button>
+            {!showDragDropView && (recentTickets.length > 0 || metrics?.pagination) && (
+              <div className="mt-4 pt-4 border-t border-gray-100">
+                {/* Pagination Controls */}
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-gray-600">
+                    {(() => {
+                      const pagination = metrics?.pagination;
+                      const totalItems = pagination?.totalItems || 0;
+                      const startItem = totalItems > 0 ? ((currentPage - 1) * itemsPerPage) + 1 : 0;
+                      const endItem = totalItems > 0 ? Math.min(currentPage * itemsPerPage, totalItems) : 0;
+                      
+                      return `Showing ${startItem} to ${endItem} of ${totalItems} tickets`;
+                    })()}
+                  </div>
+                  
+                  {(() => {
+                    // Smart pagination controls with fallback
+                    const pagination = metrics?.pagination;
+                    const hasData = recentTickets.length > 0;
+                    const totalPages = pagination?.totalPages || (hasData ? Math.ceil(recentTickets.length / itemsPerPage) : 1);
+                    const hasPrev = pagination?.hasPreviousPage ?? (currentPage > 1);
+                    const hasNext = pagination?.hasNextPage ?? (recentTickets.length >= itemsPerPage);
+                    
+                    if (totalPages <= 1 && !hasNext) return null;
+                    
+                    return (
+                    <div className="flex items-center space-x-1">
+                      {/* Previous Button */}
+                      <button
+                        onClick={() => {
+                          const prevPage = Math.max(1, currentPage - 1);
+                          setCurrentPage(prevPage);
+                          const params = new URLSearchParams(searchParams.toString());
+                          params.set('page', prevPage.toString());
+                          router.push(`/dashboard?${params.toString()}`);
+                        }}
+                        disabled={!hasPrev}
+                        className={`px-2 py-1 text-sm rounded ${
+                          hasPrev
+                            ? 'text-blue-600 hover:bg-blue-50'
+                            : 'text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        ←
+                      </button>
+                      
+                      {/* Page Numbers */}
+                      {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                        const pageNum = Math.max(1, currentPage - 2) + i;
+                        if (pageNum > totalPages) return null;
+                        
+                        return (
+                          <button
+                            key={pageNum}
+                            onClick={() => {
+                              setCurrentPage(pageNum);
+                              const params = new URLSearchParams(searchParams.toString());
+                              params.set('page', pageNum.toString());
+                              router.push(`/dashboard?${params.toString()}`);
+                            }}
+                            className={`px-2 py-1 text-sm rounded ${
+                              pageNum === currentPage
+                                ? 'bg-blue-600 text-white'
+                                : 'text-gray-600 hover:bg-gray-100'
+                            }`}
+                          >
+                            {pageNum}
+                          </button>
+                        );
+                      })}
+                      
+                      {/* Next Button */}
+                      <button
+                        onClick={() => {
+                          const nextPage = Math.min(totalPages, currentPage + 1);
+                          setCurrentPage(nextPage);
+                          const params = new URLSearchParams(searchParams.toString());
+                          params.set('page', nextPage.toString());
+                          router.push(`/dashboard?${params.toString()}`);
+                        }}
+                        disabled={!hasNext}
+                        className={`px-2 py-1 text-sm rounded ${
+                          hasNext
+                            ? 'text-blue-600 hover:bg-blue-50'
+                            : 'text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        →
+                      </button>
+                    </div>
+                    );
+                  })()}
+                </div>
+              </div>
             )}
           </div>
         </div>
 
         {/* Quick Actions - Hide in Kanban view */}
         {!showDragDropView && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 h-fit">
           <div className="p-6 border-b border-gray-100">
             <h3 className="text-lg font-semibold text-gray-900">Quick Actions</h3>
           </div>

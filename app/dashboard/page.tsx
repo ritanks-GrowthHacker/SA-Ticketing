@@ -30,16 +30,20 @@ const Dashboard = () => {
     // Normalize role for comparison (handle case variations)
     const userRole = role?.toLowerCase() || '';
     
+    console.log('🎯 DASHBOARD: Rendering dashboard for role:', userRole);
+    
     try {
       switch (userRole) {
         case 'admin':
         case 'administrator':
+          console.log('✅ DASHBOARD: Loading AdminDashboard');
           return <AdminDashboard />;
         
         case 'manager':
         case 'project manager':
         case 'team lead':
         case 'technical lead':
+          console.log('✅ DASHBOARD: Loading ManagerDashboard');
           return <ManagerDashboard />;
         
         case 'user':
@@ -47,6 +51,7 @@ const Dashboard = () => {
         case 'employee':
         case 'member':
         default:
+          console.log('✅ DASHBOARD: Loading UserDashboard (default)');
           return <UserDashboard />;
       }
     } catch (error) {
