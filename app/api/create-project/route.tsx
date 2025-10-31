@@ -119,8 +119,9 @@ export async function POST(req: Request) {
     // Use user's organization for the project
     let targetOrganizationId = decodedToken.org_id;
 
-    // Get the "Active" status for this organization
-    const { data: activeStatus, error: statusError } = await supabase
+    // Get or create the "Active" status for this organization
+    let activeStatus;
+    const { data: existingActiveStatus, error: statusError } = await supabase
       .from("project_statuses")
       .select("id")
       .eq("organization_id", targetOrganizationId)
@@ -128,11 +129,91 @@ export async function POST(req: Request) {
       .eq("is_active", true)
       .maybeSingle();
 
-    if (statusError || !activeStatus) {
-      console.error("Active status not found:", statusError);
+    if (statusError) {
+      console.error("Error checking project statuses:", statusError);
       return NextResponse.json(
-        { error: "Active project status not found. Please ensure project statuses are configured." }, 
-        { status: 400 }
+        { error: "Failed to check project statuses" }, 
+        { status: 500 }
+      );
+    }
+
+    if (!existingActiveStatus) {
+      // Create default project statuses if they don't exist
+      console.log("Creating default project statuses for organization:", targetOrganizationId);
+      
+      const defaultStatuses = [
+        {
+          name: "Planning",
+          description: "Project is in planning phase",
+          color_code: "#f59e0b",
+          sort_order: 1,
+          is_active: true,
+          organization_id: targetOrganizationId,
+          created_by: decodedToken.sub
+        },
+        {
+          name: "Active",
+          description: "Project is actively being worked on",
+          color_code: "#10b981",
+          sort_order: 2,
+          is_active: true,
+          organization_id: targetOrganizationId,
+          created_by: decodedToken.sub
+        },
+        {
+          name: "On Hold",
+          description: "Project is temporarily paused",
+          color_code: "#f97316",
+          sort_order: 3,
+          is_active: true,
+          organization_id: targetOrganizationId,
+          created_by: decodedToken.sub
+        },
+        {
+          name: "Review", 
+          description: "Project is under review",
+          color_code: "#3b82f6",
+          sort_order: 4,
+          is_active: true,
+          organization_id: targetOrganizationId,
+          created_by: decodedToken.sub
+        },
+        {
+          name: "Completed",
+          description: "Project has been completed",
+          color_code: "#6b7280", 
+          sort_order: 5,
+          is_active: true,
+          organization_id: targetOrganizationId,
+          created_by: decodedToken.sub
+        }
+      ];
+
+      const { data: createdStatuses, error: createError } = await supabase
+        .from("project_statuses")
+        .insert(defaultStatuses)
+        .select("id, name")
+        .throwOnError();
+
+      if (createError) {
+        console.error("Failed to create project statuses:", createError);
+        return NextResponse.json(
+          { error: "Failed to initialize project statuses" }, 
+          { status: 500 }
+        );
+      }
+
+      // Find the Active status from the created statuses
+      activeStatus = createdStatuses?.find(status => status.name === "Active");
+    } else {
+      activeStatus = existingActiveStatus;
+    }
+
+    if (!activeStatus) {
+      console.error("Active status not found after creation attempt");
+      return NextResponse.json(
+        { error: "Failed to find or create Active project status" }, 
+        { status: 500 }
       );
     }
 
