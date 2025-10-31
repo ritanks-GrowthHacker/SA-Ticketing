@@ -59,8 +59,8 @@ export async function GET(req: Request) {
       }
 
       responseData.statuses = {
-        ticket: statuses?.filter(s => s.type === 'ticket') || [],
-        priority: statuses?.filter(s => s.type === 'priority') || [],
+        ticket: statuses?.filter((s: any) => s.type === 'ticket') || [],
+        priority: statuses?.filter((s: any) => s.type === 'priority') || [],
         all: statuses || []
       };
     }

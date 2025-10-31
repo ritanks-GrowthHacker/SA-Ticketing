@@ -2,50 +2,173 @@
 
 import React, { useState, useEffect } from 'react';
 import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, Filter } from 'lucide-react';
-import { UserRoleModal, CreateProjectModal } from '../../../components/modals';
+import { UserRoleModal, CreateProjectModal, TicketModal } from '../../../components/modals';
 import { ProjectSelect } from '../../../components/ui/ProjectSelect';
+import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
-
-interface MetricValue {
-  value: number | string;
-  change: string;
-  changeType: 'positive' | 'negative' | 'neutral';
-}
-
-interface ActivityItem {
-  id: any;
-  title: string;
-  status: string;
-  time: string;
-  project?: string;
-  priority: string;
-  assignedTo: string;
-}
-
-interface DashboardMetrics {
-  overview: Record<string, MetricValue>;
-  recentActivity: ActivityItem[];
-  chartData: { weekly?: { day: string; tickets: number; }[] };
-  quickStats: Record<string, any>;
-}
+import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
 
 const AdminDashboard = () => {
-  const { token } = useAuthStore();
+  const { token, organization, roles } = useAuthStore();
+  const { 
+    getCachedData, 
+    setCachedData, 
+    isCacheValid, 
+    clearCache,
+    isLoading: dashboardLoading,
+    setLoading: setDashboardLoading,
+    invalidateCache,
+    broadcastUpdate,
+    setupCrossTabSync,
+    lastUpdateTimestamp
+  } = useDashboardStore();
+  
   const [selectedProject, setSelectedProject] = useState('all');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
+  const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
+  const [selectedTicketId, setSelectedTicketId] = useState<string | undefined>(undefined);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showDragDropView, setShowDragDropView] = useState(false);
+  const [statuses, setStatuses] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
   
-  // Fetch dashboard metrics
+  // Fetch dashboard metrics with caching
   useEffect(() => {
     fetchDashboardMetrics();
   }, [selectedProject, token]);
 
-  const fetchDashboardMetrics = async () => {
+  // Setup cross-tab synchronization
+  useEffect(() => {
+    const cleanup = setupCrossTabSync();
+    return cleanup;
+  }, [setupCrossTabSync]);
+
+  // Refresh when cross-tab updates detected
+  useEffect(() => {
+    if (lastUpdateTimestamp > 0) {
+      console.log('🔄 Cross-tab update detected, refreshing dashboard...');
+      fetchDashboardMetrics();
+    }
+  }, [lastUpdateTimestamp]);
+
+  // Effect to handle cache loading on component mount
+  useEffect(() => {
+    if (organization?.id && token) {
+      const projectId = selectedProject === 'all' ? null : selectedProject;
+      const cachedMetrics = getCachedData(projectId, organization.id);
+      
+      if (cachedMetrics) {
+        setMetrics(cachedMetrics);
+        setLoading(false);
+        console.log('✅ Dashboard data loaded from cache');
+      } else {
+        // No valid cache, will fetch from API
+        fetchDashboardMetrics();
+      }
+    }
+  }, [organization?.id, token]);
+
+  // Handle ticket click for editing
+  const handleTicketClick = (ticketId: string) => {
+    setSelectedTicketId(ticketId);
+    setIsTicketModalOpen(true);
+  };
+
+  const handleTicketModalClose = () => {
+    setIsTicketModalOpen(false);
+    setSelectedTicketId(undefined);
+    // Refresh dashboard data after ticket modal closes (in case ticket was updated)
+    fetchDashboardMetrics(true);
+  };
+
+  const handleProjectModalClose = () => {
+    setIsCreateProjectModalOpen(false);
+    // Refresh dashboard data after project creation
+    fetchDashboardMetrics(true);
+  };
+
+  const handleTicketSuccess = () => {
+    // Broadcast ticket creation/update to other tabs
+    broadcastUpdate('ticket_created', {});
+    // Refresh dashboard data
+    fetchDashboardMetrics(true);
+  };
+
+  const handleRefresh = () => {
+    // Force refresh from API
+    fetchDashboardMetrics(true);
+  };
+
+  // Fetch statuses for drag and drop
+  useEffect(() => {
+    if (token && showDragDropView) {
+      fetchStatuses();
+    }
+  }, [token, showDragDropView]);
+
+  const fetchStatuses = async () => {
+    try {
+      console.log('🔄 ADMIN: Fetching statuses from /api/all-get-entities...');
+      const response = await fetch('/api/all-get-entities', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      console.log('📥 ADMIN: Status fetch response:', {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('📊 ADMIN: Full API response:', data);
+        
+        const ticketStatuses = data.data?.statuses?.ticket || [];
+        console.log('📊 ADMIN: Extracted ticket statuses:', ticketStatuses);
+        
+        if (ticketStatuses.length === 0) {
+          console.warn('⚠️ ADMIN: No ticket statuses found in API response');
+        }
+        
+        setStatuses(ticketStatuses);
+      } else {
+        const errorText = await response.text();
+        console.error('❌ ADMIN: Status fetch failed:', {
+          status: response.status,
+          error: errorText
+        });
+      }
+    } catch (error) {
+      console.error('❌ ADMIN: Status fetch exception:', error);
+    }
+  };
+
+  const fetchDashboardMetrics = async (forceRefresh = false) => {
     try {
       setLoading(true);
-      if (!token) return;
+      setDashboardLoading(true);
+      
+      if (!token || !organization?.id) return;
+
+      const projectId = selectedProject === 'all' ? null : selectedProject;
+      
+      // Check cache first (unless force refresh is requested)
+      if (!forceRefresh) {
+        const cachedMetrics = getCachedData(projectId, organization.id);
+        if (cachedMetrics) {
+          setMetrics(cachedMetrics);
+          setLoading(false);
+          setDashboardLoading(false);
+          console.log('✅ Dashboard data loaded from cache');
+          return;
+        }
+      }
+
+      console.log('🔄 Fetching dashboard data from API...');
 
       // Build URL with project filter if not 'all'
       const url = selectedProject && selectedProject !== 'all' 
@@ -61,12 +184,87 @@ const AdminDashboard = () => {
 
       if (response.ok) {
         const data = await response.json();
-        setMetrics(data.data);
+        const dashboardMetrics = data.data;
+        
+        // Set metrics in component state
+        setMetrics(dashboardMetrics);
+        
+        // Cache the metrics
+        const userRole = roles?.join(',') || 'user';
+        setCachedData(dashboardMetrics, projectId, userRole, organization.id);
+        
+        console.log('✅ Dashboard data fetched and cached');
       }
     } catch (error) {
       console.error('Error fetching dashboard metrics:', error);
     } finally {
       setLoading(false);
+      setDashboardLoading(false);
+    }
+  };
+
+  // Handle ticket status update from drag and drop
+  const handleTicketStatusUpdate = async (ticketId: string, newStatusId: string): Promise<boolean> => {
+    console.log('🔄 ADMIN: Starting ticket update:', {
+      ticketId,
+      newStatusId,
+      ticketIdType: typeof ticketId,
+      newStatusIdType: typeof newStatusId,
+      hasToken: !!token,
+      tokenLength: token?.length || 0
+    });
+
+    try {
+      const requestBody = {
+        ticket_id: ticketId,
+        status_id: newStatusId
+      };
+
+      console.log('📤 ADMIN: Sending request:', {
+        url: '/api/update-ticket',
+        method: 'PUT',
+        body: requestBody
+      });
+
+      const response = await fetch('/api/update-ticket', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      console.log('📥 ADMIN: API Response:', {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries())
+      });
+
+      if (response.ok) {
+        const responseData = await response.json();
+        console.log('✅ ADMIN: Update successful:', responseData);
+        
+        // Broadcast update to other tabs
+        broadcastUpdate('ticket_updated', { ticketId, newStatusId });
+        
+        // Refresh dashboard data after successful update
+        fetchDashboardMetrics(true);
+        return true;
+      } else {
+        const errorData = await response.text();
+        console.error('❌ ADMIN: API Error:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorData,
+          requestData: requestBody
+        });
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ ADMIN: Network/Exception Error:', error);
+      return false;
     }
   };
 
@@ -109,8 +307,8 @@ const AdminDashboard = () => {
       {/* Header with Project Filter */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Admin Dashboard</h1>
-          <p className="text-gray-600 mt-1">Organization overview and management</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Admin Dashboard</h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">Organization overview and management</p>
         </div>
         
         <div className="flex items-center space-x-3">
@@ -122,13 +320,23 @@ const AdminDashboard = () => {
             includeAllOption={true}
           />
           
+          {/* Refresh Button */}
+          <button 
+            onClick={handleRefresh}
+            disabled={loading || dashboardLoading}
+            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Refresh dashboard data"
+          >
+            <Filter className={`w-4 h-4 ${(loading || dashboardLoading) ? 'animate-spin' : ''}`} />
+          </button>
+          
           <button 
             onClick={() => setIsCreateProjectModalOpen(true)}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
           >
             Create Project
           </button>
-          <button className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors">
+          <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
             Export Data
           </button>
         </div>
@@ -137,14 +345,14 @@ const AdminDashboard = () => {
       {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {stats.map((stat, index) => (
-          <div key={index} className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <div key={index} className="bg-white dark:bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                <p className="text-2xl font-bold text-gray-900 mt-2">{stat.value}</p>
+                <p className="text-sm font-medium text-gray-600 dark:text-gray-400">{stat.title}</p>
+                <p className="text-2xl font-bold text-gray-900 dark:text-gray-100 mt-2">{stat.value}</p>
               </div>
-              <div className="p-3 bg-blue-50 rounded-lg">
-                <stat.icon className="w-6 h-6 text-blue-600" />
+              <div className="p-3 bg-blue-50 dark:bg-blue-900/50 rounded-lg">
+                <stat.icon className="w-6 h-6 text-blue-600 dark:text-blue-400" />
               </div>
             </div>
             <div className="flex items-center mt-4">
@@ -157,15 +365,45 @@ const AdminDashboard = () => {
       </div>
 
       {/* Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className={`grid grid-cols-1 gap-6 ${showDragDropView ? 'lg:grid-cols-1' : 'lg:grid-cols-3'}`}>
         {/* Recent Activity */}
-        <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100">
+        <div className={`${showDragDropView ? 'lg:col-span-1' : 'lg:col-span-2'} bg-white rounded-xl shadow-sm border border-gray-100`}>
           <div className="p-6 border-b border-gray-100">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-900">Recent Tickets</h3>
-              <span className="text-sm text-gray-500">
-                {selectedProject === 'all' ? 'All Projects' : 'Filtered by Project'}
-              </span>
+              <div className="flex items-center space-x-3">
+                <span className="text-sm text-gray-500">
+                  {selectedProject === 'all' ? 'All Projects' : 'Filtered by Project'}
+                </span>
+                
+                {/* Drag Drop Toggle */}
+                <button
+                  onClick={() => setShowDragDropView(!showDragDropView)}
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+                    showDragDropView 
+                      ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' 
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                  title={showDragDropView ? 'Switch to list view' : 'Switch to Kanban board'}
+                >
+                  {showDragDropView ? '📋 List' : '🗂️ Kanban'}
+                </button>
+                
+                {organization?.id && isCacheValid(selectedProject === 'all' ? null : selectedProject, organization.id) && (
+                  // small accessible green dot to indicate cached state (no text label)
+                  <span
+                    className="inline-block w-3 h-3 bg-green-500 rounded-full"
+                    title="Cached"
+                    role="status"
+                    aria-label="Cached data"
+                  />
+                )}
+                {(loading || dashboardLoading) && (
+                  <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded-full">
+                    Loading...
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           <div className="p-6">
@@ -185,52 +423,77 @@ const AdminDashboard = () => {
                 ))}
               </div>
             ) : recentTickets.length > 0 ? (
-              <div className="space-y-4">
-                {recentTickets.map((ticket) => (
-                  <div key={ticket.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
-                      <div>
-                        <h4 className="font-medium text-gray-900">{ticket.title}</h4>
-                        <p className="text-sm text-gray-600">
-                          {ticket.project && `${ticket.project} • `}{ticket.time} • {ticket.assignedTo}
-                        </p>
+              showDragDropView ? (
+                <DragDropTicketBoard
+                  tickets={recentTickets}
+                  onTicketUpdate={handleTicketStatusUpdate}
+                  onTicketClick={handleTicketClick}
+                  loading={loading}
+                  statuses={statuses}
+                  compact={true}
+                  className="mb-4"
+                />
+              ) : (
+                <div className="space-y-4">
+                  {recentTickets.map((ticket) => (
+                    <div 
+                      key={ticket.id} 
+                      className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors"
+                      onClick={() => handleTicketClick(ticket.id)}
+                    >
+                      <div className="flex items-center space-x-3">
+                        <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
+                        <div>
+                          <h4 className="font-medium text-gray-900">{ticket.title}</h4>
+                          <p className="text-sm text-gray-600">
+                            {ticket.project && `${ticket.project} • `}{ticket.time} • {ticket.assignedTo}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          ticket.priority === 'High' ? 'bg-red-100 text-red-800' :
+                          ticket.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                          'bg-green-100 text-green-800'
+                        }`}>
+                          {ticket.priority}
+                        </span>
+                        <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                          {ticket.status}
+                        </span>
                       </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                        ticket.priority === 'High' ? 'bg-red-100 text-red-800' :
-                        ticket.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-green-100 text-green-800'
-                      }`}>
-                        {ticket.priority}
-                      </span>
-                      <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                        {ticket.status}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )
             ) : (
               <div className="text-center py-8">
                 <Ticket className="w-12 h-12 text-gray-300 mx-auto mb-4" />
                 <p className="text-gray-500">No recent tickets found</p>
               </div>
             )}
-            <button className="w-full mt-4 py-2 text-blue-600 hover:text-blue-800 font-medium text-sm">
-              View All Tickets
-            </button>
+            {!showDragDropView && (
+              <button className="w-full mt-4 py-2 text-blue-600 hover:text-blue-800 font-medium text-sm">
+                View All Tickets
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Quick Actions */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+        {/* Quick Actions - Hide in Kanban view */}
+        {!showDragDropView && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="p-6 border-b border-gray-100">
             <h3 className="text-lg font-semibold text-gray-900">Quick Actions</h3>
           </div>
           <div className="p-6 space-y-3">
-            <button className="w-full flex items-center justify-between p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+            <button 
+              onClick={() => {
+                setSelectedTicketId(undefined); // Create mode
+                setIsTicketModalOpen(true);
+              }}
+              className="w-full flex items-center justify-between p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            >
               <span className="font-medium text-gray-900">Create New Ticket</span>
               <Ticket className="w-5 h-5 text-gray-400" />
             </button>
@@ -253,7 +516,8 @@ const AdminDashboard = () => {
               <BarChart3 className="w-5 h-5 text-gray-400" />
             </button>
           </div>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* User Role Management Modal */}
@@ -265,13 +529,20 @@ const AdminDashboard = () => {
       {/* Create Project Modal */}
       <CreateProjectModal
         isOpen={isCreateProjectModalOpen}
-        onClose={() => setIsCreateProjectModalOpen(false)}
+        onClose={handleProjectModalClose}
         onProjectCreated={(project: any) => {
           console.log('New project created:', project);
-          // Optionally refresh dashboard data
-          fetchDashboardMetrics();
+          handleProjectModalClose(); // This will refresh the data
         }}
       />
+
+      <TicketModal
+        isOpen={isTicketModalOpen}
+        onClose={handleTicketModalClose}
+        ticketId={selectedTicketId}
+        onSuccess={handleTicketSuccess}
+      />
+
     </div>
   );
 };

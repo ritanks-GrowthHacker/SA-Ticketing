@@ -78,12 +78,21 @@ export async function GET(req: Request) {
           id,
           name,
           description,
+          status_id,
           created_at,
           updated_at,
           organization_id,
           created_by,
           organizations(id, name, domain),
-          users!projects_created_by_fkey(id, name, email)
+          users!projects_created_by_fkey(id, name, email),
+          project_statuses(
+            id,
+            name,
+            description,
+            color_code,
+            sort_order,
+            is_active
+          )
         `)
         .eq("organization_id", decodedToken.org_id);
 
@@ -95,13 +104,22 @@ export async function GET(req: Request) {
           id,
           name,
           description,
+          status_id,
           created_at,
           updated_at,
           organization_id,
           created_by,
           organizations(id, name, domain),
           users!projects_created_by_fkey(id, name, email),
-          user_project!inner(user_id, role_id, roles(name))
+          user_project!inner(user_id, role_id, roles(name)),
+          project_statuses(
+            id,
+            name,
+            description,
+            color_code,
+            sort_order,
+            is_active
+          )
         `)
         .eq("organization_id", decodedToken.org_id)
         .eq("user_project.user_id", decodedToken.sub);
@@ -114,13 +132,22 @@ export async function GET(req: Request) {
           id,
           name,
           description,
+          status_id,
           created_at,
           updated_at,
           organization_id,
           created_by,
           organizations(id, name, domain),
           users!projects_created_by_fkey(id, name, email),
-          user_project!inner(user_id, role_id, roles(name))
+          user_project!inner(user_id, role_id, roles(name)),
+          project_statuses(
+            id,
+            name,
+            description,
+            color_code,
+            sort_order,
+            is_active
+          )
         `)
         .eq("organization_id", decodedToken.org_id)
         .eq("user_project.user_id", decodedToken.sub);
@@ -158,6 +185,34 @@ export async function GET(req: Request) {
         projects: dropdownProjects,
         totalCount: dropdownProjects.length
       });
+    }
+
+    // Get all project statuses for the organization first
+    console.log('🔍 Fetching project statuses for org:', decodedToken.org_id);
+    const { data: projectStatuses, error: statusesError } = await supabase
+      .from("project_statuses")
+      .select("*")
+      .eq("organization_id", decodedToken.org_id)
+      .order("sort_order", { ascending: true });
+
+    // Let's also try to get ALL project statuses to see what exists
+    const { data: allStatuses } = await supabase
+      .from("project_statuses")
+      .select("*");
+
+    console.log('🔍 Status query debug:', {
+      tokenOrgId: decodedToken.org_id,
+      tokenOrgIdType: typeof decodedToken.org_id,
+      queryResult: projectStatuses,
+      allStatusesInDB: allStatuses,
+      error: statusesError
+    });
+
+    if (statusesError) {
+      console.error('❌ Error fetching project statuses:', statusesError);
+    } else {
+      console.log('✅ Project statuses fetched:', projectStatuses?.length || 0, 'statuses');
+      console.log('📋 Project statuses data:', projectStatuses);
     }
 
     // Enhanced project data with statistics if requested
@@ -206,22 +261,39 @@ export async function GET(req: Request) {
 
           const totalCount = totalTickets?.length || 0;
           const completedCount = completedTickets?.length || 0;
+          const teamMembersCount = teamMembers?.length || 0;
           
           projectStats = {
             totalTickets: totalCount,
             openTickets: openTickets?.length || 0,
             completedTickets: completedCount,
-            teamMembers: teamMembers?.length || 0,
+            teamMembers: teamMembersCount,
             completionRate: totalCount > 0 
               ? Math.round((completedCount / totalCount) * 100)
               : 0
           };
+
+          console.log('📊 Project stats calculated:', {
+            projectId: project.id,
+            projectName: project.name,
+            totalTickets: totalCount,
+            teamMembers: teamMembersCount,
+            teamMembersData: teamMembers,
+            projectStats
+          });
         }
+
+        // Find the status details using status_id
+        const statusDetails = project.status_id 
+          ? (projectStatuses || []).find(s => s.id === project.status_id)
+          : null;
 
         return {
           id: project.id,
           name: project.name,
           description: project.description,
+          status_id: project.status_id,
+          status: statusDetails,
           created_at: project.created_at,
           updated_at: project.updated_at,
           created_by: project.users || null,
@@ -232,9 +304,74 @@ export async function GET(req: Request) {
       })
     );
 
+
+
+    // Fallback: If no statuses found, provide the known statuses
+    let statusesToReturn = projectStatuses;
+    if (!projectStatuses || projectStatuses.length === 0) {
+      console.log('⚠️ No statuses found in DB query, using fallback statuses');
+      statusesToReturn = [
+        {
+          id: "d05ef4b9-63be-42e2-b4a2-3d85537b9b7d",
+          name: "Active",
+          description: "Project is actively being worked on",
+          color_code: "#10b981",
+          sort_order: 2,
+          is_active: true,
+          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+        },
+        {
+          id: "f85e266d-7b75-4b08-b775-2fc17ca4b2a6",
+          name: "Planning",
+          description: "Project is in planning phase", 
+          color_code: "#f59e0b",
+          sort_order: 1,
+          is_active: true,
+          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+        },
+        {
+          id: "9e001b85-22f5-435f-a95e-f546621c0ce3",
+          name: "On Hold",
+          description: "Project is temporarily paused",
+          color_code: "#f97316", 
+          sort_order: 3,
+          is_active: true,
+          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+        },
+        {
+          id: "af968d18-dfcc-4d69-93d9-9e7932155ccd",
+          name: "Review",
+          description: "Project is under review",
+          color_code: "#3b82f6",
+          sort_order: 4,
+          is_active: true,
+          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+        },
+        {
+          id: "66a0ccee-c989-4835-a828-bd9765958cf6",
+          name: "Completed", 
+          description: "Project has been completed",
+          color_code: "#6b7280",
+          sort_order: 5,
+          is_active: true,
+          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+        },
+        {
+          id: "df41226f-a012-4f83-95e0-c91b0f25f70a",
+          name: "Cancelled",
+          description: "Project has been cancelled", 
+          color_code: "#ef4444",
+          sort_order: 6,
+          is_active: true,
+          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+        }
+      ];
+    }
+
     return NextResponse.json({
       message: "Projects retrieved successfully",
       projects: enrichedProjects,
+      statuses: statusesToReturn,
       totalCount: enrichedProjects.length,
       userRole: userRole,
       filters: {

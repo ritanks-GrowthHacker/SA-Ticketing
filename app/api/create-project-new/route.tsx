@@ -37,6 +37,22 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
 
+    // Get the "Active" status for this organization
+    const { data: activeStatus, error: statusError } = await supabase
+      .from("project_statuses")
+      .select("id")
+      .eq("organization_id", tokenData.org_id)
+      .eq("name", "Active")
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (statusError || !activeStatus) {
+      console.error("Active status not found:", statusError);
+      return NextResponse.json({
+        error: "Active project status not found. Please ensure project statuses are configured."
+      }, { status: 400 });
+    }
+
     // Create the project
     const { data: newProject, error: projectError } = await supabase
       .from('projects')
@@ -44,10 +60,10 @@ export async function POST(req: Request) {
         name: name.trim(),
         description: description.trim(),
         organization_id: tokenData.org_id,
+        status_id: activeStatus.id,
         start_date: startDate,
         end_date: endDate,
         priority: priority || 'Medium',
-        status: status || 'Planning',
         budget: budget ? parseFloat(budget) : null,
         created_by: tokenData.sub
       })

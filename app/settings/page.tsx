@@ -1,19 +1,22 @@
+'use client';
+
 import React from 'react';
 import { Bell, Lock, Eye, Globe, Palette, Monitor } from 'lucide-react';
+import { ThemeToggle } from '../../components/ui/ThemeToggle';
 
 const Settings = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-        <p className="text-gray-600 mt-1">Manage your application settings and preferences</p>
+        <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h1>
+        <p className="text-gray-600 dark:text-gray-400 mt-1">Manage your application settings and preferences</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Settings Navigation */}
         <div className="lg:col-span-1">
-          <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
             <nav className="space-y-2">
               <a href="#notifications" className="flex items-center space-x-3 px-3 py-2 text-blue-600 bg-blue-50 rounded-lg">
                 <Bell className="w-5 h-5" />
@@ -134,36 +137,17 @@ const Settings = () => {
           </div>
 
           {/* Appearance */}
-          <div className="bg-white rounded-lg border border-gray-200 p-6" id="appearance">
-            <h3 className="text-lg font-semibold text-gray-900 mb-6">Appearance</h3>
+          <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6" id="appearance">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-6">Appearance</h3>
             
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Theme</label>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="flex items-center space-x-2 p-3 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
-                    <input type="radio" name="theme" id="light" className="text-blue-600" defaultChecked />
-                    <label htmlFor="light" className="flex items-center space-x-2 cursor-pointer">
-                      <div className="w-4 h-4 bg-white border border-gray-300 rounded"></div>
-                      <span className="text-sm">Light</span>
-                    </label>
-                  </div>
-                  
-                  <div className="flex items-center space-x-2 p-3 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
-                    <input type="radio" name="theme" id="dark" className="text-blue-600" />
-                    <label htmlFor="dark" className="flex items-center space-x-2 cursor-pointer">
-                      <div className="w-4 h-4 bg-gray-800 border border-gray-300 rounded"></div>
-                      <span className="text-sm">Dark</span>
-                    </label>
-                  </div>
-                  
-                  <div className="flex items-center space-x-2 p-3 border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50">
-                    <input type="radio" name="theme" id="auto" className="text-blue-600" />
-                    <label htmlFor="auto" className="flex items-center space-x-2 cursor-pointer">
-                      <Monitor className="w-4 h-4 text-gray-600" />
-                      <span className="text-sm">Auto</span>
-                    </label>
-                  </div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-4">Theme Preference</label>
+                <div className="flex items-center space-x-4">
+                  <ThemeToggle />
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                    Choose your preferred theme or set it to match your system preference
+                  </p>
                 </div>
               </div>
 

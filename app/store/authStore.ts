@@ -110,6 +110,15 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: () => {
+        // Clear dashboard cache on logout
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem('dashboard-storage');
+          } catch (error) {
+            console.warn('Failed to clear dashboard cache:', error);
+          }
+        }
+        
         set({
           isAuthenticated: false,
           token: null,

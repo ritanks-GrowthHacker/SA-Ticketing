@@ -119,6 +119,23 @@ export async function POST(req: Request) {
     // Use user's organization for the project
     let targetOrganizationId = decodedToken.org_id;
 
+    // Get the "Active" status for this organization
+    const { data: activeStatus, error: statusError } = await supabase
+      .from("project_statuses")
+      .select("id")
+      .eq("organization_id", targetOrganizationId)
+      .eq("name", "Active")
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (statusError || !activeStatus) {
+      console.error("Active status not found:", statusError);
+      return NextResponse.json(
+        { error: "Active project status not found. Please ensure project statuses are configured." }, 
+        { status: 400 }
+      );
+    }
+
     // Check if project with same name already exists in the target organization
     const { data: existingProject } = await supabase
       .from("projects")
@@ -134,11 +151,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create the project (matching exact schema)
+    // Create the project (matching exact schema) with Active status
     const projectData = {
       name: name.trim(),
       description: description?.trim() || null,
       organization_id: targetOrganizationId,
+      status_id: activeStatus.id,
       created_by: decodedToken.sub,
       updated_by: decodedToken.sub
     };

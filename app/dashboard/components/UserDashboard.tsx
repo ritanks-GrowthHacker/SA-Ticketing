@@ -1,9 +1,21 @@
 'use client';
 
-import React from 'react';
-import { BarChart3, Ticket, TrendingUp, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { BarChart3, Ticket, TrendingUp, Clock, CheckCircle, AlertCircle, LayoutGrid, List } from 'lucide-react';
+import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
+import { useAuthStore } from '../../store/authStore';
+import { useDashboardStore } from '../../store/dashboardStore';
 
 const UserDashboard = () => {
+  const { token } = useAuthStore();
+  const { 
+    broadcastUpdate,
+    setupCrossTabSync,
+    lastUpdateTimestamp
+  } = useDashboardStore();
+  const [showDragDropView, setShowDragDropView] = useState(false);
+  const [statuses, setStatuses] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
+
   // Mock user-specific data - replace with real API calls
   const userStats = [
     {
@@ -79,6 +91,85 @@ const UserDashboard = () => {
     }
   ];
 
+  // Fetch ticket statuses for drag-and-drop board
+  const fetchStatuses = async () => {
+    try {
+      const response = await fetch('/api/all-get-entities', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.data?.statuses?.ticket) {
+          const formattedStatuses = data.data.statuses.ticket.map((status: any) => ({
+            id: status.id,
+            name: status.name,
+            color: status.color_code || '#6b7280'
+          }));
+          setStatuses(formattedStatuses);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error fetching statuses:', error);
+    }
+  };
+
+  // Setup cross-tab synchronization
+  useEffect(() => {
+    const cleanup = setupCrossTabSync();
+    return cleanup;
+  }, [setupCrossTabSync]);
+
+  // Fetch statuses for drag-and-drop
+  useEffect(() => {
+    if (token) {
+      fetchStatuses();
+    }
+  }, [token]);
+
+  // Handle ticket status update via drag and drop
+  const handleTicketStatusUpdate = async (ticketId: string, newStatusId: string): Promise<boolean> => {
+    try {
+      const response = await fetch('/api/update-ticket', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          ticket_id: ticketId,
+          status_id: newStatusId
+        })
+      });
+
+      if (response.ok) {
+        console.log('✅ Ticket status updated successfully');
+        
+        // Broadcast update to other tabs
+        broadcastUpdate('ticket_updated', { ticketId, newStatusId });
+        
+        // Note: In a real implementation, you would refresh the user's tickets data here
+        return true;
+      } else {
+        console.error('❌ Error updating ticket status');
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Error updating ticket status:', error);
+      return false;
+    }
+  };
+
+  // Fetch statuses on component mount
+  useEffect(() => {
+    if (token) {
+      fetchStatuses();
+    }
+  }, [token]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'Open':
@@ -144,46 +235,81 @@ const UserDashboard = () => {
       </div>
 
       {/* Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className={`grid grid-cols-1 gap-6 ${showDragDropView ? 'lg:grid-cols-1' : 'lg:grid-cols-3'}`}>
         {/* My Tickets */}
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="p-6 border-b border-gray-100">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-900">My Assigned Tickets</h3>
-              <span className="text-sm text-gray-500">{myTickets.length} active</span>
+              <div className="flex items-center space-x-3">
+                <span className="text-sm text-gray-500">{myTickets.length} active</span>
+                <div className="flex bg-gray-100 rounded-lg p-1">
+                  <button
+                    onClick={() => setShowDragDropView(false)}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      !showDragDropView 
+                        ? 'bg-white text-gray-900 shadow-sm' 
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setShowDragDropView(true)}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      showDragDropView 
+                        ? 'bg-white text-gray-900 shadow-sm' 
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
           <div className="p-6">
-            <div className="space-y-4">
-              {myTickets.map((ticket) => (
-                <div key={ticket.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex items-center space-x-3">
-                      <span className="font-mono text-sm text-blue-600 font-medium">{ticket.id}</span>
-                      <AlertCircle className={`w-4 h-4 ${getPriorityColor(ticket.priority)}`} />
+            {showDragDropView ? (
+              <DragDropTicketBoard
+                tickets={myTickets}
+                statuses={statuses}
+                onTicketUpdate={handleTicketStatusUpdate}
+              />
+            ) : (
+              <>
+                <div className="space-y-4">
+                  {myTickets.map((ticket) => (
+                    <div key={ticket.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex items-center space-x-3">
+                          <span className="font-mono text-sm text-blue-600 font-medium">{ticket.id}</span>
+                          <AlertCircle className={`w-4 h-4 ${getPriorityColor(ticket.priority)}`} />
+                        </div>
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(ticket.status)}`}>
+                          {ticket.status}
+                        </span>
+                      </div>
+                      
+                      <h4 className="font-semibold text-gray-900 mb-1">{ticket.title}</h4>
+                      
+                      <div className="flex items-center justify-between text-sm text-gray-500">
+                        <span>{ticket.project}</span>
+                        <span>Assigned {ticket.assignedDate}</span>
+                      </div>
                     </div>
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(ticket.status)}`}>
-                      {ticket.status}
-                    </span>
-                  </div>
-                  
-                  <h4 className="font-semibold text-gray-900 mb-1">{ticket.title}</h4>
-                  
-                  <div className="flex items-center justify-between text-sm text-gray-500">
-                    <span>{ticket.project}</span>
-                    <span>Assigned {ticket.assignedDate}</span>
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <button className="w-full mt-4 py-2 text-blue-600 hover:text-blue-800 font-medium text-sm">
-              View All My Tickets
-            </button>
+                <button className="w-full mt-4 py-2 text-blue-600 hover:text-blue-800 font-medium text-sm">
+                  View All My Tickets
+                </button>
+              </>
+            )}
           </div>
         </div>
 
         {/* Quick Actions - Limited for Users */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+        {!showDragDropView && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="p-6 border-b border-gray-100">
             <h3 className="text-lg font-semibold text-gray-900">Quick Actions</h3>
           </div>
@@ -216,6 +342,7 @@ const UserDashboard = () => {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

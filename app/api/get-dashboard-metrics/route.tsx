@@ -94,6 +94,9 @@ export async function GET(req: Request) {
       project?: string;
       priority: string;
       assignedTo: string;
+      createdBy?: string;
+      assigned_to?: string; // Alternative field name
+      created_by?: string;  // Alternative field name
     }
 
     interface ChartDataPoint {
@@ -115,47 +118,90 @@ export async function GET(req: Request) {
     };
 
     if (isAdmin) {
-      // ADMIN METRICS - Organization-wide data
+      // ADMIN METRICS - Organization-wide data or project-specific if filtered
       
-      // Total Tickets
-      const { data: currentTickets } = await supabase
+      // Build ticket queries with optional project filter
+      let currentTicketsQuery = supabase
         .from('tickets')
         .select('id, created_at, status_id, priority_id, projects!inner(organization_id)')
         .eq('projects.organization_id', organizationId)
         .gte('created_at', dateRanges.currentMonthStart);
 
-      const { data: previousTickets } = await supabase
+      let previousTicketsQuery = supabase
         .from('tickets')
         .select('id, projects!inner(organization_id)')
         .eq('projects.organization_id', organizationId)
         .gte('created_at', dateRanges.previousMonthStart)
         .lt('created_at', dateRanges.currentMonthStart);
 
+      // Apply project filter if specified
+      if (projectId) {
+        currentTicketsQuery = currentTicketsQuery.eq('project_id', projectId);
+        previousTicketsQuery = previousTicketsQuery.eq('project_id', projectId);
+      }
+
+      const { data: currentTickets } = await currentTicketsQuery;
+      const { data: previousTickets } = await previousTicketsQuery;
+
       // Active Projects
-      const { data: activeProjects } = await supabase
+      let activeProjectsQuery = supabase
         .from('projects')
         .select('id, name, created_at')
         .eq('organization_id', organizationId);
+      
+      // If project filter is applied, get only that specific project
+      if (projectId) {
+        activeProjectsQuery = activeProjectsQuery.eq('id', projectId);
+      }
+
+      const { data: activeProjects } = await activeProjectsQuery;
 
       // Team Members
-      const { data: currentMembers } = await supabase
-        .from('user_organization')
-        .select('user_id, users!inner(id, name, email, created_at)')
-        .eq('organization_id', organizationId);
+      let currentMembersQuery, previousMembersQuery;
+      
+      if (projectId) {
+        // If project filter is applied, get only members of that project
+        currentMembersQuery = supabase
+          .from('user_project')
+          .select('user_id, users!inner(id, name, email, created_at)')
+          .eq('project_id', projectId);
 
-      const { data: previousMembers } = await supabase
-        .from('user_organization')
-        .select('user_id, users!inner(created_at)')
-        .eq('organization_id', organizationId)
-        .lt('users.created_at', dateRanges.currentMonthStart);
+        previousMembersQuery = supabase
+          .from('user_project')
+          .select('user_id, users!inner(created_at)')
+          .eq('project_id', projectId)
+          .lt('users.created_at', dateRanges.currentMonthStart);
+      } else {
+        // Organization-wide members
+        currentMembersQuery = supabase
+          .from('user_organization')
+          .select('user_id, users!inner(id, name, email, created_at)')
+          .eq('organization_id', organizationId);
+
+        previousMembersQuery = supabase
+          .from('user_organization')
+          .select('user_id, users!inner(created_at)')
+          .eq('organization_id', organizationId)
+          .lt('users.created_at', dateRanges.currentMonthStart);
+      }
+
+      const { data: currentMembers } = await currentMembersQuery;
+      const { data: previousMembers } = await previousMembersQuery;
 
       // Average Resolution Time (simplified calculation)
-      const { data: resolvedTickets } = await supabase
+      let resolvedTicketsQuery = supabase
         .from('tickets')
         .select('created_at, updated_at, projects!inner(organization_id)')
         .eq('projects.organization_id', organizationId)
         .gte('created_at', dateRanges.currentMonthStart)
         .not('updated_at', 'is', null);
+      
+      // Apply project filter if specified
+      if (projectId) {
+        resolvedTicketsQuery = resolvedTicketsQuery.eq('project_id', projectId);
+      }
+
+      const { data: resolvedTickets } = await resolvedTicketsQuery;
 
       // Calculate average resolution time
       let avgResolutionHours = 0;
@@ -169,18 +215,26 @@ export async function GET(req: Request) {
       }
 
       // Recent Activity
-      const { data: recentTickets } = await supabase
+      let recentTicketsQuery = supabase
         .from('tickets')
         .select(`
           id, title, created_at, status_id, priority_id, 
           created_by, assigned_to,
           projects!inner(name, organization_id),
-          users!tickets_created_by_fkey(name),
+          creator:users!tickets_created_by_fkey(name),
+          assignee:users!tickets_assigned_to_fkey(name),
           statuses!tickets_status_id_fkey(name, color_code)
         `)
         .eq('projects.organization_id', organizationId)
         .order('created_at', { ascending: false })
         .limit(10);
+      
+      // Apply project filter if specified
+      if (projectId) {
+        recentTicketsQuery = recentTicketsQuery.eq('project_id', projectId);
+      }
+
+      const { data: recentTickets } = await recentTicketsQuery;
 
       metrics.overview = {
         totalTickets: {
@@ -218,7 +272,10 @@ export async function GET(req: Request) {
         time: formatTimeAgo(ticket.created_at),
         project: (ticket as any).projects?.name || 'Unknown Project',
         priority: ticket.priority_id ? 'High' : 'Normal', // Simplified
-        assignedTo: (ticket as any).users?.name || 'Unassigned'
+        assignedTo: (ticket as any).assignee?.name || 'Unassigned',
+        createdBy: (ticket as any).creator?.name || 'Unknown',
+        assigned_to: (ticket as any).assignee?.name || 'Unassigned', // Alternative field name
+        created_by: (ticket as any).creator?.name || 'Unknown' // Alternative field name
       })) || [];
 
     } else if (isManager) {
@@ -281,7 +338,8 @@ export async function GET(req: Request) {
           .select(`
             id, title, created_at, status_id, 
             created_by, assigned_to,
-            users!tickets_created_by_fkey(name),
+            creator:users!tickets_created_by_fkey(name),
+            assignee:users!tickets_assigned_to_fkey(name),
             statuses!tickets_status_id_fkey(name, color_code)
           `)
           .eq('project_id', targetProjectId)
@@ -319,7 +377,10 @@ export async function GET(req: Request) {
           title: ticket.title,
           status: (ticket as any).statuses?.name || 'Unknown',
           time: formatTimeAgo(ticket.created_at),
-          assignedTo: (ticket as any).users?.name || 'Unassigned',
+          assignedTo: (ticket as any).assignee?.name || 'Unassigned',
+          createdBy: (ticket as any).creator?.name || 'Unknown',
+          assigned_to: (ticket as any).assignee?.name || 'Unassigned', // Alternative field name
+          created_by: (ticket as any).creator?.name || 'Unknown', // Alternative field name
           priority: 'Normal' // Simplified
         })) || [];
 

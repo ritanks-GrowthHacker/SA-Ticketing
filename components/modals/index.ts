@@ -8,3 +8,5 @@ export {  CreateProjectModal } from './CreateProjectModal';
 export { default as ErrorModal } from './ErrorModal';
 export { default as SuccessModal } from './SuccessModal';
 export { default as ConfirmationModal } from './ConfirmationModal';
+export { AssignmentModal } from './AssignmentModal';
+export { default as TicketModal } from './TicketModal';

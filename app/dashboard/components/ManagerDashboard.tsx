@@ -1,50 +1,142 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, User, Target } from 'lucide-react';
+import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, User, Target, Filter, LayoutGrid, List } from 'lucide-react';
 import { UserRoleModal } from '../../../components/modals';
 import { ProjectSelect } from '../../../components/ui/ProjectSelect';
+import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
-
-interface MetricValue {
-  value: number | string;
-  change: string;
-  changeType: 'positive' | 'negative' | 'neutral';
-}
-
-interface ActivityItem {
-  id: any;
-  title: string;
-  status: string;
-  time: string;
-  project?: string;
-  priority: string;
-  assignedTo: string;
-}
-
-interface DashboardMetrics {
-  overview: Record<string, MetricValue>;
-  recentActivity: ActivityItem[];
-  chartData: { weekly?: { day: string; tickets: number; }[] };
-  quickStats: Record<string, any>;
-}
+import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
 
 const ManagerDashboard = () => {
-  const { token } = useAuthStore();
+  const { token, organization, roles } = useAuthStore();
+  const { 
+    getCachedData, 
+    setCachedData, 
+    isCacheValid, 
+    isLoading: dashboardLoading,
+    setLoading: setDashboardLoading,
+    invalidateCache,
+    broadcastUpdate,
+    setupCrossTabSync,
+    lastUpdateTimestamp
+  } = useDashboardStore();
+  
   const [selectedProject, setSelectedProject] = useState('all');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showDragDropView, setShowDragDropView] = useState(false);
+  const [statuses, setStatuses] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
   
-  // Fetch dashboard metrics
+  // Fetch dashboard metrics with caching
   useEffect(() => {
     fetchDashboardMetrics();
   }, [selectedProject, token]);
 
-  const fetchDashboardMetrics = async () => {
+  // Setup cross-tab synchronization
+  useEffect(() => {
+    const cleanup = setupCrossTabSync();
+    return cleanup;
+  }, [setupCrossTabSync]);
+
+  // Refresh when cross-tab updates detected
+  useEffect(() => {
+    if (lastUpdateTimestamp > 0) {
+      console.log('🔄 Cross-tab update detected, refreshing dashboard...');
+      fetchDashboardMetrics();
+    }
+  }, [lastUpdateTimestamp]);
+
+  // Effect to handle cache loading on component mount
+  useEffect(() => {
+    if (organization?.id && token) {
+      const projectId = selectedProject === 'all' ? null : selectedProject;
+      const cachedMetrics = getCachedData(projectId, organization.id);
+      
+      if (cachedMetrics) {
+        setMetrics(cachedMetrics);
+        setLoading(false);
+        console.log('✅ Manager Dashboard data loaded from cache');
+      } else {
+        fetchDashboardMetrics();
+      }
+    }
+  }, [organization?.id, token]);
+
+  // Fetch statuses on component mount
+  useEffect(() => {
+    if (token) {
+      fetchStatuses();
+    }
+  }, [token]);
+
+  // Fetch ticket statuses for drag-and-drop board
+  const fetchStatuses = async () => {
+    try {
+      console.log('🔄 MANAGER: Fetching statuses from /api/all-get-entities...');
+      const response = await fetch('/api/all-get-entities', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      console.log('📥 MANAGER: Status fetch response:', {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('📊 MANAGER: Full API response:', data);
+        
+        if (data.data?.statuses?.ticket) {
+          const formattedStatuses = data.data.statuses.ticket.map((status: any) => ({
+            id: status.id,
+            name: status.name,
+            color: status.color_code || '#6b7280'
+          }));
+          console.log('📊 MANAGER: Formatted statuses:', formattedStatuses);
+          setStatuses(formattedStatuses);
+        } else {
+          console.warn('⚠️ MANAGER: No ticket statuses found in response structure');
+        }
+      } else {
+        const errorText = await response.text();
+        console.error('❌ MANAGER: Status fetch failed:', {
+          status: response.status,
+          error: errorText
+        });
+      }
+    } catch (error) {
+      console.error('❌ MANAGER: Status fetch exception:', error);
+    }
+  };
+
+  const fetchDashboardMetrics = async (forceRefresh = false) => {
     try {
       setLoading(true);
-      if (!token) return;
+      setDashboardLoading(true);
+      
+      if (!token || !organization?.id) return;
+
+      const projectId = selectedProject === 'all' ? null : selectedProject;
+      
+      // Check cache first (unless force refresh is requested)
+      if (!forceRefresh) {
+        const cachedMetrics = getCachedData(projectId, organization.id);
+        if (cachedMetrics) {
+          setMetrics(cachedMetrics);
+          setLoading(false);
+          setDashboardLoading(false);
+          console.log('✅ Manager Dashboard data loaded from cache');
+          return;
+        }
+      }
+
+      console.log('🔄 Fetching manager dashboard data from API...');
 
       const url = selectedProject && selectedProject !== 'all'
         ? `/api/get-dashboard-metrics?project_id=${selectedProject}`
@@ -59,17 +151,68 @@ const ManagerDashboard = () => {
 
       if (response.ok) {
         const data = await response.json();
-        setMetrics(data.data);
+        const dashboardMetrics = data.data;
+        
+        // Set metrics in component state
+        setMetrics(dashboardMetrics);
+        
+        // Cache the metrics
+        const userRole = roles?.join(',') || 'manager';
+        setCachedData(dashboardMetrics, projectId, userRole, organization.id);
         
         // Set default project if not selected and projects are available
-        if (!selectedProject && data.data.quickStats?.availableProjects?.length > 0) {
-          setSelectedProject(data.data.quickStats.availableProjects[0].id);
+        if (!selectedProject && dashboardMetrics.quickStats?.availableProjects?.length > 0) {
+          setSelectedProject(dashboardMetrics.quickStats.availableProjects[0].id);
         }
+        
+        console.log('✅ Manager Dashboard data fetched and cached');
       }
     } catch (error) {
       console.error('Error fetching dashboard metrics:', error);
     } finally {
       setLoading(false);
+      setDashboardLoading(false);
+    }
+  };
+
+  // Handle ticket status update via drag and drop
+  const handleTicketStatusUpdate = async (ticketId: string, newStatusId: string): Promise<boolean> => {
+    try {
+      const response = await fetch('/api/update-ticket', {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          ticket_id: ticketId,
+          status_id: newStatusId
+        })
+      });
+
+      if (response.ok) {
+        console.log('✅ Ticket status updated successfully');
+        
+        // Broadcast update to other tabs
+        broadcastUpdate('ticket_updated', { ticketId, newStatusId });
+        
+        // Refresh the dashboard data to reflect the changes
+        await fetchDashboardMetrics(true);
+        return true;
+      } else {
+        const errorData = await response.text();
+        console.error('❌ Error updating ticket status:', {
+          status: response.status,
+          statusText: response.statusText,
+          error: errorData,
+          ticketId,
+          newStatusId
+        });
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Error updating ticket status:', error);
+      return false;
     }
   };
 
@@ -182,17 +325,47 @@ const ManagerDashboard = () => {
       </div>
 
       {/* Content Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className={`grid grid-cols-1 gap-6 ${showDragDropView ? 'lg:grid-cols-1' : 'lg:grid-cols-3'}`}>
         {/* Project Tickets */}
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="p-6 border-b border-gray-100">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-900">Project Tickets</h3>
-              <span className="text-sm text-gray-500">{projectTickets.length} active</span>
+              <div className="flex items-center space-x-3">
+                <span className="text-sm text-gray-500">{projectTickets.length} active</span>
+                <div className="flex bg-gray-100 rounded-lg p-1">
+                  <button
+                    onClick={() => setShowDragDropView(false)}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      !showDragDropView 
+                        ? 'bg-white text-gray-900 shadow-sm' 
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    <List className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setShowDragDropView(true)}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      showDragDropView 
+                        ? 'bg-white text-gray-900 shadow-sm' 
+                        : 'text-gray-600 hover:text-gray-900'
+                    }`}
+                  >
+                    <LayoutGrid className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
           <div className="p-6">
-            {loading ? (
+            {showDragDropView ? (
+              <DragDropTicketBoard
+                tickets={projectTickets}
+                statuses={statuses}
+                onTicketUpdate={handleTicketStatusUpdate}
+              />
+            ) : loading ? (
               <div className="space-y-4">
                 {[1,2,3].map(i => (
                   <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg animate-pulse">
@@ -244,14 +417,17 @@ const ManagerDashboard = () => {
                 </p>
               </div>
             )}
-            <button className="w-full mt-4 py-2 text-blue-600 hover:text-blue-800 font-medium text-sm">
-              View All Project Tickets
-            </button>
+            {!showDragDropView && (
+              <button className="w-full mt-4 py-2 text-blue-600 hover:text-blue-800 font-medium text-sm">
+                View All Project Tickets
+              </button>
+            )}
           </div>
         </div>
 
         {/* Team & Actions */}
-        <div className="space-y-6">
+        {!showDragDropView && (
+          <div className="space-y-6">
           {/* Quick Actions */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100">
             <div className="p-6 border-b border-gray-100">
@@ -304,6 +480,7 @@ const ManagerDashboard = () => {
             </div>
           </div>
         </div>
+        )}
       </div>
 
       {/* User Role Management Modal */}

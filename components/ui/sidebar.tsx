@@ -12,13 +12,17 @@ import {
   X,
   ChevronRight,
   Clock,
-  AlertCircle
+  AlertCircle,
+  Users,
+  Shield
 } from 'lucide-react';
+import { useAuthStore } from '../../app/store/authStore';
 
 interface NavItem {
   name: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
+  adminOnly?: boolean;
 }
 
 interface TicketItem {
@@ -32,6 +36,7 @@ interface TicketItem {
 const navItems: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
   { name: 'Projects', href: '/projects', icon: FolderOpen },
+  { name: 'Manage Access', href: '/manage-access', icon: Users, adminOnly: true },
   { name: 'Profile', href: '/profile', icon: User },
   { name: 'Tickets', href: '/tickets', icon: Ticket },
 ];
@@ -78,17 +83,26 @@ const mockTickets: TicketItem[] = [
 const Sidebar = () => {
   const [isExpanded, setIsExpanded] = useState(false);
   const pathname = usePathname();
+  const { user, role } = useAuthStore();
+
+  // Filter navigation items based on user role
+  const filteredNavItems = navItems.filter(item => {
+    if (item.adminOnly) {
+      return role === 'Admin';
+    }
+    return true;
+  });
 
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'open':
-        return 'bg-red-100 text-red-800';
+        return 'bg-red-100 dark:bg-red-900/50 text-red-800 dark:text-red-300';
       case 'in-progress':
-        return 'bg-yellow-100 text-yellow-800';
+        return 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-800 dark:text-yellow-300';
       case 'closed':
-        return 'bg-green-100 text-green-800';
+        return 'bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-300';
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300';
     }
   };
 
@@ -114,38 +128,36 @@ const Sidebar = () => {
       {/* Dark overlay when sidebar is expanded */}
       {isExpanded && (
         <div 
-          className="fixed inset-0  bg-opacity-50 z-40 transition-all duration-300 ease-in-out animate-in fade-in"
-          style={{backgroundColor: "rgba(0, 0, 0, 0.5)",}}
-          
+          className="fixed inset-0 bg-black/50 dark:bg-black/70 z-40 transition-all duration-300 ease-in-out"
           onClick={() => setIsExpanded(false)}
         />
       )}
       
       {/* Sidebar */}
       <div className={`
-        fixed left-0 top-0 h-full bg-white border-r border-gray-200 z-50 transition-all duration-300 ease-in-out
+        fixed left-0 top-0 h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 z-50 transition-all duration-300 ease-in-out
         ${isExpanded ? 'w-80' : 'w-16'}
         flex flex-col
       `}>
         {/* Toggle button */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
           >
             {isExpanded ? (
-              <X className="w-5 h-5 text-gray-600" />
+              <X className="w-5 h-5 text-gray-600 dark:text-gray-400" />
             ) : (
-              <Menu className="w-5 h-5 text-gray-600" />
+              <Menu className="w-5 h-5 text-gray-600 dark:text-gray-400" />
             )}
           </button>
           
           {isExpanded && (
             <div className="flex items-center space-x-2">
-              <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+              <div className="w-8 h-8 bg-blue-600 dark:bg-blue-500 rounded-lg flex items-center justify-center">
                 <span className="text-white font-semibold text-sm">TM</span>
               </div>
-              <span className="font-semibold text-gray-900">Ticketing Metrix</span>
+              <span className="font-semibold text-gray-900 dark:text-gray-100">Ticketing Metrix</span>
             </div>
           )}
         </div>
@@ -153,7 +165,7 @@ const Sidebar = () => {
         {/* Navigation Items */}
         <nav className="flex-1 p-4 space-y-2">
           <div className="space-y-1">
-            {navItems.map((item) => {
+            {filteredNavItems.map((item) => {
               const isActive = pathname === item.href;
               return (
                 <Link
@@ -162,20 +174,20 @@ const Sidebar = () => {
                   className={`
                     flex items-center px-3 py-2 rounded-lg transition-colors group
                     ${isActive 
-                      ? 'bg-blue-50 text-blue-600 border border-blue-200' 
-                      : 'text-gray-700 hover:bg-gray-100'
+                      ? 'bg-blue-50 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800' 
+                      : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
                     }
                   `}
                 >
                   <item.icon className={`
                     w-5 h-5 shrink-0
-                    ${isActive ? 'text-blue-600' : 'text-gray-500 group-hover:text-gray-700'}
+                    ${isActive ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400 group-hover:text-gray-700 dark:group-hover:text-gray-300'}
                   `} />
                   {isExpanded && (
                     <span className="ml-3 font-medium">{item.name}</span>
                   )}
                   {!isExpanded && (
-                    <div className="absolute left-16 bg-gray-900 text-white px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
+                    <div className="absolute left-16 bg-gray-900 dark:bg-gray-700 text-white dark:text-gray-100 px-2 py-1 rounded text-sm opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-50">
                       {item.name}
                     </div>
                   )}
