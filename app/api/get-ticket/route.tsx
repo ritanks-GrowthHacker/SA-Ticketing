@@ -244,9 +244,9 @@ export async function GET(request: NextRequest) {
           sort_order: priority.sort_order
         } : null,
         permissions: {
-          can_edit: userRole === 'Admin' || isCreator || isAssignee,
-          can_delete: userRole === 'Admin' || isCreator,
-          can_assign: userRole === 'Admin',
+          can_edit: userRole === 'Admin' || userRole === 'Manager' || isCreator || isAssignee,
+          can_delete: userRole === 'Admin' || userRole === 'Manager' || isCreator,
+          can_assign: userRole === 'Admin' || userRole === 'Manager',
           is_creator: isCreator,
           is_assignee: isAssignee
         }

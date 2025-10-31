@@ -74,7 +74,7 @@ export async function PUT(req: NextRequest) {
 
     const { data: status, error: statusError } = await supabase
       .from('project_statuses')
-      .select('id, name, organization_id')
+      .select('id, name')
       .eq('id', status_id)
       .single();
 

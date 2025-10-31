@@ -70,13 +70,12 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       );
     }
 
-    // Check if status_id is valid (if provided)
+    // Check if status_id is valid (if provided) - now global, no org check needed
     if (status_id) {
       const { data: status } = await supabase
         .from('project_statuses')
         .select('id')
         .eq('id', status_id)
-        .eq('organization_id', decodedToken.org_id)
         .single();
 
       if (!status) {

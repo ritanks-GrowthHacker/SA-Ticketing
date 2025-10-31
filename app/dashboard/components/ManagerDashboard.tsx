@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, User, Target, Filter, LayoutGrid, List } from 'lucide-react';
-import { UserRoleModal } from '../../../components/modals';
+import { UserRoleModal, TicketModal } from '../../../components/modals';
 import { ProjectSelect } from '../../../components/ui/ProjectSelect';
 import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
@@ -24,6 +24,8 @@ const ManagerDashboard = () => {
   
   const [selectedProject, setSelectedProject] = useState('all');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
+  const [selectedTicketId, setSelectedTicketId] = useState<string | undefined>(undefined);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDragDropView, setShowDragDropView] = useState(false);
@@ -226,6 +228,19 @@ const ManagerDashboard = () => {
     }
   };
 
+  // Handle ticket click for editing
+  const handleTicketClick = (ticketId: string) => {
+    setSelectedTicketId(ticketId);
+    setIsTicketModalOpen(true);
+  };
+
+  const handleTicketModalClose = () => {
+    setIsTicketModalOpen(false);
+    setSelectedTicketId(undefined);
+    // Refresh dashboard data after ticket modal closes (in case ticket was updated)
+    fetchDashboardMetrics(true);
+  };
+
   const managedProjects = metrics?.quickStats?.availableProjects || [];
   const currentProject = managedProjects.find((p: any) => p.id === selectedProject);
 
@@ -374,6 +389,7 @@ const ManagerDashboard = () => {
                 tickets={projectTickets}
                 statuses={statuses}
                 onTicketUpdate={handleTicketStatusUpdate}
+                onTicketClick={handleTicketClick}
               />
             ) : loading ? (
               <div className="space-y-4">
@@ -393,29 +409,35 @@ const ManagerDashboard = () => {
             ) : projectTickets.length > 0 ? (
               <div className="space-y-4">
                 {projectTickets.map((ticket) => (
-                  <div key={ticket.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                  <div 
+                    key={ticket.id} 
+                    className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 cursor-pointer transition-colors"
+                    onClick={() => handleTicketClick(ticket.id)}
+                  >
                     <div className="flex items-center space-x-3">
                       <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
                       <div>
-                        <div className="flex items-center space-x-2 mb-1">
-                          <span className="font-mono text-sm text-blue-600 font-medium">#{ticket.id}</span>
-                          <span className={`w-2 h-2 rounded-full ${
-                            ticket.priority === 'High' ? 'bg-red-500' :
-                            ticket.priority === 'Medium' ? 'bg-yellow-500' : 'bg-green-500'
-                          }`}></span>
-                        </div>
                         <h4 className="font-medium text-gray-900">{ticket.title}</h4>
                         <p className="text-sm text-gray-600">Assigned to {ticket.assignedTo} • {ticket.time}</p>
                       </div>
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      ticket.status.toLowerCase().includes('open') ? 'bg-red-100 text-red-800' :
-                      ticket.status.toLowerCase().includes('progress') ? 'bg-blue-100 text-blue-800' :
-                      ticket.status.toLowerCase().includes('review') ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-green-100 text-green-800'
-                    }`}>
-                      {ticket.status}
-                    </span>
+                    <div className="flex items-center space-x-2">
+                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                        ticket.priority === 'High' ? 'bg-red-100 text-red-800' :
+                        ticket.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-green-100 text-green-800'
+                      }`}>
+                        {ticket.priority}
+                      </span>
+                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                        ticket.status.toLowerCase().includes('open') ? 'bg-red-100 text-red-800' :
+                        ticket.status.toLowerCase().includes('progress') ? 'bg-blue-100 text-blue-800' :
+                        ticket.status.toLowerCase().includes('review') ? 'bg-yellow-100 text-yellow-800' :
+                        'bg-green-100 text-green-800'
+                      }`}>
+                        {ticket.status}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -552,6 +574,17 @@ const ManagerDashboard = () => {
       <UserRoleModal 
         isOpen={isUserModalOpen} 
         onClose={() => setIsUserModalOpen(false)} 
+      />
+
+      {/* Ticket Edit Modal */}
+      <TicketModal
+        isOpen={isTicketModalOpen}
+        onClose={handleTicketModalClose}
+        ticketId={selectedTicketId}
+        onSuccess={() => {
+          // Refresh dashboard data when ticket is updated
+          fetchDashboardMetrics(true);
+        }}
       />
     </div>
   );

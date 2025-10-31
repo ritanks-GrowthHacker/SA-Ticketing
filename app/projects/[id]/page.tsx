@@ -207,6 +207,7 @@ const ProjectDetailsPage = () => {
 
   const fetchProjectStatuses = async () => {
     try {
+      console.log('🔧 FRONTEND: Fetching project statuses...');
       const response = await fetch('/api/get-all-projects?format=statuses', {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -214,12 +215,20 @@ const ProjectDetailsPage = () => {
         }
       });
 
+      console.log('🔧 FRONTEND: Status response:', response.status);
       if (response.ok) {
         const data = await response.json();
+        console.log('🔧 FRONTEND: Status data received:', data);
+        console.log('🔧 FRONTEND: Statuses array:', data.statuses);
+        console.log('🔧 FRONTEND: Statuses count:', data.statuses?.length || 0);
         setProjectStatuses(data.statuses || []);
+      } else {
+        console.error('🔧 FRONTEND: Failed to fetch statuses, status:', response.status);
+        const errorText = await response.text();
+        console.error('🔧 FRONTEND: Error response:', errorText);
       }
     } catch (error) {
-      console.error('Error fetching project statuses:', error);
+      console.error('🔧 FRONTEND: Error fetching project statuses:', error);
     } finally {
       setLoading(false);
     }

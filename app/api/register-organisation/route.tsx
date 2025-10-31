@@ -85,58 +85,7 @@ export async function POST(req: Request) {
       console.error("Statuses creation error:", statusesError);
     }
 
-    // Create default project statuses
-    const defaultProjectStatuses = [
-      {
-        name: "Planning",
-        description: "Project is in planning phase",
-        color_code: "#f59e0b",
-        sort_order: 1,
-        is_active: true,
-        organization_id: organization.id
-      },
-      {
-        name: "Active",
-        description: "Project is actively being worked on",
-        color_code: "#10b981",
-        sort_order: 2,
-        is_active: true,
-        organization_id: organization.id
-      },
-      {
-        name: "On Hold",
-        description: "Project is temporarily paused",
-        color_code: "#f97316",
-        sort_order: 3,
-        is_active: true,
-        organization_id: organization.id
-      },
-      {
-        name: "Review", 
-        description: "Project is under review",
-        color_code: "#3b82f6",
-        sort_order: 4,
-        is_active: true,
-        organization_id: organization.id
-      },
-      {
-        name: "Completed",
-        description: "Project has been completed",
-        color_code: "#6b7280", 
-        sort_order: 5,
-        is_active: true,
-        organization_id: organization.id
-      }
-    ];
-
-    const { data: projectStatuses, error: projectStatusesError } = await supabase
-      .from("project_statuses")
-      .insert(defaultProjectStatuses)
-      .select("id, name, description, color_code");
-
-    if (projectStatusesError) {
-      console.error("Project statuses creation error:", projectStatusesError);
-    }
+    // Project statuses are now global and don't need to be created per organization
 
     return NextResponse.json(
       {
@@ -148,8 +97,7 @@ export async function POST(req: Request) {
           created_at: organization.created_at
         },
         roles: roles || [],
-        statuses: statuses || [],
-        projectStatuses: projectStatuses || []
+        statuses: statuses || []
       },
       { status: 201 }
     );
