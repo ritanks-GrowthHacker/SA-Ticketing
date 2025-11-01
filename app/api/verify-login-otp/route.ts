@@ -60,12 +60,12 @@ export async function POST(req: Request) {
 
     // Get user organizations and roles
     const { data: userOrganizations, error: orgError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .select(`
         organization_id,
         role_id,
         organizations(id, name, domain),
-        roles(id, name, description)
+        global_roles!user_organization_roles_role_id_fkey(id, name, description)
       `)
       .eq("user_id", user.id);
 
@@ -86,10 +86,10 @@ export async function POST(req: Request) {
 
     const primaryOrg = userOrganizations[0] as any;
     const organization = primaryOrg.organizations;
-    const role = primaryOrg.roles;
+    const role = primaryOrg.global_roles;
 
     const allRoles = userOrganizations
-      .map((uo: any) => uo.roles?.name)
+      .map((uo: any) => uo.global_roles?.name)
       .filter(Boolean) as string[];
 
     // Generate JWT token
@@ -132,7 +132,7 @@ export async function POST(req: Request) {
         id: uo.organizations.id,
         name: uo.organizations.name,
         domain: uo.organizations.domain,
-        role: uo.roles?.name || "Member"
+        role: uo.global_roles?.name || "Member"
       }))
     };
 

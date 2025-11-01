@@ -184,9 +184,9 @@ export async function PUT(request: NextRequest) {
     if (assigned_to) {
       console.log('🔍 Validating assignee:', assigned_to, 'for project:', existingTicket.project_id);
       
-      // First, check if user exists in the organization using user_organization junction table
+      // First, check if user exists in the organization using user_organization_roles junction table
       const { data: userInOrg, error: orgError } = await supabase
-        .from('user_organization')
+        .from('user_organization_roles')
         .select(`
           user_id,
           organization_id,

@@ -65,38 +65,39 @@ export async function POST(req: Request) {
     // Get organization from userData
     const { organization_id } = userData;
 
-    // Get default role for the organization
+    // Get default Member role (global)
     const { data: role } = await supabase
-      .from("roles")
+      .from("global_roles")
       .select("id, name")
-      .eq("organization_id", organization_id)
       .eq("name", "Member")
       .maybeSingle();
 
-    // Create user-organization relationship
+    // Create user-organization relationship with role
     await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .insert([{ 
         user_id: user.id, 
         organization_id, 
         role_id: role?.id || null 
       }]);
 
-    // Get user roles for token
-    const { data: roles } = await supabase
-      .from("roles")
-      .select("name")
-      .in(
-        "id",
-        (
-          await supabase
-            .from("user_organization")
-            .select("role_id")
-            .eq("user_id", user.id)
-        ).data?.map((r: any) => r.role_id) || []
-      );
+    // Get organization details for JWT token
+    const { data: organization } = await supabase
+      .from("organizations")
+      .select("id, name, domain")
+      .eq("id", organization_id)
+      .single();
 
-    const roleNames = roles?.map((r) => r.name) || [];
+    // Get user roles for token
+    const { data: userOrgRoles } = await supabase
+      .from("user_organization_roles")
+      .select(`
+        role_id,
+        global_roles!inner(name)
+      `)
+      .eq("user_id", user.id);
+
+    const roleNames = userOrgRoles?.map((r: any) => r.global_roles.name) || [];
 
     // Generate JWT token
     const token = jwt.sign(
@@ -105,6 +106,9 @@ export async function POST(req: Request) {
         email: user.email,
         name: user.name,
         org_id: organization_id,
+        org_name: organization?.name,
+        org_domain: organization?.domain,
+        role: roleNames[0] || "Member", // Primary role
         roles: roleNames,
         iss: process.env.JWT_ISSUER,
       },
@@ -114,11 +118,19 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ 
       success: true,
+      message: "Registration verified successfully",
       user: {
         id: user.id,
         name: user.name,
         email: user.email
-      }, 
+      },
+      organization: {
+        id: organization?.id,
+        name: organization?.name,
+        domain: organization?.domain
+      },
+      role: roleNames[0] || "Member",
+      roles: roleNames,
       token 
     }, { status: 200 });
 

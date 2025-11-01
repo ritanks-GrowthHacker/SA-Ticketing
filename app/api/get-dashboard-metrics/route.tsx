@@ -243,12 +243,12 @@ export async function GET(req: Request) {
       } else {
         // Organization-wide members
         currentMembersQuery = supabase
-          .from('user_organization')
+          .from('user_organization_roles')
           .select('user_id, users!inner(id, name, email, created_at)')
           .eq('organization_id', organizationId);
 
         previousMembersQuery = supabase
-          .from('user_organization')
+          .from('user_organization_roles')
           .select('user_id, users!inner(created_at)')
           .eq('organization_id', organizationId)
           .lt('users.created_at', dateRanges.currentMonthStart);
@@ -392,7 +392,7 @@ export async function GET(req: Request) {
         .select(`
           project_id, role_id,
           projects!inner(id, name, organization_id),
-          roles!inner(name)
+          global_roles!inner(name)
         `)
         .eq('user_id', tokenData.sub)
         .eq('projects.organization_id', organizationId);
@@ -421,7 +421,7 @@ export async function GET(req: Request) {
           .select(`
             user_id, role_id,
             users!inner(id, name, email),
-            roles(name)
+            global_roles!user_project_role_id_fkey(name)
           `)
           .eq('project_id', targetProjectId);
 
@@ -513,7 +513,7 @@ export async function GET(req: Request) {
           availableProjects: managedProjects?.map(mp => ({
             id: mp.project_id,
             name: (mp as any).projects?.name,
-            role: (mp as any).roles?.name
+            role: (mp as any).global_roles?.name
           })) || []
         };
       }

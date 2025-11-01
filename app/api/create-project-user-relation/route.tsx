@@ -63,11 +63,11 @@ export async function DELETE(req: Request) {
 
     // Check user organization membership and role
     const { data: userOrg, error: userOrgError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .select(`
         user_id,
         organization_id,
-        roles(name)
+        global_roles!user_organization_roles_role_id_fkey(name)
       `)
       .eq("user_id", decodedToken.sub)
       .eq("organization_id", decodedToken.org_id)
@@ -78,7 +78,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: "User not found or unauthorized" }, { status: 403 });
     }
 
-    const userRoleName = (userOrg as any).roles?.name;
+    const userRoleName = (userOrg as any).global_roles?.name;
     if (!userRoleName || !["Admin", "Manager"].includes(userRoleName)) {
       return NextResponse.json({ error: "Insufficient permissions. Only Admins and Managers can remove users from projects" }, { status: 403 });
     }
@@ -176,11 +176,11 @@ export async function POST(req: Request) {
 
 		// Check user organization membership and role
 		const { data: userOrg, error: userOrgError } = await supabase
-			.from("user_organization")
+			.from("user_organization_roles")
 			.select(`
 				user_id,
 				organization_id,
-				roles(name)
+				global_roles!user_organization_roles_role_id_fkey(name)
 			`)
 			.eq("user_id", decodedToken.sub)
 			.eq("organization_id", decodedToken.org_id)
@@ -191,7 +191,7 @@ export async function POST(req: Request) {
 			return NextResponse.json({ error: "User not found or unauthorized" }, { status: 403 });
 		}
 
-    const userRoleName = (userOrg as any).roles?.name;
+    const userRoleName = (userOrg as any).global_roles?.name;
     if (!userRoleName || !["Admin", "Manager"].includes(userRoleName)) {
       return NextResponse.json({ error: "Insufficient permissions. Only Admins and Managers can assign users to projects" }, { status: 403 });
     }
@@ -233,7 +233,7 @@ export async function POST(req: Request) {
 
 			// Validate user belongs to organization
 			const { data: assigneeOrg } = await supabase
-				.from("user_organization")
+				.from("user_organization_roles")
 				.select(`user_id, organizations(id, name), users(id, name, email)`)
 				.eq("user_id", a.user_id)
 				.eq("organization_id", decodedToken.org_id)
@@ -247,7 +247,7 @@ export async function POST(req: Request) {
 
 			// Get role name for notification
 			const { data: roleData } = await supabase
-				.from("roles")
+				.from("global_roles")
 				.select("id, name")
 				.eq("id", a.role_id)
 				.maybeSingle();

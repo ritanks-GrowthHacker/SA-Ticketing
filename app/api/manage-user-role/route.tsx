@@ -53,12 +53,12 @@ export async function GET(req: Request) {
 
     // Get all users in the organization with their roles
     const { data: users, error: usersError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .select(`
         user_id,
         role_id,
         users(id, name, email, created_at),
-        roles(id, name, description)
+        global_roles!user_organization_roles_role_id_fkey(id, name, description)
       `)
       .eq("organization_id", orgId);
 
@@ -67,11 +67,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Failed to fetch users" }, { status: 500 });
     }
 
-    // Get all available roles for this organization
+    // Get all available global roles
     const { data: availableRoles, error: rolesError } = await supabase
-      .from("roles")
-      .select("id, name, description")
-      .eq("organization_id", orgId);
+      .from("global_roles")
+      .select("id, name, description");
 
     if (rolesError) {
       console.error("Roles lookup error:", rolesError);
@@ -84,10 +83,10 @@ export async function GET(req: Request) {
       name: userOrg.users.name,
       email: userOrg.users.email,
       joinedAt: userOrg.users.created_at,
-      currentRole: userOrg.roles ? {
-        id: userOrg.roles.id,
-        name: userOrg.roles.name,
-        description: userOrg.roles.description
+      currentRole: userOrg.global_roles ? {
+        id: userOrg.global_roles.id,
+        name: userOrg.global_roles.name,
+        description: userOrg.global_roles.description
       } : null
     })) || [];
 
@@ -139,21 +138,20 @@ export async function PUT(req: Request) {
       }, { status: 403 });
     }
 
-    // Verify the role exists in this organization
+    // Verify the role exists (global role)
     const { data: role, error: roleError } = await supabase
-      .from("roles")
+      .from("global_roles")
       .select("id, name")
       .eq("id", roleId)
-      .eq("organization_id", orgId)
       .single();
 
     if (roleError || !role) {
-      return NextResponse.json({ error: "Invalid role for this organization" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
     // Verify the user exists in this organization
     const { data: existingUser, error: userError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .select("user_id")
       .eq("user_id", userId)
       .eq("organization_id", orgId)
@@ -172,7 +170,7 @@ export async function PUT(req: Request) {
 
     // Update user role
     const { error: updateError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .update({ role_id: roleId })
       .eq("user_id", userId)
       .eq("organization_id", orgId);
@@ -259,7 +257,7 @@ export async function POST(req: Request) {
 
     // Check if user is already in the organization
     const { data: existingMember } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .select("user_id")
       .eq("user_id", user.id)
       .eq("organization_id", orgId)
@@ -269,21 +267,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "User is already a member of this organization" }, { status: 400 });
     }
 
-    // Verify the role exists in this organization
+    // Verify the role exists (global role)
     const { data: role, error: roleError } = await supabase
-      .from("roles")
+      .from("global_roles")
       .select("id, name")
       .eq("id", roleId)
-      .eq("organization_id", orgId)
       .single();
 
     if (roleError || !role) {
-      return NextResponse.json({ error: "Invalid role for this organization" }, { status: 400 });
+      return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
     // Add user to organization
     const { error: addError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .insert({
         user_id: user.id,
         organization_id: orgId,
@@ -369,10 +366,10 @@ export async function DELETE(req: Request) {
 
     // Get user details before removal
     const { data: userOrg, error: userOrgError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .select(`
         users(name, email),
-        roles(name)
+        global_roles!user_organization_roles_role_id_fkey(name)
       `)
       .eq("user_id", userId)
       .eq("organization_id", orgId)
@@ -384,7 +381,7 @@ export async function DELETE(req: Request) {
 
     // Remove user from organization
     const { error: deleteError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .delete()
       .eq("user_id", userId)
       .eq("organization_id", orgId);
@@ -405,7 +402,7 @@ export async function DELETE(req: Request) {
         details: {
           removed_user: (userOrg as any).users.name,
           removed_email: (userOrg as any).users.email,
-          previous_role: (userOrg as any).roles?.name,
+          previous_role: (userOrg as any).global_roles?.name,
           removed_by: tokenData.name || tokenData.email,
           organization_id: orgId
         }

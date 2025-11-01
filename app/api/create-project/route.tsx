@@ -68,15 +68,15 @@ export async function POST(req: Request) {
       );
     }
 
-    // Check if user belongs to the organization through user_organization table
+    // Check if user belongs to the organization
     const { data: userOrg, error: userOrgError } = await supabase
-      .from("user_organization")
+      .from("user_organization_roles")
       .select(`
         user_id,
         organization_id,
         role_id,
         organizations(id, name, domain),
-        roles(id, name, description)
+        global_roles!user_organization_roles_role_id_fkey(id, name, description)
       `)
       .eq("user_id", decodedToken.sub)
       .eq("organization_id", decodedToken.org_id)
@@ -105,7 +105,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const userRole = (userOrg as any).roles;
+    const userRole = (userOrg as any).global_roles;
     const userOrganization = (userOrg as any).organizations;
 
     // Check if the user has permission to create projects (Admin or Manager)

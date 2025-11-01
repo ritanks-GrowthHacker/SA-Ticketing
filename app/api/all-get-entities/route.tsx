@@ -67,15 +67,14 @@ export async function GET(req: Request) {
 
     if (entityType === 'roles' || entityType === 'all') {
       const { data: roles, error: rolesError } = await supabase
-        .from("roles")
+        .from("global_roles")
         .select("id, name, description, created_at")
-        .eq("organization_id", organizationId)
         .order("name", { ascending: true });
 
       if (rolesError) {
-        console.error("Roles fetch error:", rolesError);
+        console.error("Global roles fetch error:", rolesError);
         return NextResponse.json(
-          { error: "Failed to fetch roles" }, 
+          { error: "Failed to fetch global roles" }, 
           { status: 500 }
         );
       }
@@ -211,9 +210,8 @@ export async function POST(req: Request) {
 
       case 'role':
         const { data: newRole, error: roleError } = await supabase
-          .from("roles")
+          .from("global_roles")
           .insert([{
-            organization_id: userInfo.org_id,
             name,
             description: description || null
           }])

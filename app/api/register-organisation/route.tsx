@@ -47,20 +47,15 @@ export async function POST(req: Request) {
       );
     }
 
-    const defaultRoles = [
-      { name: "Admin", description: "Full administrative access", organization_id: organization.id },
-      { name: "Manager", description: "Project and team management", organization_id: organization.id },
-      { name: "Member", description: "Standard user access", organization_id: organization.id },
-      { name: "Viewer", description: "Read-only access", organization_id: organization.id }
-    ];
-
+    // Roles are now global - no need to create organization-specific roles
+    // Just fetch the existing global roles for reference
     const { data: roles, error: rolesError } = await supabase
-      .from("roles")
-      .insert(defaultRoles)
-      .select("id, name, description");
+      .from("global_roles")
+      .select("id, name, description")
+      .order("name");
 
     if (rolesError) {
-      console.error("Roles creation error:", rolesError);
+      console.error("Global roles fetch error:", rolesError);
     }
 
     const defaultStatuses = [

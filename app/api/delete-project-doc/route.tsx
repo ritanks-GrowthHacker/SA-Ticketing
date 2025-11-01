@@ -93,17 +93,17 @@ export async function DELETE(request: NextRequest) {
     let userRole = 'Member'; // Default role
     
     const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization')
+      .from('user_organization_roles')
       .select(`
         role_id,
-        roles!inner(name)
+        global_roles!inner(name)
       `)
       .eq('user_id', user_id)
       .eq('organization_id', decodedToken.org_id)
       .single();
 
-    if (userOrgRole && userOrgRole.roles) {
-      userRole = (userOrgRole.roles as any).name;
+    if (userOrgRole && userOrgRole.global_roles) {
+      userRole = (userOrgRole.global_roles as any).name;
       console.log('✅ CURRENT USER ORGANIZATION ROLE:', userRole);
     } else {
       console.log('❌ CURRENT USER: No organization role found, keeping default:', userRole);
@@ -117,7 +117,7 @@ export async function DELETE(request: NextRequest) {
           user_id,
           project_id,
           role_id,
-          roles!inner(id, name)
+          global_roles!inner(id, name)
         `)
         .eq('user_id', user_id)
         .eq('project_id', existingDoc.project_id)
@@ -132,7 +132,7 @@ export async function DELETE(request: NextRequest) {
       }
 
       // Use project-specific role if available
-      userRole = (userProject.roles as any)?.name || 'Member';
+      userRole = (userProject.global_roles as any)?.name || 'Member';
       console.log('✅ User project role:', userRole);
     }
 
@@ -147,7 +147,7 @@ export async function DELETE(request: NextRequest) {
       .from('user_organization_roles')
       .select(`
         role_id,
-        roles!inner(name)
+        global_roles!inner(name)
       `)
       .eq('user_id', existingDoc.author_id)
       .eq('organization_id', decodedToken.org_id)
@@ -156,11 +156,11 @@ export async function DELETE(request: NextRequest) {
     console.log('🔍 AUTHOR ORG ROLE QUERY RESULT:', { 
       authorOrgRole, 
       authorOrgRoleError,
-      hasRoles: !!(authorOrgRole && authorOrgRole.roles)
+      hasRoles: !!(authorOrgRole && authorOrgRole.global_roles)
     });
 
-    if (authorOrgRole && authorOrgRole.roles) {
-      authorRole = (authorOrgRole.roles as any).name;
+    if (authorOrgRole && authorOrgRole.global_roles) {
+      authorRole = (authorOrgRole.global_roles as any).name;
       console.log('✅ AUTHOR ORGANIZATION ROLE FROM TABLE:', authorRole);
     } else {
       console.log('❌ NO ORGANIZATION ROLE FOUND IN TABLE FOR AUTHOR');
@@ -203,14 +203,14 @@ export async function DELETE(request: NextRequest) {
           user_id,
           project_id,
           role_id,
-          roles!inner(id, name)
+          global_roles!inner(id, name)
         `)
         .eq('user_id', existingDoc.author_id)
         .eq('project_id', existingDoc.project_id)
         .single();
 
-      if (!authorProjectError && authorProject?.roles) {
-        const projectRole = (authorProject.roles as any)?.name || 'Member';
+      if (!authorProjectError && authorProject?.global_roles) {
+        const projectRole = (authorProject.global_roles as any)?.name || 'Member';
         console.log('✅ Author project role (fallback check):', projectRole);
         // Only override if we haven't found a role yet
         if (authorRole === 'Member') {
