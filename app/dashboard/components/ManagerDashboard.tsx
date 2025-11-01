@@ -248,9 +248,9 @@ const ManagerDashboard = () => {
   const projectStats = metrics ? [
     {
       title: 'Project Tickets',
-      value: metrics.overview.projectTickets?.value || 0,
-      change: metrics.overview.projectTickets?.change || '0%',
-      changeType: metrics.overview.projectTickets?.changeType || 'neutral',
+      value: metrics.overview.totalTickets?.value || 0,
+      change: metrics.overview.totalTickets?.change || '0%',
+      changeType: metrics.overview.totalTickets?.changeType || 'neutral',
       icon: Ticket
     },
     {

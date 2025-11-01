@@ -81,10 +81,10 @@ export async function POST(request: NextRequest) {
     console.log('🔧 Checking organization role for user:', author_id, 'in org:', decodedToken.org_id);
     
     const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization')
+      .from('user_organization_roles')
       .select(`
         role_id,
-        roles!inner(name)
+        global_roles!user_organization_roles_role_id_fkey(name)
       `)
       .eq('user_id', author_id)
       .eq('organization_id', decodedToken.org_id)
@@ -92,8 +92,8 @@ export async function POST(request: NextRequest) {
 
     console.log('🔧 User org role query result:', { userOrgRole, orgRoleError });
 
-    if (userOrgRole && userOrgRole.roles) {
-      userRole = (userOrgRole.roles as any).name;
+    if (userOrgRole && userOrgRole.global_roles) {
+      userRole = (userOrgRole.global_roles as any).name;
       console.log('✅ User organization role:', userRole);
     } else {
       console.log('⚠️ No organization role found, using JWT role:', decodedToken.role);
@@ -101,32 +101,42 @@ export async function POST(request: NextRequest) {
       userRole = decodedToken.role || 'Member';
     }
 
-    // If user is Admin, they have access to all projects in the organization
-    if (userRole !== 'Admin') {
-      // For non-admin users, check project-specific assignment
+    // Check access: Admin (org-level) OR Project team member
+    let hasAccess = false;
+    
+    if (userRole === 'Admin') {
+      console.log('✅ Admin user - can create documents in any project');
+      hasAccess = true;
+    } else {
+      // For non-admin users, check project team membership
       const { data: userProject, error: userProjectError } = await supabase
         .from('user_project')
         .select(`
           user_id,
           project_id,
-          roles!inner(name)
+          role_id,
+          global_roles!user_project_role_id_fkey(name)
         `)
         .eq('user_id', author_id)
         .eq('project_id', project_id)
         .single();
 
-      if (userProjectError || !userProject) {
+      if (!userProjectError && userProject) {
+        hasAccess = true;
+        console.log('✅ User is project team member - can create documents');
+      } else {
         console.log('❌ User not assigned to project and not Admin:', userProjectError);
-        return NextResponse.json(
-          { error: 'User does not have access to this project' },
-          { status: 403 }
-        );
       }
-
-      // Use project-specific role if available
-      userRole = (userProject.roles as any).name;
-      console.log('✅ User project role:', userRole);
     }
+
+    if (!hasAccess) {
+      return NextResponse.json(
+        { error: 'Access denied. Only project team members and organization admins can create documents.' },
+        { status: 403 }
+      );
+    }
+
+    console.log('✅ User has access to create documents in project');
 
     // Create the project document
     const { data: newDoc, error: createError } = await supabase

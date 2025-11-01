@@ -474,35 +474,66 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
                         <span className={`px-2 py-1 text-xs font-medium rounded-full border ${getRoleColor(user.currentRole?.name || 'Member')}`}>
                           {user.currentRole?.name || 'No Role'}
                         </span>
-                        <select
-                          value={pendingRoleChanges[user.userId] || user.currentRole?.id || ''}
-                          onChange={(e) => {
-                            const selectedRole = availableRoles.find(r => r.id === e.target.value);
-                            if (selectedRole) {
-                              updateUserRole(user.userId, selectedRole.id, selectedRole.name);
-                            }
-                          }}
-                          disabled={isActionLoading}
-                          className="text-xs px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <option value="">No Role</option>
-                          {availableRoles.map((role) => (
-                            <option key={role.id} value={role.id}>
-                              {role.name}
-                            </option>
-                          ))}
-                        </select>
+                        
+                        {/* Check if current user can modify this user */}
+                        {(() => {
+                          const isUserAdmin = user.currentRole?.name === 'Admin';
+                          const currentUserIsAdmin = hasRole('Admin');
+                          const canModifyThisUser = currentUserIsAdmin || !isUserAdmin;
+                          
+                          return canModifyThisUser ? (
+                            <select
+                              value={pendingRoleChanges[user.userId] || user.currentRole?.id || ''}
+                              onChange={(e) => {
+                                const selectedRole = availableRoles.find(r => r.id === e.target.value);
+                                if (selectedRole) {
+                                  updateUserRole(user.userId, selectedRole.id, selectedRole.name);
+                                }
+                              }}
+                              disabled={isActionLoading}
+                              className="text-xs px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <option value="">No Role</option>
+                              {availableRoles.map((role) => (
+                                <option key={role.id} value={role.id}>
+                                  {role.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 border border-gray-300 rounded flex items-center">
+                              <Shield className="h-3 w-3 mr-1" />
+                              Protected
+                            </span>
+                          );
+                        })()}
                       </div>
 
                       {/* Remove Button */}
-                      <button
-                        onClick={() => removeUser(user.userId, user.name)}
-                        disabled={isActionLoading}
-                        className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        title="Remove user"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                      {(() => {
+                        const isUserAdmin = user.currentRole?.name === 'Admin';
+                        const currentUserIsAdmin = hasRole('Admin');
+                        const canRemoveThisUser = currentUserIsAdmin || !isUserAdmin;
+                        
+                        return canRemoveThisUser ? (
+                          <button
+                            onClick={() => removeUser(user.userId, user.name)}
+                            disabled={isActionLoading}
+                            className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Remove user"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <button
+                            disabled={true}
+                            className="p-1 text-gray-400 cursor-not-allowed"
+                            title="Admin users cannot be removed by non-admins"
+                          >
+                            <Shield className="h-4 w-4" />
+                          </button>
+                        );
+                      })()}
                     </div>
                   </div>
                   

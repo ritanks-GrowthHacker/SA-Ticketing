@@ -273,15 +273,7 @@ export async function GET(req: Request) {
           // Get all tickets for this project with their status information
           const { data: allProjectTickets } = await supabase
             .from('tickets')
-            .select(`
-              id,
-              status_id,
-              statuses!inner(
-                id,
-                name,
-                type
-              )
-            `)
+            .select('id, status_id, statuses!tickets_status_id_fkey(name, type)')
             .eq('project_id', project.id);
 
           // Get team members count

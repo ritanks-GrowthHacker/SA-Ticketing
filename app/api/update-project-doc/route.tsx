@@ -73,46 +73,56 @@ export async function PUT(request: NextRequest) {
     let userRole = 'Member'; // Default role
     
     const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization')
+      .from('user_organization_roles')
       .select(`
         role_id,
-        roles!inner(name)
+        global_roles!user_organization_roles_role_id_fkey(name)
       `)
       .eq('user_id', user_id)
       .eq('organization_id', decodedToken.org_id)
       .single();
 
-    if (userOrgRole && userOrgRole.roles) {
-      userRole = (userOrgRole.roles as any).name;
+    if (userOrgRole && userOrgRole.global_roles) {
+      userRole = (userOrgRole.global_roles as any).name;
       console.log('✅ User organization role:', userRole);
     }
 
-    // If user is not Admin, check project-specific assignment
-    if (userRole !== 'Admin') {
+    // Check access: Admin (org-level) OR Project team member
+    let hasAccess = false;
+    
+    if (userRole === 'Admin') {
+      console.log('✅ Admin user - can update any document');
+      hasAccess = true;
+    } else {
+      // For non-admin users, check project team membership
       const { data: userProject, error: userProjectError } = await supabase
         .from('user_project')
         .select(`
           user_id,
           project_id,
           role_id,
-          roles!inner(id, name)
+          global_roles!user_project_role_id_fkey(id, name)
         `)
         .eq('user_id', user_id)
         .eq('project_id', existingDoc.project_id)
         .single();
 
-      if (userProjectError || !userProject) {
+      if (!userProjectError && userProject) {
+        hasAccess = true;
+        console.log('✅ User is project team member - can update documents');
+      } else {
         console.log('❌ User not assigned to project and not Admin:', userProjectError);
-        return NextResponse.json(
-          { error: 'User does not have access to this project' },
-          { status: 403 }
-        );
       }
-
-      // Use project-specific role if available
-      userRole = (userProject.roles as any)?.name || 'Member';
-      console.log('✅ User project role:', userRole);
     }
+
+    if (!hasAccess) {
+      return NextResponse.json(
+        { error: 'Access denied. Only project team members and organization admins can update documents.' },
+        { status: 403 }
+      );
+    }
+
+    console.log('✅ User has access to update documents in project');
 
     // Check edit permissions
     const canEdit = existingDoc.author_id === user_id || userRole === 'Admin';

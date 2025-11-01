@@ -1,0 +1,23 @@
+### Create Ticket Test
+POST http://localhost:3000/api/create-tickets
+Content-Type: application/json
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJlNDI0NjlhZC1lZTRkLTQwNmEtOTI3OS1iMWRiNmE5MTA0MDAiLCJ1c2VySWQiOiJlNDI0NjlhZC1lZTRkLTQwNmEtOTI3OS1iMWRiNmE5MTA0MDAiLCJvcmdfaWQiOiIxNDUxYzJkNC05NzNmLTRhOTAtOTlkOS02Y2FlYmVmNWI3N2QiLCJyb2xlIjoiQWRtaW4ifQ.WUoAQcJiAZohBwy-VHBa3Im47OzJMpKGBBqw7YNJToo
+
+{
+  "assigned_to": "0b30c6a5-883d-437a-9e65-6c8048663f0f",
+  "description": "new ticket",
+  "priority_id": "a268695e-6d30-4f34-b56a-a7fcd97cfbfe",
+  "project_id": "e267308b-e8d3-411a-adfe-6e39d45aa11a",
+  "status_id": "7a673a58-fb77-47c9-8efa-fdd26c468d4d",
+  "title": "new testing ticket"
+}
+
+### Create Ticket Test - Minimal Required Fields
+POST http://localhost:3000/api/create-tickets
+Content-Type: application/json
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJlNDI0NjlhZC1lZTRkLTQwNmEtOTI3OS1iMWRiNmE5MTA0MDAiLCJ1c2VySWQiOiJlNDI0NjlhZC1lZTRkLTQwNmEtOTI3OS1iMWRiNmE5MTA0MDAiLCJvcmdfaWQiOiIxNDUxYzJkNC05NzNmLTRhOTAtOTlkOS02Y2FlYmVmNWI3N2QiLCJyb2xlIjoiQWRtaW4ifQ.WUoAQcJiAZohBwy-VHBa3Im47OzJMpKGBBqw7YNJToo
+
+{
+  "project_id": "e267308b-e8d3-411a-adfe-6e39d45aa11a",
+  "title": "Test ticket without assignee"
+}

@@ -109,31 +109,38 @@ export async function DELETE(request: NextRequest) {
       console.log('❌ CURRENT USER: No organization role found, keeping default:', userRole);
     }
 
-    // If user is not Admin, check project-specific assignment
+    // Check project access based on role hierarchy
     if (userRole !== 'Admin') {
-      const { data: userProject, error: userProjectError } = await supabase
-        .from('user_project')
-        .select(`
-          user_id,
-          project_id,
-          role_id,
-          global_roles!inner(id, name)
-        `)
-        .eq('user_id', user_id)
-        .eq('project_id', existingDoc.project_id)
-        .single();
+      // Managers have organization-wide access, Members/Viewers need project assignment
+      if (userRole === 'Manager') {
+        console.log('✅ MANAGER USER: Has organization-wide access to projects');
+        // Manager keeps their organization role for permission checks
+      } else {
+        // For Members/Viewers, check if they're assigned to this specific project
+        const { data: userProject, error: userProjectError } = await supabase
+          .from('user_project')
+          .select(`
+            user_id,
+            project_id,
+            role_id,
+            global_roles!inner(id, name)
+          `)
+          .eq('user_id', user_id)
+          .eq('project_id', existingDoc.project_id)
+          .single();
 
-      if (userProjectError || !userProject) {
-        console.log('❌ User not assigned to project and not Admin:', userProjectError);
-        return NextResponse.json(
-          { error: 'User does not have access to this project' },
-          { status: 403 }
-        );
+        if (userProjectError || !userProject) {
+          console.log('❌ Member/Viewer not assigned to project:', userProjectError);
+          return NextResponse.json(
+            { error: 'User does not have access to this project' },
+            { status: 403 }
+          );
+        }
+
+        // Use project-specific role if available
+        userRole = (userProject.global_roles as any)?.name || 'Member';
+        console.log('✅ User project role:', userRole);
       }
-
-      // Use project-specific role if available
-      userRole = (userProject.global_roles as any)?.name || 'Member';
-      console.log('✅ User project role:', userRole);
     }
 
     // Get author's organization role first - check multiple sources

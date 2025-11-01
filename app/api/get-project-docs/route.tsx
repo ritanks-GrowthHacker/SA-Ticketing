@@ -9,6 +9,17 @@ interface JWTPayload {
   userId: string;
 }
 
+/**
+ * PROJECT DOCUMENTS RBAC WORKFLOW:
+ * 
+ * 📖 VISIBILITY: Documents visible to project team members + organization admins
+ * ✏️  CREATION: All project team members can create documents
+ * 🗑️  DELETION: 
+ *    - Admin: Can delete anyone's documents
+ *    - Manager: Can delete their own + Member/Viewer documents (not other Manager docs)
+ *    - Member/Viewer: Can only delete their own documents
+ * 🔒 ACCESS: Only project team members and organization admins can access documents
+ */
 export async function GET(request: NextRequest) {
   try {
     console.log('📖 Get Project Docs API called');
@@ -73,48 +84,64 @@ export async function GET(request: NextRequest) {
     let userRole = 'Member'; // Default role
     
     const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization')
+      .from('user_organization_roles')
       .select(`
         role_id,
-        roles!inner(name)
+        global_roles!user_organization_roles_role_id_fkey(name)
       `)
       .eq('user_id', user_id)
       .eq('organization_id', decodedToken.org_id)
       .single();
 
-    if (userOrgRole && userOrgRole.roles) {
-      userRole = (userOrgRole.roles as any).name;
+    if (userOrgRole && userOrgRole.global_roles) {
+      userRole = (userOrgRole.global_roles as any).name;
       console.log('✅ User organization role:', userRole);
+    } else {
+      console.log('❌ No organization role found, using default Member role');
     }
 
-    // If user is not Admin, check project-specific assignment
-    if (userRole !== 'Admin') {
+    // Check access: Admin (org-level) OR Project team member
+    let hasAccess = false;
+    let projectRole = userRole; // Default to org role
+    
+    if (userRole === 'Admin') {
+      console.log('✅ Admin user - full organization access granted');
+      hasAccess = true;
+    } else {
+      console.log('🔍 Non-Admin user, checking project team membership for:', { user_id, project_id, userRole });
+      
+      // Check if user is part of the project team
       const { data: userProject, error: userProjectError } = await supabase
         .from('user_project')
         .select(`
           user_id,
           project_id,
           role_id,
-          roles!inner(id, name)
+          global_roles!user_project_role_id_fkey(id, name)
         `)
         .eq('user_id', user_id)
         .eq('project_id', project_id)
         .single();
 
-      if (userProjectError || !userProject) {
-        console.log('❌ User not assigned to project and not Admin:', userProjectError);
-        return NextResponse.json(
-          { error: 'User does not have access to this project' },
-          { status: 403 }
-        );
-      }
+      console.log('🔍 Project team membership check result:', { userProject, userProjectError });
 
-      // Use project-specific role if available
-      userRole = (userProject.roles as any)?.name || 'Member';
-      console.log('✅ User project role:', userRole);
+      if (!userProjectError && userProject) {
+        hasAccess = true;
+        projectRole = (userProject.global_roles as any)?.name || 'Member';
+        console.log('✅ User is project team member with role:', projectRole);
+      } else {
+        console.log('❌ User is not part of project team and not Admin');
+      }
     }
 
-    // Get all project documents that the user can view
+    if (!hasAccess) {
+      return NextResponse.json(
+        { error: 'Access denied. Only project team members and organization admins can view documents.' },
+        { status: 403 }
+      );
+    }
+
+    // Get all project documents (all team members can see all project docs)
     let query = supabase
       .from('project_docs')
       .select(`
@@ -125,11 +152,7 @@ export async function GET(request: NextRequest) {
       `)
       .eq('project_id', project_id);
 
-    // Apply visibility filters based on role
-    if (userRole !== 'Admin') {
-      // Non-admins can only see public docs or docs with project visibility
-      query = query.or(`is_public.eq.true,visibility.eq.project`);
-    }
+    // No visibility restrictions - all project team members can see all project documents
 
     const { data: docs, error: docsError } = await query.order('created_at', { ascending: false });
 

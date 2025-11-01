@@ -384,23 +384,27 @@ export async function GET(req: Request) {
       })) || [];
 
     } else if (isManager) {
-      // MANAGER METRICS - Project-specific data
+      // MANAGER METRICS - Project-specific data or aggregated across all managed projects
       
       // Get projects managed by this user
-      const { data: managedProjects } = await supabase
+      const { data: managedProjects, error: managedProjectsError } = await supabase
         .from('user_project')
         .select(`
           project_id, role_id,
           projects!inner(id, name, organization_id),
-          global_roles!inner(name)
+          global_roles!user_project_role_id_fkey(name)
         `)
         .eq('user_id', tokenData.sub)
         .eq('projects.organization_id', organizationId);
 
-      const projectIds = managedProjects?.map(mp => mp.project_id) || [];
-      const targetProjectId = projectId || (projectIds.length > 0 ? projectIds[0] : null);
+      console.log('🔧 MANAGER PROJECTS QUERY:', { managedProjects, managedProjectsError, userId: tokenData.sub, organizationId });
 
-      if (targetProjectId) {
+      const projectIds = managedProjects?.map(mp => mp.project_id) || [];
+      console.log('🔧 MANAGER DEBUG: Managed projects:', projectIds, 'Selected project:', projectId);
+
+      if (projectId && projectId !== 'all') {
+        // SPECIFIC PROJECT METRICS
+        const targetProjectId = projectId;
         // Project Tickets
         const { data: projectTickets } = await supabase
           .from('tickets')
@@ -515,6 +519,149 @@ export async function GET(req: Request) {
             name: (mp as any).projects?.name,
             role: (mp as any).global_roles?.name
           })) || []
+        };
+      } else if (projectIds.length > 0) {
+        // ALL PROJECTS METRICS FOR MANAGER - Aggregate across all managed projects
+        console.log('🔧 MANAGER ALL PROJECTS: Aggregating metrics for projects:', projectIds);
+
+        // Get all tickets from managed projects
+        const { data: allProjectTickets } = await supabase
+          .from('tickets')
+          .select('id, created_at, status_id, priority_id, project_id')
+          .in('project_id', projectIds)
+          .gte('created_at', dateRanges.currentMonthStart);
+
+        const { data: previousAllProjectTickets } = await supabase
+          .from('tickets')
+          .select('id')
+          .in('project_id', projectIds)
+          .gte('created_at', dateRanges.previousMonthStart)
+          .lt('created_at', dateRanges.currentMonthStart);
+
+        // Get all team members across managed projects
+        const { data: allProjectTeamMembers } = await supabase
+          .from('user_project')
+          .select(`
+            user_id, role_id, project_id,
+            users!inner(id, name, email),
+            global_roles!user_project_role_id_fkey(name)
+          `)
+          .in('project_id', projectIds);
+
+        // Get completed tickets across all projects
+        const { data: allCompletedTickets } = await supabase
+          .from('tickets')
+          .select('id, statuses!inner(name)')
+          .in('project_id', projectIds)
+          .gte('created_at', dateRanges.currentMonthStart);
+
+        const completionRate = allProjectTickets?.length ? 
+          ((allCompletedTickets?.filter(t => (t as any).statuses?.name?.toLowerCase().includes('complete') || 
+                                             (t as any).statuses?.name?.toLowerCase().includes('done')).length || 0) / 
+           allProjectTickets.length * 100).toFixed(0) : 0;
+
+        // Get recent activity across all managed projects with pagination
+        const { count: totalAllProjectTickets } = await supabase
+          .from('tickets')
+          .select('id', { count: 'exact', head: true })
+          .in('project_id', projectIds);
+
+        console.log('🔢 MANAGER ALL PROJECTS COUNT DEBUG:', { totalAllProjectTickets, projectIds, page, limit });
+        
+        const { data: recentAllProjectTickets } = await supabase
+          .from('tickets')
+          .select(`
+            id, title, created_at, status_id, project_id,
+            created_by, assigned_to,
+            creator:users!tickets_created_by_fkey(name),
+            assignee:users!tickets_assigned_to_fkey(name),
+            statuses!tickets_status_id_fkey(name, color_code),
+            projects!inner(name)
+          `)
+          .in('project_id', projectIds)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
+        
+        // Calculate pagination metadata for all projects
+        const totalPages = Math.ceil((totalAllProjectTickets || 0) / limit);
+        metrics.pagination = {
+          currentPage: page,
+          totalPages: totalPages,
+          totalItems: totalAllProjectTickets || 0,
+          itemsPerPage: limit,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1
+        };
+
+        // Unique team members count (remove duplicates)
+        const uniqueTeamMembers = allProjectTeamMembers ? 
+          Array.from(new Set(allProjectTeamMembers.map(tm => tm.user_id))) : [];
+
+        metrics.overview = {
+          totalTickets: {
+            value: allProjectTickets?.length || 0,
+            change: calculatePercentageChange(
+              allProjectTickets?.length || 0,
+              previousAllProjectTickets?.length || 0
+            ),
+            changeType: (allProjectTickets?.length || 0) >= (previousAllProjectTickets?.length || 0) ? 'positive' : 'neutral'
+          },
+          activeProjects: {
+            value: projectIds.length,
+            change: '+0',
+            changeType: 'neutral'
+          },
+          teamMembers: {
+            value: uniqueTeamMembers.length,
+            change: '+1',
+            changeType: 'positive'
+          },
+          completionRate: {
+            value: `${completionRate}%`,
+            change: '+8%',
+            changeType: 'positive'
+          }
+        };
+
+        metrics.recentActivity = recentAllProjectTickets?.map(ticket => ({
+          id: ticket.id,
+          title: ticket.title,
+          status: (ticket as any).statuses?.name || 'Unknown',
+          time: formatTimeAgo(ticket.created_at),
+          assignedTo: (ticket as any).assignee?.name || 'Unassigned',
+          createdBy: (ticket as any).creator?.name || 'Unknown',
+          assigned_to: (ticket as any).assignee?.name || 'Unassigned',
+          created_by: (ticket as any).creator?.name || 'Unknown',
+          projectName: (ticket as any).projects?.name || 'Unknown Project',
+          priority: 'Normal'
+        })) || [];
+
+        // Add aggregated project data
+        metrics.quickStats = {
+          projectInfo: null, // No specific project when viewing all
+          availableProjects: managedProjects?.map(mp => ({
+            id: mp.project_id,
+            name: (mp as any).projects?.name,
+            role: (mp as any).global_roles?.name
+          })) || []
+        };
+      } else {
+        // No managed projects - empty state
+        console.log('⚠️ MANAGER: No managed projects found');
+        metrics.overview = {
+          totalTickets: { value: 0, change: '0%', changeType: 'neutral' },
+          activeProjects: { value: 0, change: '0', changeType: 'neutral' },
+          teamMembers: { value: 0, change: '0', changeType: 'neutral' },
+          completionRate: { value: '0%', change: '0%', changeType: 'neutral' }
+        };
+        metrics.recentActivity = [];
+        metrics.pagination = {
+          currentPage: 1,
+          totalPages: 0,
+          totalItems: 0,
+          itemsPerPage: limit,
+          hasNextPage: false,
+          hasPreviousPage: false
         };
       }
     }

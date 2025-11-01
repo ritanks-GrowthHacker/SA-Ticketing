@@ -23,9 +23,14 @@ interface CreateTicketRequest {
 
 export async function POST(request: NextRequest) {
   try {
+    console.log('🎫 CREATE TICKET API - Request received');
+    
     // Extract JWT token from Authorization header
     const authHeader = request.headers.get('authorization');
+    console.log('🔧 Auth header:', authHeader ? 'Present' : 'Missing');
+    
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('❌ Missing or invalid auth header');
       return NextResponse.json(
         { error: 'Authorization token required' },
         { status: 401 }
@@ -37,7 +42,9 @@ export async function POST(request: NextRequest) {
 
     try {
       decoded = jwt.verify(token, JWT_SECRET) as DecodedToken;
+      console.log('✅ Token decoded:', { userId: decoded.sub, orgId: decoded.org_id, role: decoded.role });
     } catch (error) {
+      console.log('❌ Token verification failed:', error);
       return NextResponse.json(
         { error: 'Invalid token' },
         { status: 401 }
@@ -48,7 +55,9 @@ export async function POST(request: NextRequest) {
     let body: CreateTicketRequest;
     try {
       body = await request.json();
+      console.log('📝 Request body:', body);
     } catch (error) {
+      console.log('❌ JSON parsing failed:', error);
       return NextResponse.json(
         { error: 'Invalid JSON body' },
         { status: 400 }
@@ -98,15 +107,20 @@ export async function POST(request: NextRequest) {
 
     // Validate assigned_to user if provided
     if (assigned_to) {
+      console.log('🔧 Validating assignee:', assigned_to, 'in organization:', decoded.org_id);
+      
       const { data: assignee, error: assigneeError } = await supabase
-        .from('user_organization')
+        .from('user_organization_roles')
         .select(`
           user_id,
+          organization_id,
           users!inner(id, name, email)
         `)
         .eq('user_id', assigned_to)
         .eq('organization_id', decoded.org_id)
         .single();
+
+      console.log('🔧 Assignee validation result:', { assignee, assigneeError });
 
       if (assigneeError || !assignee) {
         return NextResponse.json(
@@ -118,6 +132,7 @@ export async function POST(request: NextRequest) {
 
     // Validate status_id if provided
     if (status_id) {
+      console.log('🔧 Validating status_id:', status_id);
       const { data: status, error: statusError } = await supabase
         .from('statuses')
         .select('id, name, type')
@@ -127,7 +142,10 @@ export async function POST(request: NextRequest) {
         .eq('is_active', true)
         .single();
 
+      console.log('🔧 Status validation result:', { status, statusError });
+
       if (statusError || !status) {
+        console.log('❌ Invalid status_id:', statusError?.message || 'Status not found');
         return NextResponse.json(
           { error: 'Invalid status_id for ticket' },
           { status: 400 }
@@ -137,6 +155,7 @@ export async function POST(request: NextRequest) {
 
     // Validate priority_id if provided
     if (priority_id) {
+      console.log('🔧 Validating priority_id:', priority_id);
       const { data: priority, error: priorityError } = await supabase
         .from('statuses')
         .select('id, name, type')
@@ -146,7 +165,10 @@ export async function POST(request: NextRequest) {
         .eq('is_active', true)
         .single();
 
+      console.log('🔧 Priority validation result:', { priority, priorityError });
+
       if (priorityError || !priority) {
+        console.log('❌ Invalid priority_id:', priorityError?.message || 'Priority not found');
         return NextResponse.json(
           { error: 'Invalid priority_id' },
           { status: 400 }
@@ -255,8 +277,29 @@ export async function POST(request: NextRequest) {
 
 // Helper function to check if user can create tickets in a project
 async function checkUserProjectPermission(userId: string, projectId: string, userRole: string, orgId: string): Promise<boolean> {
+  console.log('🔧 Checking user project permission:', { userId, projectId, userRole, orgId });
+
+  // First check user's organization role using global roles system
+  const { data: userOrgRole, error: orgRoleError } = await supabase
+    .from('user_organization_roles')
+    .select(`
+      role_id,
+      global_roles!user_organization_roles_role_id_fkey(name)
+    `)
+    .eq('user_id', userId)
+    .eq('organization_id', orgId)
+    .single();
+
+  let actualUserRole = userRole; // fallback to JWT role
+  if (userOrgRole && userOrgRole.global_roles) {
+    actualUserRole = (userOrgRole.global_roles as any).name;
+  }
+
+  console.log('🔧 Actual user role:', actualUserRole);
+
   // Admins can create tickets in any project within their organization
-  if (userRole === 'Admin') {
+  if (actualUserRole === 'Admin') {
+    console.log('✅ Admin user - can create tickets in any project');
     return true;
   }
 
@@ -268,22 +311,27 @@ async function checkUserProjectPermission(userId: string, projectId: string, use
     .eq('project_id', projectId)
     .single();
 
+  console.log('🔧 User project assignment:', { userProject, error });
+
   if (error || !userProject) {
     // If not assigned to project, check if they're a Manager in the organization
-    if (userRole === 'Manager') {
-      // Managers might have broader permissions - you can customize this logic
+    if (actualUserRole === 'Manager') {
+      // Managers can create tickets in any project in their organization
       const { data: managerOrg } = await supabase
-        .from('user_organization')
+        .from('user_organization_roles')
         .select('user_id')
         .eq('user_id', userId)
         .eq('organization_id', orgId)
         .single();
 
+      console.log('✅ Manager user - can create tickets in organization projects');
       return !!managerOrg;
     }
+    console.log('❌ User not assigned to project and not Admin/Manager');
     return false;
   }
 
+  console.log('✅ User assigned to project - can create tickets');
   return true;
 }
 
