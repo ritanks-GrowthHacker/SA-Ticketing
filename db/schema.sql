@@ -397,5 +397,35 @@ COMMENT ON TABLE project_documents IS 'Documents and files associated with proje
 COMMENT ON TABLE otp_verifications IS 'OTP codes for authentication and verification';
 
 -- =============================================
+-- TICKET COMMENTS TABLE
+-- =============================================
+CREATE TABLE IF NOT EXISTS ticket_comments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    ticket_id UUID NOT NULL,
+    user_id UUID NOT NULL,
+    parent_comment_id UUID,
+    comment TEXT NOT NULL,
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    organization_id UUID,
+    content TEXT,
+    is_deleted BOOLEAN DEFAULT false,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+    CONSTRAINT ticket_comments_ticket_id_fkey FOREIGN KEY (ticket_id) REFERENCES tickets(id),
+    CONSTRAINT ticket_comments_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT ticket_comments_parent_comment_id_fkey FOREIGN KEY (parent_comment_id) REFERENCES ticket_comments(id),
+    CONSTRAINT ticket_comments_organization_id_fkey FOREIGN KEY (organization_id) REFERENCES organizations(id)
+);
+
+-- Enable RLS for ticket_comments
+ALTER TABLE ticket_comments ENABLE ROW LEVEL SECURITY;
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticket_id ON ticket_comments(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_comments_parent_id ON ticket_comments(parent_comment_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_comments_organization_id ON ticket_comments(organization_id);
+
+COMMENT ON TABLE ticket_comments IS 'Comments on tickets with nested reply support';
+
+-- =============================================
 -- END OF SCHEMA
 -- =============================================

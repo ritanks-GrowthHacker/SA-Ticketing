@@ -7,9 +7,11 @@ import {
   User, 
   Flag, 
   CheckCircle, 
-  Edit3
+  Edit3,
+  MessageCircle
 } from 'lucide-react';
 import { useAuthStore } from '../../app/store/authStore';
+import TicketComments from '../comments/TicketComments';
 
 interface Project {
   id: string;
@@ -124,6 +126,8 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
     message: string;
     show: boolean;
   }>({ type: 'info', message: '', show: false });
+  
+  const [activeTab, setActiveTab] = useState<'details' | 'comments'>('details');
 
   const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
     setNotification({ type, message, show: true });
@@ -469,6 +473,40 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
             </button>
           </div>
 
+          {/* Tab Navigation - Only show in edit mode */}
+          {isEditMode && !loadingTicket && (
+            <div className="border-b border-gray-200">
+              <nav className="flex space-x-8 px-6" aria-label="Tabs">
+                <button
+                  onClick={() => setActiveTab('details')}
+                  className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'details'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <Edit3 className="w-4 h-4" />
+                    <span>Ticket Details</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setActiveTab('comments')}
+                  className={`py-4 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'comments'
+                      ? 'border-blue-500 text-blue-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <MessageCircle className="w-4 h-4" />
+                    <span>Comments</span>
+                  </div>
+                </button>
+              </nav>
+            </div>
+          )}
+
           {/* Modal Content */}
           {loadingTicket ? (
             <div className="px-6 py-8 text-center">
@@ -513,6 +551,16 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
                   <p className="text-sm text-gray-500">No projects found</p>
                 </div>
               )}
+            </div>
+          ) : isEditMode && activeTab === 'comments' ? (
+            /* Comments Section */
+            <div className="px-6 py-4 overflow-y-auto max-h-[calc(90vh-120px)]">
+              <TicketComments 
+                ticketId={ticketId!} 
+                onCommentAdded={() => {
+                  // Optional: refresh ticket data or show notification
+                }} 
+              />
             </div>
           ) : (
             /* Ticket Form */
@@ -633,7 +681,7 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
           )}
 
           {/* Modal Footer */}
-          {(selectedProject || isEditMode) && !loadingTicket && (
+          {(selectedProject || isEditMode) && !loadingTicket && (!isEditMode || activeTab === 'details') && (
             <div className="px-6 py-4 border-t border-gray-200 flex justify-end space-x-3">
               <button
                 type="button"

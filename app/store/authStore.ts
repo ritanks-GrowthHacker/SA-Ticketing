@@ -7,6 +7,12 @@ export interface User {
   name: string
   email: string
   created_at: string
+  profile_picture_url?: string
+  about?: string
+  phone?: string
+  location?: string
+  job_title?: string
+  department?: string
 }
 
 export interface Organization {
