@@ -20,6 +20,7 @@ interface User {
   name: string;
   email: string;
   created_at: string;
+  profile_picture_url?: string;
 }
 
 interface Project {
@@ -100,6 +101,13 @@ const ManageAccessPage = () => {
     }
   }, [selectedProject, token, role]);
 
+  // Clear selected users when switching to "All Projects" view (no actions available)
+  useEffect(() => {
+    if (selectedProject === 'all') {
+      setSelectedUsers([]);
+    }
+  }, [selectedProject]);
+
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -127,12 +135,13 @@ const ManageAccessPage = () => {
 
       if (response.ok) {
         const data = await response.json();
-        // Transform users to match expected interface (id, name, email, created_at)
+        // Transform users to match expected interface (id, name, email, created_at, profile_picture_url)
         const transformedUsers = (data.users || []).map((u: any) => ({
           id: u.userId, // manage-user-role returns userId, we need id
           name: u.name,
           email: u.email,
           created_at: u.joinedAt, // manage-user-role returns joinedAt
+          profile_picture_url: u.profile_picture_url,
         }));
         setUsers(transformedUsers);
         // manage-user-role returns availableRoles
@@ -454,10 +463,9 @@ const ManageAccessPage = () => {
 
     if (!matchesSearch) return false;
 
-    // If 'all' selected -> show only users with NO project assignments
+    // If 'all' selected -> show ALL users in the organization regardless of project assignments
     if (selectedProject === 'all') {
-      const hasAssignment = assignments.some(a => a.user_id === userItem.id);
-      return !hasAssignment;
+      return true;
     }
 
     // When a specific project is selected -> show users assigned to that project
@@ -495,21 +503,28 @@ const ManageAccessPage = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Manage Access</h1>
-          <p className="text-gray-600 mt-1">Assign users to projects and manage permissions</p>
+          <p className="text-gray-600 mt-1">
+            {selectedProject === 'all' 
+              ? 'Viewing all organization members - select a specific project to manage assignments'
+              : 'Assign users to projects and manage permissions'
+            }
+          </p>
         </div>
         
-        <button
-          onClick={handleBulkAssign}
-          disabled={selectedUsers.length === 0 || assignmentLoading}
-          className={`px-4 py-2 rounded-lg transition-colors flex items-center space-x-2 ${
-            selectedUsers.length === 0 || assignmentLoading
-              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-blue-600 text-white hover:bg-blue-700'
-          }`}
-        >
-          <Plus className="w-4 h-4" />
-          <span>Assign Selected ({selectedUsers.length})</span>
-        </button>
+        {selectedProject !== 'all' && (
+          <button
+            onClick={handleBulkAssign}
+            disabled={selectedUsers.length === 0 || assignmentLoading}
+            className={`px-4 py-2 rounded-lg transition-colors flex items-center space-x-2 ${
+              selectedUsers.length === 0 || assignmentLoading
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+          >
+            <Plus className="w-4 h-4" />
+            <span>Assign Selected ({selectedUsers.length})</span>
+          </button>
+        )}
       </div>
 
       {/* Filters */}
@@ -545,8 +560,12 @@ const ManageAccessPage = () => {
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <div className="px-6 py-4 border-b border-gray-200">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-gray-900">Organization Users</h2>
-            <span className="text-sm text-gray-500">{filteredUsers.length} users</span>
+            <h2 className="text-lg font-semibold text-gray-900">
+              {selectedProject === 'all' ? 'All Organization Members' : 'Project Members'}
+            </h2>
+            <span className="text-sm text-gray-500">
+              {filteredUsers.length} {selectedProject === 'all' ? 'members' : 'users'}
+            </span>
           </div>
         </div>
 
@@ -554,20 +573,22 @@ const ManageAccessPage = () => {
           <table className="min-w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  <input
-                    type="checkbox"
-                    checked={selectedUsers.length === filteredUsers.length && filteredUsers.length > 0}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedUsers(filteredUsers.map(u => u.id));
-                      } else {
-                        setSelectedUsers([]);
-                      }
-                    }}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                </th>
+                {selectedProject !== 'all' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <input
+                      type="checkbox"
+                      checked={selectedUsers.length === filteredUsers.length && filteredUsers.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedUsers(filteredUsers.map(u => u.id));
+                        } else {
+                          setSelectedUsers([]);
+                        }
+                      }}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   User
                 </th>
@@ -580,9 +601,11 @@ const ManageAccessPage = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Projects
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[300px]">
-                  Actions
-                </th>
+                {selectedProject !== 'all' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[300px]">
+                    Actions
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -592,26 +615,43 @@ const ManageAccessPage = () => {
                 
                 return (
                   <tr key={user.id} className={isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedUsers([...selectedUsers, user.id]);
-                          } else {
-                            setSelectedUsers(selectedUsers.filter(id => id !== user.id));
-                          }
-                        }}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                    </td>
+                    {selectedProject !== 'all' && (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedUsers([...selectedUsers, user.id]);
+                            } else {
+                              setSelectedUsers(selectedUsers.filter(id => id !== user.id));
+                            }
+                          }}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                      </td>
+                    )}
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center">
-                        <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
-                          <span className="text-blue-600 font-medium">
-                            {user.name.charAt(0).toUpperCase()}
-                          </span>
+                        <div className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden">
+                          {user.profile_picture_url ? (
+                            <img 
+                              src={user.profile_picture_url} 
+                              alt={user.name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                // Fallback to initials if image fails to load
+                                const target = e.target as HTMLImageElement;
+                                target.style.display = 'none';
+                                target.nextElementSibling?.classList.remove('hidden');
+                              }}
+                            />
+                          ) : null}
+                          <div className={`w-full h-full bg-blue-100 rounded-full flex items-center justify-center ${user.profile_picture_url ? 'hidden' : ''}`}>
+                            <span className="text-blue-600 font-medium">
+                              {user.name.charAt(0).toUpperCase()}
+                            </span>
+                          </div>
                         </div>
                         <div className="ml-3">
                           <div className="text-sm font-medium text-gray-900">{user.name}</div>
@@ -648,71 +688,73 @@ const ManageAccessPage = () => {
                         )}
                       </div>
                     </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-  <div className="flex items-center justify-between gap-4 w-full">
-    
-    {/* Project and Role Selection */}
-    <div className="flex items-center gap-3 flex-wrap max-w-[70%]">
-      <div className="min-w-[140px]">
-        <ProjectSelect
-          value={perUserProject[user.id] || ""}
-          onValueChange={(val) => handlePerUserProjectChange(user.id, val)}
-          includeAllOption={false}
-          placeholder="Project"
-          className="w-full"
-        />
-      </div>
+                  {selectedProject !== 'all' && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                      <div className="flex items-center justify-between gap-4 w-full">
+                        
+                        {/* Project and Role Selection */}
+                        <div className="flex items-center gap-3 flex-wrap max-w-[70%]">
+                          <div className="min-w-[140px]">
+                            <ProjectSelect
+                              value={perUserProject[user.id] || ""}
+                              onValueChange={(val) => handlePerUserProjectChange(user.id, val)}
+                              includeAllOption={false}
+                              placeholder="Project"
+                              className="w-full"
+                            />
+                          </div>
 
-      <div className="min-w-[120px]">
-        <Select
-          value={perUserRole[user.id] || ""}
-          onValueChange={(val) => handlePerUserRoleChange(user.id, val)}
-        >
-          <SelectTrigger size="sm" className="w-full">
-            <SelectValue placeholder="Role" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectGroup>
-              <SelectLabel>Roles</SelectLabel>
-              {roles.map((r) => (
-                <SelectItem key={r.id} value={r.id}>
-                  {r.name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          </SelectContent>
-        </Select>
-      </div>
-    </div>
+                          <div className="min-w-[120px]">
+                            <Select
+                              value={perUserRole[user.id] || ""}
+                              onValueChange={(val) => handlePerUserRoleChange(user.id, val)}
+                            >
+                              <SelectTrigger size="sm" className="w-full">
+                                <SelectValue placeholder="Role" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectGroup>
+                                  <SelectLabel>Roles</SelectLabel>
+                                  {roles.map((r) => (
+                                    <SelectItem key={r.id} value={r.id}>
+                                      {r.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
 
-    {/* Action Buttons */}
-    <div className="flex items-center gap-2 shrink-0">
-      <button
-        onClick={() => handlePerUserAssignment(user.id)}
-        disabled={!perUserProject[user.id] || !perUserRole[user.id]}
-        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-          perUserProject[user.id] && perUserRole[user.id]
-            ? "bg-blue-600 text-white hover:bg-blue-700"
-            : "bg-gray-300 text-gray-500 cursor-not-allowed"
-        }`}
-        title="Assign this user"
-      >
-        Assign
-      </button>
+                        {/* Action Buttons */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handlePerUserAssignment(user.id)}
+                            disabled={!perUserProject[user.id] || !perUserRole[user.id]}
+                            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                              perUserProject[user.id] && perUserRole[user.id]
+                                ? "bg-blue-600 text-white hover:bg-blue-700"
+                                : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                            }`}
+                            title="Assign this user"
+                          >
+                            Assign
+                          </button>
 
-      {userAssignments.length > 0 && (
-        <button
-          onClick={() => handleRemoveAllUserAssignments(user.id)}
-          className="p-1 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
-          title="Remove from all projects"
-        >
-          <UserX className="w-4 h-4" />
-        </button>
-      )}
-    </div>
+                          {userAssignments.length > 0 && (
+                            <button
+                              onClick={() => handleRemoveAllUserAssignments(user.id)}
+                              className="p-1 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
+                              title="Remove from all projects"
+                            >
+                              <UserX className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
 
-  </div>
-</td>
+                      </div>
+                    </td>
+                  )}
 
                   </tr>
                 );

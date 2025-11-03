@@ -21,3 +21,36 @@ Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJlNDI0NjlhZ
   "project_id": "e267308b-e8d3-411a-adfe-6e39d45aa11a",
   "title": "Test ticket without assignee"
 }
+
+### Test Manager Create Ticket - Should work only if manager is assigned to project with Manager role
+POST http://localhost:3000/api/create-tickets
+Content-Type: application/json
+Authorization: Bearer {{manager_jwt_token}}
+
+{
+  "project_id": "{{test_project_id_where_manager_assigned}}",
+  "title": "Manager created ticket",
+  "description": "This should work only if manager has Manager role in this specific project"
+}
+
+### Test Manager Create Ticket - Should fail if manager not assigned to project
+POST http://localhost:3000/api/create-tickets
+Content-Type: application/json
+Authorization: Bearer {{manager_jwt_token}}
+
+{
+  "project_id": "{{test_project_id_where_manager_NOT_assigned}}",
+  "title": "Manager created ticket - should fail",
+  "description": "This should fail because manager is not assigned to this project"
+}
+
+### Test Manager Create Ticket - Should fail if manager has Member role in project
+POST http://localhost:3000/api/create-tickets
+Content-Type: application/json
+Authorization: Bearer {{manager_jwt_token}}
+
+{
+  "project_id": "{{test_project_id_where_manager_is_member}}",
+  "title": "Manager created ticket - should fail",
+  "description": "This should fail because manager only has Member role in this project, not Manager role"
+}

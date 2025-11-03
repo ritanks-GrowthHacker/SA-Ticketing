@@ -20,8 +20,18 @@ export interface User {
   email: string;
   organization_id: string;
   is_verified: boolean;
+  profile_picture_url?: string;
+  about?: string;
+  phone?: string;
+  location?: string;
+  job_title?: string;
+  department?: string;
+  date_of_birth?: string;
+  email_notifications_enabled?: boolean;
+  dark_mode_enabled?: boolean;
   created_at: string;
   updated_at: string;
+  profile_updated_at?: string;
   organization?: Organization;
 }
 
@@ -40,6 +50,40 @@ export interface UserRole {
   assigned_at: string;
   user?: User;
   role?: Role;
+}
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  email: string;
+  profilePicture?: string;
+  about?: string;
+  phone?: string;
+  location?: string;
+  jobTitle?: string;
+  department?: string;
+  dateOfBirth?: string;
+  emailNotificationsEnabled?: boolean;
+  darkModeEnabled?: boolean;
+  createdAt: string;
+  updatedAt: string;
+  profileUpdatedAt?: string;
+  organization?: Organization;
+  role?: string;
+}
+
+export interface UpdateProfileRequest {
+  name?: string;
+  email?: string;
+  profilePictureUrl?: string;
+  about?: string;
+  phone?: string;
+  location?: string;
+  jobTitle?: string;
+  department?: string;
+  dateOfBirth?: string;
+  emailNotificationsEnabled?: boolean;
+  darkModeEnabled?: boolean;
 }
 
 // =============================================
@@ -87,6 +131,7 @@ export interface ProjectStats {
   openTickets: number;
   completedTickets: number;
   teamMembers: number;
+  managerName?: string;
   completionRate: number;
   statusBreakdown?: { [statusName: string]: number };
 }

@@ -31,7 +31,27 @@ export async function GET(request: NextRequest) {
 
     const userId = tokenData.sub; // Use 'sub' from JWT token
     const organizationId = tokenData.org_id; // Use 'org_id' from JWT token
-    const userRole = tokenData.roles?.[0] || 'user'; // Get first role or default to 'user'
+    
+    // Get user's organization role using global roles system
+    const { data: userOrgRole, error: orgRoleError } = await supabase
+      .from('user_organization_roles')
+      .select(`
+        role_id,
+        global_roles!user_organization_roles_role_id_fkey(name)
+      `)
+      .eq('user_id', userId)
+      .eq('organization_id', organizationId)
+      .single();
+
+    let actualUserRole = tokenData.role || 'Member'; // fallback to JWT role
+    if (userOrgRole && userOrgRole.global_roles) {
+      actualUserRole = (userOrgRole.global_roles as any).name;
+    }
+
+    console.log('🔧 Search tickets - User role:', actualUserRole);
+    console.log('🔍 JWT token role:', tokenData.role);
+    console.log('🔍 JWT token user:', tokenData.sub);
+    console.log('🔍 Organization role query result:', userOrgRole);
 
     // Extract query parameters
     const query = searchParams.get('q') || '';
@@ -59,11 +79,15 @@ export async function GET(request: NextRequest) {
       .eq('projects.organization_id', organizationId);
 
     // Apply RBAC filtering
-    if (userRole === 'user' || userRole === 'manager') {
+    if (actualUserRole !== 'Admin') {
       // Get user's project assignments with roles for count query
       const { data: userProjects } = await supabase
-        .from('project_user_relations')
-        .select('project_id, role')
+        .from('user_project')
+        .select(`
+          project_id,
+          role_id,
+          global_roles!user_project_role_id_fkey(name)
+        `)
         .eq('user_id', userId);
 
       if (!userProjects || userProjects.length === 0) {
@@ -86,14 +110,29 @@ export async function GET(request: NextRequest) {
 
       const projectIds = userProjects.map(p => p.project_id);
       
-      // Filter by role if specified
-      if (roleFilter) {
-        const filteredProjects = userProjects
-          .filter(p => p.role === roleFilter)
-          .map(p => p.project_id);
-        ticketsQuery = ticketsQuery.in('project_id', filteredProjects);
+      console.log('🎯 User projects for tickets:', userProjects.map(p => ({
+        projectId: p.project_id,
+        role: (p.global_roles as any)?.name
+      })));
+      
+      // For Members: Only show tickets assigned to them OR created by them
+      if (actualUserRole === 'Member') {
+        console.log('👤 Member access: showing only assigned/created tickets');
+        ticketsQuery = ticketsQuery
+          .in('project_id', projectIds)
+          .or(`assigned_to.eq.${userId},created_by.eq.${userId}`);
       } else {
-        ticketsQuery = ticketsQuery.in('project_id', projectIds);
+        console.log('👑 Manager/Admin access: showing all tickets in projects:', projectIds);
+        // For Managers and other non-Admin roles: Show all tickets in assigned projects
+        // Filter by role if specified
+        if (roleFilter) {
+          const filteredProjects = userProjects
+            .filter(p => (p.global_roles as any)?.name === roleFilter)
+            .map(p => p.project_id);
+          ticketsQuery = ticketsQuery.in('project_id', filteredProjects);
+        } else {
+          ticketsQuery = ticketsQuery.in('project_id', projectIds);
+        }
       }
     }
 
@@ -122,17 +161,31 @@ export async function GET(request: NextRequest) {
       .eq('projects.organization_id', organizationId);
 
     // Apply same RBAC to count query
-    if (userRole === 'user' || userRole === 'manager') {
-      const { data: userProjects } = await supabase
-        .from('project_user_relations')
-        .select('project_id, role')
+    if (actualUserRole !== 'Admin') {
+      const { data: userProjectsCount } = await supabase
+        .from('user_project')
+        .select(`
+          project_id,
+          role_id,
+          global_roles!user_project_role_id_fkey(name)
+        `)
         .eq('user_id', userId);
 
-      if (userProjects && userProjects.length > 0) {
-        const projectIds = roleFilter 
-          ? userProjects.filter(p => p.role === roleFilter).map(p => p.project_id)
-          : userProjects.map(p => p.project_id);
-        countQuery = countQuery.in('project_id', projectIds);
+      if (userProjectsCount && userProjectsCount.length > 0) {
+        const projectIds = userProjectsCount.map(p => p.project_id);
+        
+        // For Members: Only count tickets assigned to them OR created by them
+        if (actualUserRole === 'Member') {
+          countQuery = countQuery
+            .in('project_id', projectIds)
+            .or(`assigned_to.eq.${userId},created_by.eq.${userId}`);
+        } else {
+          // For Managers and other non-Admin roles: Count all tickets in assigned projects
+          const filteredProjectIds = roleFilter 
+            ? userProjectsCount.filter(p => (p.global_roles as any)?.name === roleFilter).map(p => p.project_id)
+            : projectIds;
+          countQuery = countQuery.in('project_id', filteredProjectIds);
+        }
       }
     }
 
@@ -204,20 +257,25 @@ export async function GET(request: NextRequest) {
 
     let availableRoles: string[] = [];
 
-    if (userRole === 'user' || userRole === 'manager') {
+    if (actualUserRole !== 'Admin') {
       // Get only projects user has access to
-      const { data: userProjects } = await supabase
-        .from('project_user_relations')
-        .select('project_id, role, projects!inner(name)')
+      const { data: userProjectsForFilter } = await supabase
+        .from('user_project')
+        .select(`
+          project_id,
+          role_id,
+          global_roles!user_project_role_id_fkey(name),
+          projects!inner(name)
+        `)
         .eq('user_id', userId);
 
-      const availableProjects = userProjects?.map(up => ({
+      const availableProjects = userProjectsForFilter?.map(up => ({
         id: up.project_id,
-        name: up.projects[0]?.name || 'Unknown Project'
+        name: (up.projects as any)?.name || 'Unknown Project'
       })) || [];
 
       // Get available roles for this user
-      availableRoles = [...new Set(userProjects?.map(p => p.role) || [])];
+      availableRoles = [...new Set(userProjectsForFilter?.map(p => (p.global_roles as any)?.name).filter(Boolean) || [])];
 
       return NextResponse.json({
         tickets: tickets || [],
@@ -234,8 +292,8 @@ export async function GET(request: NextRequest) {
           availableRoles
         },
         userAccess: {
-          role: userRole,
-          canViewAllTickets: userRole === 'admin'
+          role: actualUserRole,
+          canViewAllTickets: actualUserRole === 'Admin'
         }
       });
     } else {
@@ -257,7 +315,7 @@ export async function GET(request: NextRequest) {
           availableRoles: ['admin', 'manager', 'user'] // All roles for admin
         },
         userAccess: {
-          role: userRole,
+          role: actualUserRole,
           canViewAllTickets: true
         }
       });

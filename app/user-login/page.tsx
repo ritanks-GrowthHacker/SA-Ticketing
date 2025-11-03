@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useApiClient } from '../store/apiClient'
 import { useAuth, useAuthActions } from '../store/authStore'
@@ -18,22 +18,32 @@ export default function AuthPage() {
   const [showOTP, setShowOTP] = useState(false)
   const [otpData, setOtpData] = useState<{
     email: string;
-    type: 'registration' | 'login';
+    type: 'registration' | 'login' | 'password-reset';
     userData?: any;
   } | null>(null)
+  const [showForgotPassword, setShowForgotPassword] = useState(false)
+  const [showPasswordReset, setShowPasswordReset] = useState(false)
+  const [resetEmail, setResetEmail] = useState('') 
   
   const { login, register } = useApiClient()
   const { isAuthenticated } = useAuth()
   const { login: authLogin } = useAuthActions()
   const router = useRouter()
 
-  // Handle authentication redirect in useEffect to avoid render-time navigation
+  // Simple redirect to dashboard on authentication
   useEffect(() => {
     if (isAuthenticated && !isRedirecting) {
       setIsRedirecting(true)
       router.push('/dashboard')
     }
-  }, [isAuthenticated, router, isRedirecting])
+  }, [isAuthenticated, isRedirecting, router])
+
+  // Reset redirecting flag when not authenticated
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setIsRedirecting(false)
+    }
+  }, [isAuthenticated])
 
   // Show loading state while redirecting
   if (isAuthenticated && isRedirecting) {
@@ -144,7 +154,16 @@ export default function AuthPage() {
   }
 
   const handleOTPVerificationSuccess = (data: any) => {
-    // Store the authentication data
+    if (otpData?.type === 'password-reset') {
+      handlePasswordResetOTPSuccess(data)
+      return
+    }
+
+    // Hide OTP screen and clear OTP data immediately after successful verification
+    setShowOTP(false)
+    setOtpData(null)
+    
+    // Store the authentication data for login/registration
     authLogin({
       user: data.user,
       organization: data.organization,
@@ -185,6 +204,104 @@ export default function AuthPage() {
     }
   }
 
+  const handleForgotPassword = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setError(null)
+    setSuccess(null)
+    setIsLoading(true)
+
+    const formData = new FormData(e.currentTarget)
+    const email = formData.get('email') as string
+    setResetEmail(email)
+
+    try {
+      const response = await fetch('/api/forgot-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        setSuccess('Password reset OTP sent to your email!')
+        setShowForgotPassword(false)
+        setShowOTP(true)
+        setOtpData({
+          email,
+          type: 'password-reset'
+        })
+      } else {
+        setError(data.error || 'Failed to send reset email')
+      }
+    } catch (err) {
+      setError('Failed to send reset email. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handlePasswordResetOTPSuccess = (data: any) => {
+    setShowOTP(false)
+    setShowPasswordReset(true)
+    setSuccess('OTP verified! Please set your new password.')
+  }
+
+  const handlePasswordReset = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    setError(null)
+    setIsLoading(true)
+
+    const formData = new FormData(e.currentTarget)
+    const newPassword = formData.get('newPassword') as string
+    const confirmPassword = formData.get('confirmPassword') as string
+
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match')
+      setIsLoading(false)
+      return
+    }
+
+    if (newPassword.length < 6) {
+      setError('Password must be at least 6 characters long')
+      setIsLoading(false)
+      return
+    }
+
+    try {
+      const response = await fetch('/api/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: resetEmail,
+          newPassword,
+          confirmPassword
+        }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.success) {
+        setSuccess('Password reset successfully! Please login with your new password.')
+        setShowPasswordReset(false)
+        setActiveTab('login')
+        // Clear reset state
+        setResetEmail('')
+        setOtpData(null)
+      } else {
+        setError(data.error || 'Failed to reset password')
+      }
+    } catch (err) {
+      setError('Failed to reset password. Please try again.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
   // Show OTP verification if needed
   if (showOTP && otpData) {
     return (
@@ -195,6 +312,98 @@ export default function AuthPage() {
         onVerificationSuccess={handleOTPVerificationSuccess}
         onResendOTP={handleResendOTP}
       />
+    )
+  }
+
+  // Show password reset form if needed
+  if (showPasswordReset) {
+    return (
+      <div className="min-h-screen bg-linear-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-8">
+        <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
+          <div className="text-center mb-8">
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Set New Password</h2>
+            <p className="text-gray-600">Enter your new password below</p>
+          </div>
+
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-red-800 text-sm">{error}</p>
+            </div>
+          )}
+
+          {success && (
+            <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+              <p className="text-green-800 text-sm">{success}</p>
+            </div>
+          )}
+
+          <form onSubmit={handlePasswordReset} className="space-y-6">
+            <div>
+              <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700 mb-2">
+                New Password
+              </label>
+              <input
+                type="password"
+                id="newPassword"
+                name="newPassword"
+                required
+                minLength={6}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200"
+                placeholder="Enter new password"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-2">
+                Confirm New Password
+              </label>
+              <input
+                type="password"
+                id="confirmPassword"
+                name="confirmPassword"
+                required
+                minLength={6}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200"
+                placeholder="Confirm new password"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full bg-linear-to-r from-blue-600 to-purple-600 text-white py-3 px-4 rounded-lg font-medium hover:from-blue-700 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+            >
+              {isLoading ? (
+                <span className="flex items-center justify-center">
+                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Resetting Password...
+                </span>
+              ) : (
+                'Reset Password'
+              )}
+            </button>
+          </form>
+
+          <div className="mt-6 text-center">
+            <button
+              onClick={() => {
+                setShowPasswordReset(false)
+                setActiveTab('login')
+                setResetEmail('')
+                setOtpData(null)
+                setError(null)
+                setSuccess(null)
+              }}
+              className="text-sm text-gray-600 hover:text-gray-900"
+            >
+              Back to login
+            </button>
+          </div>
+        </div>
+      </div>
     )
   }
 
@@ -332,6 +541,17 @@ export default function AuthPage() {
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200"
                     placeholder="Enter your password"
                   />
+                </div>
+
+                <div className="flex items-center justify-between mb-4">
+                  <div></div>
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotPassword(true)}
+                    className="text-sm text-blue-600 hover:text-blue-700 font-medium"
+                  >
+                    Forgot Password?
+                  </button>
                 </div>
 
                 <button
@@ -474,6 +694,70 @@ export default function AuthPage() {
           </div>
         </div>
       </div>
+
+      {/* Forgot Password Modal */}
+      {showForgotPassword && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
+            <div className="text-center mb-6">
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Forgot Password</h3>
+              <p className="text-gray-600">Enter your email to receive a password reset OTP</p>
+            </div>
+
+            {error && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-red-800 text-sm">{error}</p>
+              </div>
+            )}
+
+            <form onSubmit={handleForgotPassword} className="space-y-4">
+              <div>
+                <label htmlFor="reset-email" className="block text-sm font-medium text-gray-700 mb-2">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  id="reset-email"
+                  name="email"
+                  required
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors duration-200"
+                  placeholder="Enter your email"
+                />
+              </div>
+
+              <div className="flex space-x-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowForgotPassword(false)
+                    setError(null)
+                  }}
+                  className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors duration-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="flex-1 bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                >
+                  {isLoading ? (
+                    <span className="flex items-center justify-center">
+                      <svg className="animate-spin -ml-1 mr-3 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Sending...
+                    </span>
+                  ) : (
+                    'Send OTP'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

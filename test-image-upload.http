@@ -1,0 +1,31 @@
+### Test Image Upload - FIXED
+POST http://localhost:3000/api/upload-profile-image
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_TOKEN
+
+{
+  "imageData": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD..."
+}
+
+### Expected Response:
+# Success (200):
+# {
+#   "success": true,
+#   "message": "Profile picture updated successfully",
+#   "profile": {
+#     "id": "user-id",
+#     "name": "User Name",
+#     "profilePicture": "data:image/jpeg;base64,..."
+#   }
+# }
+
+# Error (413) - Image too large:
+# {
+#   "error": "Image too large. Please compress further or use a smaller image."
+# }
+
+### Image Upload Requirements:
+# - Maximum compressed size: 8KB (8000 characters)
+# - Supported formats: JPEG, PNG, GIF, WebP
+# - Automatic compression: 150x150px, 50% quality
+# - Base64 encoding for database storage

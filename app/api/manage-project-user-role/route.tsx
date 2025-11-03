@@ -65,6 +65,14 @@ export async function PUT(req: Request) {
       }, { status: 400 });
     }
 
+    // Prevent users from modifying their own project role (security measure)
+    if (user_id === tokenData.sub) {
+      console.log('🔧 Self-modification attempt blocked');
+      return NextResponse.json({ 
+        error: "You cannot modify your own role in this project" 
+      }, { status: 403 });
+    }
+
     // Check if user has permission to manage project roles
     const hasPermission = await canManageProjectRoles(tokenData.sub, project_id, tokenData.roles || []);
     if (!hasPermission) {

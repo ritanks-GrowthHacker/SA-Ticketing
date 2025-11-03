@@ -38,12 +38,27 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // Debug token data
+    console.log('🔍 MANAGE-USER-ROLE: Token data debug:', {
+      userId: tokenData.sub,
+      role: tokenData.role,
+      roles: tokenData.roles,
+      project_id: tokenData.project_id,
+      org_id: tokenData.org_id
+    });
+
     // Check if user has permission to view roles
-    if (!canManageRoles(tokenData.roles || [])) {
+    const userRoles = tokenData.roles || [tokenData.role].filter(Boolean);
+    console.log('🔍 MANAGE-USER-ROLE: Checking roles:', userRoles);
+    
+    if (!canManageRoles(userRoles)) {
+      console.log('❌ MANAGE-USER-ROLE: Access denied - insufficient permissions');
       return NextResponse.json({ 
         error: "Access denied. Only Admin, Manager, or Team Lead can manage roles" 
       }, { status: 403 });
     }
+
+    console.log('✅ MANAGE-USER-ROLE: Access granted');
 
     const orgId = organizationId || tokenData.org_id;
     
@@ -57,7 +72,7 @@ export async function GET(req: Request) {
       .select(`
         user_id,
         role_id,
-        users(id, name, email, created_at),
+        users(id, name, email, created_at, profile_picture_url),
         global_roles!user_organization_roles_role_id_fkey(id, name, description)
       `)
       .eq("organization_id", orgId);
@@ -83,6 +98,7 @@ export async function GET(req: Request) {
       name: userOrg.users.name,
       email: userOrg.users.email,
       joinedAt: userOrg.users.created_at,
+      profile_picture_url: userOrg.users.profile_picture_url,
       currentRole: userOrg.global_roles ? {
         id: userOrg.global_roles.id,
         name: userOrg.global_roles.name,
@@ -149,16 +165,39 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
-    // Verify the user exists in this organization
-    const { data: existingUser, error: userError } = await supabase
+    // Get current user's role and target user's current role for hierarchy validation
+    const { data: targetUserOrg, error: targetUserError } = await supabase
       .from("user_organization_roles")
-      .select("user_id")
+      .select(`
+        user_id,
+        global_roles!user_organization_roles_role_id_fkey(name)
+      `)
       .eq("user_id", userId)
       .eq("organization_id", orgId)
       .single();
 
-    if (userError || !existingUser) {
+    if (targetUserError || !targetUserOrg) {
       return NextResponse.json({ error: "User not found in this organization" }, { status: 404 });
+    }
+
+    // Role hierarchy validation
+    const currentUserRoles = tokenData.roles || [];
+    const currentUserIsAdmin = currentUserRoles.includes('Admin');
+    const currentUserIsManager = currentUserRoles.includes('Manager');
+    const targetUserCurrentRole = (targetUserOrg as any).global_roles?.name;
+    
+    // Only Admins can assign Admin roles
+    if (role.name === 'Admin' && !currentUserIsAdmin) {
+      return NextResponse.json({ 
+        error: "Only Admins can assign Admin roles" 
+      }, { status: 403 });
+    }
+    
+    // Managers cannot modify other Managers' roles
+    if (currentUserIsManager && !currentUserIsAdmin && targetUserCurrentRole === 'Manager') {
+      return NextResponse.json({ 
+        error: "Managers cannot modify other Managers' roles" 
+      }, { status: 403 });
     }
 
     // Get user details for activity logging
@@ -278,6 +317,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
+    // Role hierarchy validation for adding users
+    const currentUserRoles = tokenData.roles || [];
+    const currentUserIsAdmin = currentUserRoles.includes('Admin');
+    
+    // Only Admins can assign Admin roles when adding new users
+    if (role.name === 'Admin' && !currentUserIsAdmin) {
+      return NextResponse.json({ 
+        error: "Only Admins can assign Admin roles to new users" 
+      }, { status: 403 });
+    }
+
     // Add user to organization
     const { error: addError } = await supabase
       .from("user_organization_roles")
@@ -377,6 +427,26 @@ export async function DELETE(req: Request) {
 
     if (userOrgError || !userOrg) {
       return NextResponse.json({ error: "User not found in this organization" }, { status: 404 });
+    }
+
+    // Role hierarchy validation for removal
+    const currentUserRoles = tokenData.roles || [];
+    const currentUserIsAdmin = currentUserRoles.includes('Admin');
+    const currentUserIsManager = currentUserRoles.includes('Manager');
+    const targetUserRole = (userOrg as any).global_roles?.name;
+    
+    // Managers cannot remove Admins or other Managers
+    if (currentUserIsManager && !currentUserIsAdmin) {
+      if (targetUserRole === 'Admin') {
+        return NextResponse.json({ 
+          error: "Managers cannot remove Admin users" 
+        }, { status: 403 });
+      }
+      if (targetUserRole === 'Manager') {
+        return NextResponse.json({ 
+          error: "Managers cannot remove other Manager users" 
+        }, { status: 403 });
+      }
     }
 
     // Remove user from organization

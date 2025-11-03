@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Plus, FolderOpen, Users, Calendar, MoreVertical, Grid, List, Loader } from 'lucide-react';
+import { Plus, FolderOpen, Users, Calendar, MoreVertical, Grid, List, Loader, CheckCircle, X, Info } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '../store/authStore';
 import { useProjectStore, Project, ProjectStatus } from '../store/projectStore';
@@ -30,6 +30,35 @@ const Projects = () => {
   const [loading, setLocalLoading] = useState(true);
   const [showKanbanView, setShowKanbanView] = useState(false);
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
+  const [openDropdownId, setOpenDropdownId] = useState<string | null>(null);
+  
+  // Toast notification state
+  const [notification, setNotification] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+    show: boolean;
+  }>({ type: 'info', message: '', show: false });
+
+  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
+    setNotification({ type, message, show: true });
+    setTimeout(() => {
+      setNotification(prev => ({ ...prev, show: false }));
+    }, 4000);
+  };
+
+  // Handle click outside to close dropdowns
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (openDropdownId) {
+        setOpenDropdownId(null);
+      }
+    };
+
+    if (openDropdownId) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    }
+  }, [openDropdownId]);
   
   // Setup cross-tab synchronization
   useEffect(() => {
@@ -93,6 +122,8 @@ const Projects = () => {
           projectsCount: projectsData.length,
           statusesCount: statusesData.length
         });
+
+        console.log('🔍 Frontend received statuses:', statusesData);
         
         setProjects(projectsData);
         setStatuses(statusesData);
@@ -127,8 +158,14 @@ const Projects = () => {
     }
   };
 
-  const handleProjectStatusUpdate = async (projectId: string, newStatusId: string): Promise<boolean> => {
+  const handleProjectStatusUpdate = async (projectId: string, newStatusId: string): Promise<{ success: boolean; notificationShown?: boolean }> => {
+    console.log('🎯 FUNCTION ENTRY: handleProjectStatusUpdate called!');
     console.log('🔄 Updating project status:', { projectId, newStatusId });
+    console.log('🔍 Current token:', token ? 'Token exists' : 'No token');
+    console.log('🔍 Current roles:', roles);
+    console.log('🔍 Current organization:', organization?.name);
+
+    // Let the API handle project-specific role authorization
 
     try {
       const requestBody = {
@@ -164,15 +201,26 @@ const Projects = () => {
         // Broadcast update to other tabs
         broadcastUpdate('project_status_changed', { projectId, newStatusId });
         
-        return true;
+        return { success: true };
       } else {
         const errorData = await response.text();
-        console.error('❌ Failed to update project status:', errorData);
-        return false;
+        
+        // Show user-friendly toast notifications based on status code
+        if (response.status === 403) {
+          showNotification('error', 'Access denied - You do not have permission to change this project status');
+        } else if (response.status === 401) {
+          showNotification('error', 'Authentication failed - Please log in again');
+        } else if (response.status === 500) {
+          showNotification('error', 'Server error - Please try again later');
+        } else {
+          showNotification('error', 'Failed to update project status - Please try again');
+        }
+        
+        return { success: false, notificationShown: true };
       }
     } catch (error) {
-      console.error('❌ Error updating project status:', error);
-      return false;
+      showNotification('error', 'Network error - Please check your connection and try again');
+      return { success: false, notificationShown: true };
     }
   };
 
@@ -358,11 +406,15 @@ const Projects = () => {
         /* Kanban View */
         <ProjectKanban
           projects={projects}
-          onProjectStatusUpdate={handleProjectStatusUpdate}
+          onProjectStatusUpdate={async (projectId: string, newStatusId: string) => {
+            const result = await handleProjectStatusUpdate(projectId, newStatusId);
+            return result.success;
+          }}
           onProjectClick={handleProjectClick}
           loading={loading}
           statuses={statuses}
           className="min-h-96"
+          onNotification={showNotification}
         />
       ) : (
         /* List View */
@@ -383,16 +435,68 @@ const Projects = () => {
                     >
                       <FolderOpen className="w-5 h-5 text-white" />
                     </div>
-                    <button 
-                      className="p-1 hover:bg-gray-100 rounded shrink-0"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // TODO: Add dropdown menu functionality here
-                      }}
-                      title="More actions"
-                    >
-                      <MoreVertical className="w-4 h-4 text-gray-400" />
-                    </button>
+                    <div className="relative">
+                      <button 
+                        className="p-1 hover:bg-gray-100 rounded shrink-0"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenDropdownId(openDropdownId === project.id ? null : project.id);
+                        }}
+                        title="Change project status"
+                      >
+                        <MoreVertical className="w-4 h-4 text-gray-400" />
+                      </button>
+                      
+                      {/* Status Dropdown Menu */}
+                      {openDropdownId === project.id && (
+                        <div className="absolute right-0 top-8 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                          <div className="py-1">
+                            <div className="px-3 py-2 text-xs font-medium text-gray-500 border-b border-gray-100">
+                              Change Status
+                            </div>
+                            {statuses.map((status) => (
+                              <button
+                                key={status.id}
+                                className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50 flex items-center space-x-2"
+                                onClick={async (e) => {
+                                  console.log('🖱️ Status click detected:', { projectId: project.id, statusId: status.id, statusName: status.name });
+                                  e.stopPropagation();
+                                  
+                                  try {
+                                    console.log('🚀 About to call handleProjectStatusUpdate...');
+                                    const result = await handleProjectStatusUpdate(project.id, status.id);
+                                    console.log('✅ handleProjectStatusUpdate result:', result);
+                                    
+                                    if (result.success) {
+                                      showNotification('success', `Project status changed to ${status.name}`);
+                                    } else if (!result.notificationShown) {
+                                      // Only show generic error if specific error toast wasn't already shown
+                                      showNotification('error', 'Failed to update project status');
+                                    }
+                                  } catch (error) {
+                                    console.error('💥 Error in click handler:', error);
+                                    showNotification('error', 'Failed to update project status');
+                                  }
+                                  
+                                  setOpenDropdownId(null);
+                                }}
+                              >
+                                <div 
+                                  className="w-3 h-3 rounded-full" 
+                                  style={{ backgroundColor: status.color_code || '#6b7280' }}
+                                ></div>
+                                <span className={project.status_id === status.id ? 'font-medium text-blue-600' : 'text-gray-700'}>
+                                  {status.name}
+                                </span>
+                                {project.status_id === status.id && (
+                                  <CheckCircle className="w-4 h-4 text-blue-600 ml-auto" />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                   
                   <h3 className="font-semibold text-gray-900 mb-2 line-clamp-1">{project.name}</h3>
@@ -405,30 +509,32 @@ const Projects = () => {
                     {getStatusName(project.status_id)}
                   </span>
                   
-                  {/* Ticket Status Breakdown */}
-                  {project.stats?.statusBreakdown && Object.keys(project.stats.statusBreakdown).length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-gray-100 w-full">
-                      <h4 className="text-xs font-medium text-gray-700 mb-2">Ticket Status</h4>
-                      <div className="space-y-1 w-full">
-                        {Object.entries(project.stats.statusBreakdown).map(([statusName, count]) => (
+                  {/* Ticket Status Breakdown - Show all statuses */}
+                  <div className="mt-3 pt-3 border-t border-gray-100 w-full">
+                    <h4 className="text-xs font-medium text-gray-700 mb-2">Ticket Status</h4>
+                    <div className="space-y-1 w-full">
+                      {/* Show all available statuses with counts */}
+                      {['Open', 'In Progress', 'Under Review', 'Resolved', 'Closed'].map((statusName) => {
+                        const count = project.stats?.statusBreakdown?.[statusName] || 0;
+                        return (
                           <div key={statusName} className="flex items-center justify-between text-xs w-full">
                             <div className="flex items-center space-x-2 grow min-w-0">
                               <div className={`w-2 h-2 rounded-full ${
                                 statusName.toLowerCase().includes('open') ? 'bg-blue-500' :
                                 statusName.toLowerCase().includes('progress') ? 'bg-yellow-500' :
                                 statusName.toLowerCase().includes('review') ? 'bg-purple-500' :
-                                statusName.toLowerCase().includes('closed') ? 'bg-green-500' :
-                                statusName.toLowerCase().includes('done') ? 'bg-green-500' :
+                                statusName.toLowerCase().includes('resolved') ? 'bg-green-500' :
+                                statusName.toLowerCase().includes('closed') ? 'bg-gray-500' :
                                 'bg-gray-400'
                               }`}></div>
                               <span className="text-gray-600 truncate">{statusName}</span>
                             </div>
-                            <span className="font-medium text-gray-900">{count}</span>
+                            <span className={`font-medium ${count > 0 ? 'text-gray-900' : 'text-gray-400'}`}>{count}</span>
                           </div>
-                        ))}
-                      </div>
+                        );
+                      })}
                     </div>
-                  )}
+                  </div>
                 </div>
 
                 {/* Progress Bar */}
@@ -459,6 +565,14 @@ const Projects = () => {
                       <span className="text-gray-600">{new Date(project.created_at).toLocaleDateString()}</span>
                     </div>
                   </div>
+                  {project.stats?.managerName && (
+                    <div className="flex items-center justify-between text-xs mt-2 pt-2 border-t border-gray-200">
+                      <div className="flex items-center space-x-1">
+                        <span className="text-gray-500">Manager:</span>
+                        <span className="text-blue-600 font-medium">{project.stats.managerName}</span>
+                      </div>
+                    </div>
+                  )}
                   
                   {project.ticket_count !== undefined && (
                     <div className="flex items-center space-x-1 mt-2">
@@ -491,6 +605,26 @@ const Projects = () => {
         onClose={() => setIsCreateProjectModalOpen(false)}
         onProjectCreated={handleCreateProjectSuccess}
       />
+
+      {/* Toast Notification */}
+      {notification.show && (
+        <div
+          className={`fixed bottom-4 right-4 z-60 px-6 py-4 rounded-lg shadow-lg transition-all duration-300 ${
+            notification.type === 'success'
+              ? 'bg-green-500 text-white'
+              : notification.type === 'error'
+              ? 'bg-red-500 text-white'
+              : 'bg-blue-500 text-white'
+          }`}
+        >
+          <div className="flex items-center space-x-3">
+            {notification.type === 'success' && <CheckCircle className="w-5 h-5" />}
+            {notification.type === 'error' && <X className="w-5 h-5" />}
+            {notification.type === 'info' && <Info className="w-5 h-5" />}
+            <span className="font-medium">{notification.message}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

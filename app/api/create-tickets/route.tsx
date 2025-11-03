@@ -314,23 +314,45 @@ async function checkUserProjectPermission(userId: string, projectId: string, use
   console.log('🔧 User project assignment:', { userProject, error });
 
   if (error || !userProject) {
-    // If not assigned to project, check if they're a Manager in the organization
-    if (actualUserRole === 'Manager') {
-      // Managers can create tickets in any project in their organization
-      const { data: managerOrg } = await supabase
-        .from('user_organization_roles')
-        .select('user_id')
-        .eq('user_id', userId)
-        .eq('organization_id', orgId)
-        .single();
-
-      console.log('✅ Manager user - can create tickets in organization projects');
-      return !!managerOrg;
-    }
-    console.log('❌ User not assigned to project and not Admin/Manager');
+    // If not assigned to project, managers cannot create tickets
+    // Only users assigned to specific projects can create tickets (except Admins)
+    console.log('❌ User not assigned to project');
     return false;
   }
 
+  // If user is assigned to project, check their project-level role
+  // For Managers, they must have Manager role in this specific project
+  if (actualUserRole === 'Manager') {
+    const { data: projectRole, error: projectRoleError } = await supabase
+      .from('user_project')
+      .select(`
+        role_id,
+        global_roles!user_project_role_id_fkey(name)
+      `)
+      .eq('user_id', userId)
+      .eq('project_id', projectId)
+      .single();
+
+    console.log('🔧 Manager project role check:', { projectRole, projectRoleError });
+
+    if (projectRoleError || !projectRole) {
+      console.log('❌ Manager not found in project assignments');
+      return false;
+    }
+
+    const projectRoleName = (projectRole.global_roles as any)?.name;
+    console.log('🔧 Manager project role:', projectRoleName);
+
+    if (projectRoleName !== 'Manager') {
+      console.log('❌ Manager does not have Manager role in this project');
+      return false;
+    }
+
+    console.log('✅ Manager has Manager role in project - can create tickets');
+    return true;
+  }
+
+  // For regular users (Members), just being assigned to project is enough
   console.log('✅ User assigned to project - can create tickets');
   return true;
 }

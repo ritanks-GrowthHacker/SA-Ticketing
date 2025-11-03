@@ -23,14 +23,26 @@ ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 -- USERS TABLE  
 -- =============================================
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL,
-    email VARCHAR(255) UNIQUE NOT NULL,
-    password_hash TEXT,
-    organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
-    is_verified BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    profile_image TEXT,
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    otp CHARACTER VARYING,
+    otp_expires_at TIMESTAMP WITHOUT TIME ZONE,
+    otp_verified BOOLEAN DEFAULT false,
+    profile_picture_url TEXT,
+    about TEXT,
+    phone CHARACTER VARYING,
+    location CHARACTER VARYING,
+    job_title CHARACTER VARYING,
+    department CHARACTER VARYING,
+    date_of_birth DATE,
+    profile_updated_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+    email_notifications_enabled BOOLEAN DEFAULT true,
+    dark_mode_enabled BOOLEAN DEFAULT false
 );
 
 -- Enable RLS for users
@@ -222,6 +234,10 @@ CREATE TABLE IF NOT EXISTS otp_verifications (
 -- Users indexes
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_organization_id ON users(organization_id);
+CREATE INDEX IF NOT EXISTS idx_users_profile_picture ON users(profile_picture_url) WHERE profile_picture_url IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_job_title ON users(job_title) WHERE job_title IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_department ON users(department) WHERE department IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_location ON users(location) WHERE location IS NOT NULL;
 
 -- Projects indexes
 CREATE INDEX IF NOT EXISTS idx_projects_organization_id ON projects(organization_id);
@@ -309,6 +325,15 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
+-- Function to update profile_updated_at timestamp for profile changes
+CREATE OR REPLACE FUNCTION update_profile_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.profile_updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 -- Triggers for updated_at
 DROP TRIGGER IF EXISTS update_organizations_updated_at ON organizations;
 CREATE TRIGGER update_organizations_updated_at BEFORE UPDATE ON organizations 
@@ -317,6 +342,22 @@ CREATE TRIGGER update_organizations_updated_at BEFORE UPDATE ON organizations
 DROP TRIGGER IF EXISTS update_users_updated_at ON users;
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users 
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Profile-specific update trigger
+DROP TRIGGER IF EXISTS trigger_update_profile_updated_at ON users;
+CREATE TRIGGER trigger_update_profile_updated_at
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    WHEN (OLD.name IS DISTINCT FROM NEW.name OR 
+          OLD.email IS DISTINCT FROM NEW.email OR
+          OLD.profile_picture_url IS DISTINCT FROM NEW.profile_picture_url OR
+          OLD.about IS DISTINCT FROM NEW.about OR
+          OLD.phone IS DISTINCT FROM NEW.phone OR
+          OLD.location IS DISTINCT FROM NEW.location OR
+          OLD.job_title IS DISTINCT FROM NEW.job_title OR
+          OLD.department IS DISTINCT FROM NEW.department OR
+          OLD.date_of_birth IS DISTINCT FROM NEW.date_of_birth)
+    EXECUTE FUNCTION update_profile_updated_at();
 
 DROP TRIGGER IF EXISTS update_projects_updated_at ON projects;
 CREATE TRIGGER update_projects_updated_at BEFORE UPDATE ON projects 

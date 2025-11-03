@@ -48,7 +48,7 @@ interface TicketsResponse {
 }
 
 const Tickets = () => {
-  const { token, organization } = useAuthStore();
+  const { token, organization, currentProject } = useAuthStore();
   const router = useRouter();
   const searchParams = useSearchParams();
   
@@ -112,6 +112,8 @@ const Tickets = () => {
       if (roleFilter !== 'all') params.set('role', roleFilter);
       params.set('page', currentPage.toString());
       params.set('limit', '10');
+      // Add cache busting parameter for fresh data
+      params.set('_t', Date.now().toString());
 
       const response = await fetch(`/api/search-tickets?${params.toString()}`, {
         headers: {
@@ -154,6 +156,8 @@ const Tickets = () => {
       if (roleFilter !== 'all') params.set('role', roleFilter);
       params.set('page', page.toString());
       params.set('limit', '10');
+      // Add cache busting parameter for fresh data
+      params.set('_t', Date.now().toString());
 
       const response = await fetch(`/api/search-tickets?${params.toString()}`, {
         headers: {
@@ -264,16 +268,32 @@ const Tickets = () => {
   // Effects
   useEffect(() => {
     if (token && organization?.id) {
+      console.log('🔄 Tickets: Refreshing due to auth/project change:', {
+        projectName: currentProject?.name,
+        projectRole: currentProject?.role
+      });
       fetchEntities();
       fetchTickets();
     }
-  }, [token, organization?.id]);
+  }, [token || null, organization?.id || null, currentProject?.id || null, currentProject?.role || null]);
 
   useEffect(() => {
     if (token && organization?.id) {
       fetchTickets();
     }
   }, [statusFilter, priorityFilter, projectFilter, roleFilter]);
+
+  // Auto-refresh for managers to see new tickets immediately
+  useEffect(() => {
+    if (!currentProject?.role || currentProject.role !== 'Manager') return;
+    
+    const interval = setInterval(() => {
+      console.log('🔄 Auto-refreshing tickets for Manager...');
+      fetchTickets();
+    }, 10000); // Refresh every 10 seconds for managers
+    
+    return () => clearInterval(interval);
+  }, [currentProject?.role || null, token || null, organization?.id || null]);
 
   // Priority color mapping
   const getPriorityColor = (priority: string) => {

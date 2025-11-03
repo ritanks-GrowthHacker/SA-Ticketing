@@ -1,5 +1,15 @@
 'use client';
 
+/**
+ * Manager Dashboard Component
+ * 
+ * Fixed Issues:
+ * - Ensures API calls always include project_id parameter to prevent showing aggregated data from all managed projects
+ * - Validates selectedProject state before making API calls to avoid race conditions
+ * - Auto-selects first project when none is selected to ensure proper initialization
+ * - Prevents cross-tab sync from triggering API calls without valid project context
+ */
+
 import React, { useState, useEffect } from 'react';
 import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, User, Target, Filter, LayoutGrid, List } from 'lucide-react';
 import { UserRoleModal, TicketModal } from '../../../components/modals';
@@ -8,8 +18,12 @@ import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
 import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
 
-const ManagerDashboard = () => {
-  const { token, organization, roles } = useAuthStore();
+interface ManagerDashboardProps {
+  projectId?: string | null;
+}
+
+const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
+  const { token, organization, roles, currentProject, switchProject } = useAuthStore();
   const { 
     getCachedData, 
     setCachedData, 
@@ -22,7 +36,9 @@ const ManagerDashboard = () => {
     lastUpdateTimestamp
   } = useDashboardStore();
   
-  const [selectedProject, setSelectedProject] = useState('all');
+  const [selectedProject, setSelectedProject] = useState(projectId || '');
+  const [availableProjects, setAvailableProjects] = useState<Array<{ id: string; name: string; role?: string }>>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState<string | undefined>(undefined);
@@ -35,10 +51,43 @@ const ManagerDashboard = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
   
-  // Fetch dashboard metrics with caching
+  // Fetch available projects first, then dashboard metrics
   useEffect(() => {
-    fetchDashboardMetrics();
-  }, [selectedProject, token, currentPage]);
+    if (token && organization?.id && !projectsLoaded) {
+      fetchAvailableProjects();
+    } else if (selectedProject && selectedProject.trim() !== '' && token && projectsLoaded) {
+      fetchDashboardMetrics();
+    }
+  }, [selectedProject, token, currentPage, projectsLoaded]);
+
+  // Fetch available projects for the manager
+  const fetchAvailableProjects = async () => {
+    try {
+      const response = await fetch('/api/get-all-projects?format=dropdown', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const projects = data.projects || [];
+        setAvailableProjects(projects);
+        setProjectsLoaded(true);
+        
+        // Auto-select first project if none is selected
+        if (projects.length > 0 && (!selectedProject || selectedProject.trim() === '')) {
+          const firstProject = projects[0];
+
+          setSelectedProject(firstProject.id);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching available projects:', error);
+      setProjectsLoaded(true);
+    }
+  };
 
   // Setup cross-tab synchronization
   useEffect(() => {
@@ -48,27 +97,32 @@ const ManagerDashboard = () => {
 
   // Refresh when cross-tab updates detected
   useEffect(() => {
-    if (lastUpdateTimestamp > 0) {
-      console.log('🔄 Cross-tab update detected, refreshing dashboard...');
+    if (lastUpdateTimestamp > 0 && selectedProject && selectedProject.trim() !== '' && projectsLoaded) {
       fetchDashboardMetrics();
     }
-  }, [lastUpdateTimestamp]);
+  }, [lastUpdateTimestamp, selectedProject, projectsLoaded]);
 
-  // Effect to handle cache loading on component mount
+  // Update selected project when projectId prop changes
   useEffect(() => {
-    if (organization?.id && token) {
-      const projectId = selectedProject === 'all' ? null : selectedProject;
-      const cachedMetrics = getCachedData(projectId, organization.id);
+    if (projectId && projectId !== selectedProject) {
+      setSelectedProject(projectId);
+    }
+  }, [projectId]);
+
+  // Effect to handle cache loading on component mount  
+  useEffect(() => {
+    if (organization?.id && token && selectedProject && selectedProject.trim() !== '' && projectsLoaded) {
+      const projectIdForCache = selectedProject;
+      const cachedMetrics = getCachedData(projectIdForCache, organization.id);
       
       if (cachedMetrics) {
         setMetrics(cachedMetrics);
         setLoading(false);
-        console.log('✅ Manager Dashboard data loaded from cache');
       } else {
         fetchDashboardMetrics();
       }
     }
-  }, [organization?.id, token]);
+  }, [organization?.id, token, selectedProject, projectsLoaded, currentProject?.role || null]);
 
   // Fetch statuses on component mount
   useEffect(() => {
@@ -77,10 +131,26 @@ const ManagerDashboard = () => {
     }
   }, [token]);
 
+  // Auto-refresh dashboard metrics for managers to see immediate updates
+  useEffect(() => {
+    if (!currentProject?.role || currentProject.role !== 'Manager') return;
+    if (!selectedProject || !token || !organization?.id) return;
+    
+    console.log('🔄 Setting up auto-refresh for Manager Dashboard...');
+    const interval = setInterval(() => {
+      console.log('🔄 Auto-refreshing dashboard metrics for Manager...');
+      fetchDashboardMetrics(true); // Force refresh to bypass cache
+    }, 15000); // Refresh every 15 seconds for managers
+    
+    return () => {
+      console.log('🛑 Clearing dashboard auto-refresh interval');
+      clearInterval(interval);
+    };
+  }, [currentProject?.role || null, selectedProject || null, token || null, organization?.id || null]);
+
   // Fetch ticket statuses for drag-and-drop board
   const fetchStatuses = async () => {
     try {
-      console.log('🔄 MANAGER: Fetching statuses from /api/all-get-entities...');
       const response = await fetch('/api/all-get-entities', {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -88,15 +158,8 @@ const ManagerDashboard = () => {
         }
       });
 
-      console.log('📥 MANAGER: Status fetch response:', {
-        ok: response.ok,
-        status: response.status,
-        statusText: response.statusText
-      });
-
       if (response.ok) {
         const data = await response.json();
-        console.log('📊 MANAGER: Full API response:', data);
         
         if (data.data?.statuses?.ticket) {
           const formattedStatuses = data.data.statuses.ticket.map((status: any) => ({
@@ -104,20 +167,11 @@ const ManagerDashboard = () => {
             name: status.name,
             color: status.color_code || '#6b7280'
           }));
-          console.log('📊 MANAGER: Formatted statuses:', formattedStatuses);
           setStatuses(formattedStatuses);
-        } else {
-          console.warn('⚠️ MANAGER: No ticket statuses found in response structure');
         }
-      } else {
-        const errorText = await response.text();
-        console.error('❌ MANAGER: Status fetch failed:', {
-          status: response.status,
-          error: errorText
-        });
       }
     } catch (error) {
-      console.error('❌ MANAGER: Status fetch exception:', error);
+      console.error('Error fetching statuses:', error);
     }
   };
 
@@ -128,29 +182,34 @@ const ManagerDashboard = () => {
       
       if (!token || !organization?.id) return;
 
-      const projectId = selectedProject === 'all' ? null : selectedProject;
+      // Ensure we have a valid project ID to prevent fetching aggregated data
+      if (!selectedProject || selectedProject.trim() === '') {
+        setLoading(false);
+        setDashboardLoading(false);
+        return;
+      }
+
+      const projectIdForApi = selectedProject;
       
       // Check cache first (unless force refresh is requested)
       if (!forceRefresh) {
-        const cachedMetrics = getCachedData(projectId, organization.id);
+        const cachedMetrics = getCachedData(projectIdForApi, organization.id);
         if (cachedMetrics) {
           setMetrics(cachedMetrics);
           setLoading(false);
           setDashboardLoading(false);
-          console.log('✅ Manager Dashboard data loaded from cache');
+          console.log('✅ Loaded from cache for project:', projectIdForApi);
           return;
         }
       }
 
-      console.log('🔄 Fetching manager dashboard data from API...');
-
       // Build URL with project filter and pagination
       const params = new URLSearchParams();
-      if (selectedProject && selectedProject !== 'all') {
-        params.set('project_id', selectedProject);
-      }
+      params.set('project_id', selectedProject);
       params.set('page', currentPage.toString());
       params.set('limit', itemsPerPage.toString());
+      // Add cache busting parameter for fresh data
+      params.set('_t', Date.now().toString());
       
       const url = `/api/get-dashboard-metrics?${params.toString()}`;
 
@@ -170,14 +229,13 @@ const ManagerDashboard = () => {
         
         // Cache the metrics
         const userRole = roles?.join(',') || 'manager';
-        setCachedData(dashboardMetrics, projectId, userRole, organization.id);
+        setCachedData(dashboardMetrics, projectIdForApi, userRole, organization.id);
         
-        // Set default project if not selected and projects are available
-        if (!selectedProject && dashboardMetrics.quickStats?.availableProjects?.length > 0) {
-          setSelectedProject(dashboardMetrics.quickStats.availableProjects[0].id);
+        // Update available projects if not already set
+        if (dashboardMetrics.quickStats?.availableProjects && !projectsLoaded) {
+          setAvailableProjects(dashboardMetrics.quickStats.availableProjects);
+          setProjectsLoaded(true);
         }
-        
-        console.log('✅ Manager Dashboard data fetched and cached');
       }
     } catch (error) {
       console.error('Error fetching dashboard metrics:', error);
@@ -203,7 +261,7 @@ const ManagerDashboard = () => {
       });
 
       if (response.ok) {
-        console.log('✅ Ticket status updated successfully');
+
         
         // Broadcast update to other tabs
         broadcastUpdate('ticket_updated', { ticketId, newStatusId });
@@ -242,15 +300,15 @@ const ManagerDashboard = () => {
   };
 
   const managedProjects = metrics?.quickStats?.availableProjects || [];
-  const currentProject = managedProjects.find((p: any) => p.id === selectedProject);
+  const selectedProjectData = managedProjects.find((p: any) => p.id === selectedProject);
 
   // Prepare stats from API data
   const projectStats = metrics ? [
     {
       title: 'Project Tickets',
-      value: metrics.overview.totalTickets?.value || 0,
-      change: metrics.overview.totalTickets?.change || '0%',
-      changeType: metrics.overview.totalTickets?.changeType || 'neutral',
+      value: metrics.overview.projectTickets?.value || 0,
+      change: metrics.overview.projectTickets?.change || '0%',
+      changeType: metrics.overview.projectTickets?.changeType || 'neutral',
       icon: Ticket
     },
     {
@@ -278,29 +336,62 @@ const ManagerDashboard = () => {
 
   const projectTickets = metrics?.recentActivity || [];
 
-  const teamMembers = [
-    { name: 'Alice Johnson', role: 'Frontend Developer', tickets: 5, status: 'Active' },
-    { name: 'Bob Smith', role: 'Backend Developer', tickets: 8, status: 'Active' },
-    { name: 'Carol Davis', role: 'UI/UX Designer', tickets: 3, status: 'Active' },
-    { name: 'David Wilson', role: 'QA Engineer', tickets: 6, status: 'Active' }
-  ];
+  // Get actual team members from API data
+  const teamMembers = (metrics as any)?.teamMembers || [];
+  console.log('🔍 MANAGER DASHBOARD: Team Members Debug:', {
+    'metrics exists': !!metrics,
+    'teamMembers': teamMembers,
+    'teamMembers length': teamMembers.length,
+    'full metrics': metrics
+  });
 
   return (
     <div className="space-y-6">
       {/* Header with Project Selection */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Manager Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
           <p className="text-gray-600 mt-1">Manage your assigned projects and team</p>
         </div>
         
         <div className="flex items-center space-x-3">
-          {/* Project Selector */}
+          {/* Project Filter */}
           <ProjectSelect
             value={selectedProject}
-            onValueChange={setSelectedProject}
-            placeholder="Select your project"
-            includeAllOption={true}
+            onValueChange={async (value) => {
+              setSelectedProject(value);
+              if (value && value !== 'all') {
+                try {
+                  // Call the switch project API
+                  const response = await fetch('/api/switch-project', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ projectId: value })
+                  });
+
+                  if (response.ok) {
+                    const data = await response.json();
+                    // Update the auth store with the new token and project data
+                    switchProject({
+                      token: data.token,
+                      project: {
+                        ...data.project,
+                        role: data.role  // Add the role to the project object
+                      }
+                    });
+                  } else {
+                    throw new Error('Failed to switch project');
+                  }
+                } catch (error) {
+                  console.error('Failed to switch project:', error);
+                }
+              }
+            }}
+            placeholder={availableProjects.find(p => p.id === selectedProject)?.name || "Loading projects..."}
+            includeAllOption={false}
           />
           
           <span className="text-sm text-gray-500 bg-blue-50 px-3 py-1 rounded-full">
@@ -314,7 +405,10 @@ const ManagerDashboard = () => {
             Manage Team
           </button>
           
-          <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+          <button 
+            onClick={() => setIsTicketModalOpen(true)}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
             Create Ticket
           </button>
         </div>
@@ -323,7 +417,7 @@ const ManagerDashboard = () => {
       {/* Project Stats */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">{currentProject?.name} Overview</h3>
+          <h3 className="text-lg font-semibold text-gray-900">{selectedProjectData?.name || currentProject?.name} Overview</h3>
           <div className="flex items-center space-x-2">
             <div className="w-3 h-3 bg-green-500 rounded-full"></div>
             <span className="text-sm text-gray-600">Project Active</span>
@@ -357,7 +451,12 @@ const ManagerDashboard = () => {
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-900">Project Tickets</h3>
               <div className="flex items-center space-x-3">
-                <span className="text-sm text-gray-500">{projectTickets.length} active</span>
+                <span className="text-sm text-gray-500">
+                  {selectedProject ? 
+                    (metrics?.overview?.projectTickets?.value || 0) : 
+                    (metrics?.overview?.totalTickets?.value || 0)
+                  } active
+                </span>
                 <div className="flex bg-gray-100 rounded-lg p-1">
                   <button
                     onClick={() => setShowDragDropView(false)}
@@ -418,7 +517,9 @@ const ManagerDashboard = () => {
                       <div className="w-2 h-2 bg-blue-600 rounded-full"></div>
                       <div>
                         <h4 className="font-medium text-gray-900">{ticket.title}</h4>
-                        <p className="text-sm text-gray-600">Assigned to {ticket.assignedTo} • {ticket.time}</p>
+                        <p className="text-sm text-gray-600">
+                          {ticket.project && `${ticket.project} • `}Assigned to {ticket.assignedTo} • {ticket.time}
+                        </p>
                       </div>
                     </div>
                     <div className="flex items-center space-x-2">
@@ -521,7 +622,10 @@ const ManagerDashboard = () => {
               <h3 className="text-lg font-semibold text-gray-900">Quick Actions</h3>
             </div>
             <div className="p-6 space-y-3">
-              <button className="w-full flex items-center justify-between p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+              <button 
+                onClick={() => setIsTicketModalOpen(true)}
+                className="w-full flex items-center justify-between p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+              >
                 <span className="font-medium text-gray-900">Create Ticket</span>
                 <Ticket className="w-5 h-5 text-gray-400" />
               </button>
@@ -546,7 +650,7 @@ const ManagerDashboard = () => {
             </div>
             <div className="p-6">
               <div className="space-y-3">
-                {teamMembers.map((member, index) => (
+                {teamMembers.map((member: any, index: number) => (
                   <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div className="flex items-center space-x-3">
                       <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">

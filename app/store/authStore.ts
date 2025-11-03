@@ -46,6 +46,13 @@ export interface AuthState {
   role: string | null
   roles: string[]
   
+  // Project Context (for project switching)
+  currentProject: {
+    id: string
+    name: string
+    role: string
+  } | null
+  
   // Organization Data
   statuses: Status[]
   roles_list: Role[]
@@ -64,6 +71,14 @@ export interface AuthState {
     token: string
   }) => void
   logout: () => void
+  switchProject: (projectData: {
+    token: string
+    project: {
+      id: string
+      name: string
+      role: string
+    }
+  }) => void
   setOrgData: (data: {
     statuses?: Status[]
     roles?: Role[]
@@ -91,6 +106,7 @@ export const useAuthStore = create<AuthState>()(
       organization: null,
       role: null,
       roles: [],
+      currentProject: null,
       statuses: [],
       roles_list: [],
       departments: [],
@@ -126,10 +142,40 @@ export const useAuthStore = create<AuthState>()(
           organization: null,
           role: null,
           roles: [],
+          currentProject: null,
           statuses: [],
           roles_list: [],
           departments: [],
         })
+      },
+
+      switchProject: (projectData) => {
+        const currentState = get();
+        
+        console.log('🔄 Switching project in store:', {
+          from: currentState.currentProject?.name || 'none',
+          to: projectData.project.name,
+          newRole: projectData.project.role
+        });
+
+        // Clear dashboard cache when switching projects
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem('dashboard-storage');
+            console.log('🗑️ Cleared dashboard cache for project switch');
+          } catch (error) {
+            console.warn('Failed to clear dashboard cache:', error);
+          }
+        }
+        
+        // Update state with new project context and token
+        set({
+          token: projectData.token,
+          role: projectData.project.role, // Update current role to project role
+          currentProject: projectData.project,
+        });
+
+        console.log('✅ Project switched successfully in store');
       },
 
       setOrgData: (data) => {
@@ -165,7 +211,11 @@ export const useAuthStore = create<AuthState>()(
       },
 
       hasRole: (roleName) => {
-        return get().roles.includes(roleName)
+        const state = get();
+        // Check both global roles array and current project role
+        return state.roles.includes(roleName) || 
+               state.role === roleName ||
+               (state.currentProject?.role === roleName);
       },
 
       isAdmin: () => {
@@ -185,6 +235,7 @@ export const useAuthStore = create<AuthState>()(
         organization: state.organization,
         role: state.role,
         roles: state.roles,
+        currentProject: state.currentProject,
         statuses: state.statuses,
         roles_list: state.roles_list,
         departments: state.departments,
@@ -217,6 +268,8 @@ export const useAuth = () => {
   const role = useAuthStore(state => state.role)
   const roles = useAuthStore(state => state.roles)
   const token = useAuthStore(state => state.token)
+  const currentProject = useAuthStore(state => state.currentProject)
+  const switchProject = useAuthStore(state => state.switchProject)
   const isAdmin = useAuthStore(state => state.isAdmin)
   const hasRole = useAuthStore(state => state.hasRole)
 
@@ -227,6 +280,8 @@ export const useAuth = () => {
     role,
     roles,
     token,
+    currentProject,
+    switchProject,
     isAdmin,
     hasRole,
   }
@@ -253,6 +308,7 @@ export const useOrgData = () => {
 export const useAuthActions = () => {
   const login = useAuthStore(state => state.login)
   const logout = useAuthStore(state => state.logout)
+  const switchProject = useAuthStore(state => state.switchProject)
   const setOrgData = useAuthStore(state => state.setOrgData)
   const updateUser = useAuthStore(state => state.updateUser)
   const setLoading = useAuthStore(state => state.setLoading)
@@ -261,6 +317,7 @@ export const useAuthActions = () => {
   return {
     login,
     logout,
+    switchProject,
     setOrgData,
     updateUser,
     setLoading,

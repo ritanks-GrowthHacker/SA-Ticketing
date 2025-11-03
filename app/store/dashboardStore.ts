@@ -16,6 +16,16 @@ export interface ActivityItem {
   project?: string;
   priority: string;
   assignedTo: string;
+  creator?: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  assignee?: {
+    id: string;
+    name: string;
+    email: string;
+  };
 }
 
 export interface ChartDataPoint {

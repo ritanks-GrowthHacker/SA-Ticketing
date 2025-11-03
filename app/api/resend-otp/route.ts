@@ -10,8 +10,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Email and type are required" }, { status: 400 });
     }
 
-    if (!['registration', 'login'].includes(type)) {
-      return NextResponse.json({ error: "Invalid type. Must be 'registration' or 'login'" }, { status: 400 });
+    if (!['registration', 'login', 'password-reset'].includes(type)) {
+      return NextResponse.json({ error: "Invalid type. Must be 'registration', 'login', or 'password-reset'" }, { status: 400 });
     }
 
     // Get user
@@ -29,18 +29,54 @@ export async function POST(req: Request) {
     const otp = OTPService.generateOTP();
     const otpExpiresAt = OTPService.getExpiryTime();
 
-    // Update user with new OTP
-    const { error: updateError } = await supabase
-      .from("users")
-      .update({
-        otp,
-        otp_expires_at: otpExpiresAt.toISOString()
-      })
-      .eq("id", user.id);
+    if (type === 'password-reset') {
+      // Handle password reset OTP differently
+      try {
+        // Try to store in user_otps table first
+        const { error: otpError } = await supabase
+          .from("user_otps")
+          .upsert({
+            user_id: user.id,
+            otp: otp,
+            purpose: 'password_reset',
+            expires_at: otpExpiresAt.toISOString(),
+            created_at: new Date().toISOString()
+          });
 
-    if (updateError) {
-      console.error("OTP update error:", updateError);
-      return NextResponse.json({ error: "Failed to generate new OTP" }, { status: 500 });
+        if (otpError) {
+          // Fallback: store in users table
+          const { error: userUpdateError } = await supabase
+            .from("users")
+            .update({
+              reset_otp: otp,
+              reset_otp_expires: otpExpiresAt.toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", user.id);
+
+          if (userUpdateError) {
+            console.error("Failed to store password reset OTP:", userUpdateError);
+            return NextResponse.json({ error: "Failed to generate new OTP" }, { status: 500 });
+          }
+        }
+      } catch (e) {
+        console.error("Error storing password reset OTP:", e);
+        return NextResponse.json({ error: "Failed to generate new OTP" }, { status: 500 });
+      }
+    } else {
+      // Handle login/registration OTP
+      const { error: updateError } = await supabase
+        .from("users")
+        .update({
+          otp,
+          otp_expires_at: otpExpiresAt.toISOString()
+        })
+        .eq("id", user.id);
+
+      if (updateError) {
+        console.error("OTP update error:", updateError);
+        return NextResponse.json({ error: "Failed to generate new OTP" }, { status: 500 });
+      }
     }
 
     // Send OTP email

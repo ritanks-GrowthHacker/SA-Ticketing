@@ -67,10 +67,33 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [pendingRoleChanges, setPendingRoleChanges] = useState<Record<string, string>>({});
 
-  const { token, organization, hasRole } = useAuth();
+  const { token, organization, hasRole, user: currentUser } = useAuth();
 
   // Check if current user can manage roles
   const canManage = hasRole('Admin') || hasRole('Manager') || hasRole('Team Lead');
+
+  // Helper function to filter available roles based on role hierarchy
+  const getAvailableRolesForUser = (targetUser?: User) => {
+    const currentUserIsAdmin = hasRole('Admin');
+    const currentUserIsManager = hasRole('Manager');
+    
+    return availableRoles.filter(role => {
+      // Only Admins can assign Admin roles
+      if (role.name === 'Admin' && !currentUserIsAdmin) {
+        return false;
+      }
+      
+      // Managers cannot change other Managers' roles
+      if (currentUserIsManager && !currentUserIsAdmin) {
+        const targetUserIsManager = targetUser?.currentRole?.name === 'Manager';
+        if (targetUserIsManager && role.name !== 'Manager') {
+          return false; // Manager trying to change another Manager's role
+        }
+      }
+      
+      return true;
+    });
+  };
 
   useEffect(() => {
     if (isOpen && canManage && token && organization?.id) {
@@ -94,6 +117,12 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
   const fetchUsers = async () => {
     try {
       setIsLoading(true);
+      console.log('🔧 UserRoleModal: Fetching users with token, hasRole check:', {
+        hasAdmin: hasRole('Admin'),
+        hasManager: hasRole('Manager'),
+        hasTeamLead: hasRole('Team Lead'),
+        canManage: hasRole('Admin') || hasRole('Manager') || hasRole('Team Lead')
+      });
       const response = await fetch(`/api/manage-user-role?organization_id=${organization?.id}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -400,7 +429,7 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
                   required
                 >
                   <option value="">Select Role</option>
-                  {availableRoles.map((role) => (
+                  {getAvailableRolesForUser().map((role) => (
                     <option key={role.id} value={role.id}>
                       {role.name} {role.description && `- ${role.description}`}
                     </option>
@@ -478,8 +507,16 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
                         {/* Check if current user can modify this user */}
                         {(() => {
                           const isUserAdmin = user.currentRole?.name === 'Admin';
+                          const isUserManager = user.currentRole?.name === 'Manager';
                           const currentUserIsAdmin = hasRole('Admin');
-                          const canModifyThisUser = currentUserIsAdmin || !isUserAdmin;
+                          const currentUserIsManager = hasRole('Manager');
+                          const isSelf = user.email === currentUser?.email;
+                          
+                          // Enhanced permissions logic
+                          const canModifyThisUser = !isSelf && (
+                            currentUserIsAdmin || // Admins can modify anyone
+                            (currentUserIsManager && !isUserAdmin && !isUserManager) // Managers can only modify non-Admin/non-Manager users
+                          );
                           
                           return canModifyThisUser ? (
                             <select
@@ -494,7 +531,7 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
                               className="text-xs px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                               <option value="">No Role</option>
-                              {availableRoles.map((role) => (
+                              {getAvailableRolesForUser(user).map((role) => (
                                 <option key={role.id} value={role.id}>
                                   {role.name}
                                 </option>
@@ -503,7 +540,7 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
                           ) : (
                             <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 border border-gray-300 rounded flex items-center">
                               <Shield className="h-3 w-3 mr-1" />
-                              Protected
+                              {isSelf ? 'Self' : 'Protected'}
                             </span>
                           );
                         })()}
@@ -512,8 +549,16 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
                       {/* Remove Button */}
                       {(() => {
                         const isUserAdmin = user.currentRole?.name === 'Admin';
+                        const isUserManager = user.currentRole?.name === 'Manager';
                         const currentUserIsAdmin = hasRole('Admin');
-                        const canRemoveThisUser = currentUserIsAdmin || !isUserAdmin;
+                        const currentUserIsManager = hasRole('Manager');
+                        const isSelf = user.email === currentUser?.email;
+                        
+                        // Enhanced permissions logic for removal
+                        const canRemoveThisUser = !isSelf && (
+                          currentUserIsAdmin || // Admins can remove anyone
+                          (currentUserIsManager && !isUserAdmin && !isUserManager) // Managers can only remove non-Admin/non-Manager users
+                        );
                         
                         return canRemoveThisUser ? (
                           <button
@@ -528,7 +573,15 @@ export default function UserRoleModal({ isOpen, onClose }: UserRoleModalProps) {
                           <button
                             disabled={true}
                             className="p-1 text-gray-400 cursor-not-allowed"
-                            title="Admin users cannot be removed by non-admins"
+                            title={
+                              isSelf 
+                                ? "You cannot remove yourself" 
+                                : isUserAdmin 
+                                  ? "Admin users cannot be removed by non-admins"
+                                  : isUserManager
+                                    ? "Manager users cannot be removed by other managers"
+                                    : "Insufficient permissions"
+                            }
                           >
                             <Shield className="h-4 w-4" />
                           </button>

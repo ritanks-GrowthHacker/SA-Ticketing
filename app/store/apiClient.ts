@@ -209,6 +209,19 @@ export class ApiClient {
 
     return this.handleResponse(response)
   }
+
+  // Generic fetch with auth
+  static async fetchWithAuth(url: string, options: RequestInit = {}) {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...this.getAuthHeaders(),
+        ...options.headers,
+      },
+    })
+
+    return this.handleResponse(response)
+  }
 }
 
 // React hooks for API calls
@@ -255,5 +268,9 @@ export const useApiClient = () => {
     
     getProjects: (params?: Parameters<typeof ApiClient.getProjects>[0]) =>
       ApiClient.getProjects(params),
+    
+    // Generic fetch with auth
+    fetchWithAuth: (url: string, options?: RequestInit) =>
+      ApiClient.fetchWithAuth(url, options),
   }
 }

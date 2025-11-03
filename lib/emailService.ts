@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { supabase } from "@/app/db/connections";
 
 interface EmailOptions {
   to: string | string[];
@@ -77,6 +78,68 @@ class EmailService {
     }
   }
 
+  // Check if user has email notifications enabled
+  async checkEmailPreference(userEmail: string): Promise<boolean> {
+    try {
+      const { data: user, error } = await supabase
+        .from("users")
+        .select("email_notifications_enabled")
+        .eq("email", userEmail)
+        .single();
+
+      if (error) {
+        console.error("Error checking email preference:", error);
+        return true; // Default to sending emails if we can't check preference
+      }
+
+      return user?.email_notifications_enabled ?? true; // Default to true if not set
+    } catch (error) {
+      console.error("Error checking email preference:", error);
+      return true; // Default to sending emails on error
+    }
+  }
+
+  // Enhanced sendEmail method that checks user preferences
+  async sendEmailWithPreferenceCheck(options: EmailOptions): Promise<{ success: boolean; messageId?: string; error?: string; skipped?: boolean }> {
+    try {
+      // Check if it's an array of recipients
+      const recipients = Array.isArray(options.to) ? options.to : [options.to];
+      const filteredRecipients: string[] = [];
+
+      // Check each recipient's email preference
+      for (const recipient of recipients) {
+        const canSendEmail = await this.checkEmailPreference(recipient);
+        if (canSendEmail) {
+          filteredRecipients.push(recipient);
+        } else {
+          console.log(`📧 Skipping email to ${recipient} - notifications disabled`);
+        }
+      }
+
+      // If no recipients have email notifications enabled, skip sending
+      if (filteredRecipients.length === 0) {
+        return { 
+          success: true, 
+          skipped: true,
+          error: "All recipients have email notifications disabled" 
+        };
+      }
+
+      // Send email to filtered recipients
+      return this.sendEmail({
+        ...options,
+        to: filteredRecipients.length === 1 ? filteredRecipients[0] : filteredRecipients
+      });
+
+    } catch (error) {
+      console.error("Error in sendEmailWithPreferenceCheck:", error);
+      return { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error occurred' 
+      };
+    }
+  }
+
   // Predefined email templates
   async sendTeamAssignmentEmail(to: string, projectName: string, role: string, assigneeName: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
     const html = `
@@ -97,7 +160,7 @@ class EmailService {
       </div>
     `;
 
-    return this.sendEmail({
+    return this.sendEmailWithPreferenceCheck({
       to,
       subject: `Team Assignment - ${projectName}`,
       html,
@@ -124,7 +187,7 @@ class EmailService {
       </div>
     `;
 
-    return this.sendEmail({
+    return this.sendEmailWithPreferenceCheck({
       to,
       subject: `Ticket ${status} - ${ticketId}`,
       html,
@@ -238,7 +301,7 @@ Best regards,
 SA Ticketing System
     `;
 
-    return this.sendEmail({
+    return this.sendEmailWithPreferenceCheck({
       to,
       subject: `🎫 New Ticket Assigned: ${title} (#${ticketId})`,
       html,
@@ -359,9 +422,71 @@ Best regards,
 SA Ticketing System
     `;
 
-    return this.sendEmail({
+    return this.sendEmailWithPreferenceCheck({
       to,
       subject: `🔄 Ticket Updated: ${title} (#${ticketId})`,
+      html,
+      text: textContent
+    });
+  }
+
+  // Send OTP for password change
+  async sendPasswordChangeOTP(to: string, userName: string, otp: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    const html = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #2563eb; margin: 0;">🔐 Password Change Request</h1>
+        </div>
+        
+        <div style="background-color: #f8fafc; padding: 24px; border-radius: 12px; border-left: 4px solid #2563eb;">
+          <p style="margin: 0 0 16px 0; font-size: 16px;">Hi <strong>${userName}</strong>,</p>
+          <p style="margin: 0 0 20px 0; color: #64748b;">You have requested to change your password. Please use the following OTP to verify your identity:</p>
+          
+          <div style="text-align: center; margin: 24px 0;">
+            <div style="display: inline-block; background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); color: white; padding: 16px 32px; border-radius: 8px; font-size: 32px; font-weight: bold; letter-spacing: 8px; font-family: 'Courier New', monospace;">
+              ${otp}
+            </div>
+          </div>
+          
+          <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 16px; margin: 20px 0;">
+            <p style="margin: 0; color: #92400e; font-size: 14px;">
+              <strong>⚠️ Security Notice:</strong><br>
+              • This OTP is valid for <strong>10 minutes</strong> only<br>
+              • Do not share this code with anyone<br>
+              • If you didn't request this change, please ignore this email
+            </p>
+          </div>
+        </div>
+        
+        <div style="margin-top: 30px; padding: 20px; background-color: #f1f5f9; border-radius: 8px;">
+          <p style="margin: 0; font-size: 14px; color: #64748b; text-align: center;">
+            This is an automated message from Ticketing Metrix System.<br>
+            If you have any concerns, please contact your system administrator.
+          </p>
+        </div>
+      </div>
+    `;
+
+    const textContent = `
+      Password Change Request
+      
+      Hi ${userName},
+      
+      You have requested to change your password. Please use the following OTP to verify your identity:
+      
+      OTP: ${otp}
+      
+      Security Notice:
+      - This OTP is valid for 10 minutes only
+      - Do not share this code with anyone  
+      - If you didn't request this change, please ignore this email
+      
+      This is an automated message from Ticketing Metrix System.
+    `;
+
+    return this.sendEmail({
+      to,
+      subject: `🔐 Password Change OTP - ${otp}`,
       html,
       text: textContent
     });

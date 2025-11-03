@@ -31,10 +31,33 @@ export default function UserRoleManagement() {
   const [newUserRole, setNewUserRole] = useState('');
   const [isAddingUser, setIsAddingUser] = useState(false);
 
-  const { token, organization, hasRole } = useAuth();
+  const { token, organization, hasRole, user: currentUser } = useAuth();
 
   // Check if current user can manage roles
   const canManage = hasRole('Admin') || hasRole('Manager') || hasRole('Team Lead');
+
+  // Helper function to filter available roles based on role hierarchy
+  const getAvailableRolesForUser = (targetUser?: User) => {
+    const currentUserIsAdmin = hasRole('Admin');
+    const currentUserIsManager = hasRole('Manager');
+    
+    return availableRoles.filter(role => {
+      // Only Admins can assign Admin roles
+      if (role.name === 'Admin' && !currentUserIsAdmin) {
+        return false;
+      }
+      
+      // Managers cannot change other Managers' roles
+      if (currentUserIsManager && !currentUserIsAdmin) {
+        const targetUserIsManager = targetUser?.currentRole?.name === 'Manager';
+        if (targetUserIsManager && role.name !== 'Manager') {
+          return false; // Manager trying to change another Manager's role
+        }
+      }
+      
+      return true;
+    });
+  };
 
   useEffect(() => {
     if (canManage && token && organization?.id) {
@@ -217,7 +240,7 @@ export default function UserRoleManagement() {
             required
           >
             <option value="">Select Role</option>
-            {availableRoles.map((role) => (
+            {getAvailableRolesForUser().map((role) => (
               <option key={role.id} value={role.id}>
                 {role.name}
               </option>
@@ -262,34 +285,74 @@ export default function UserRoleManagement() {
                   </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <select
-                    value={user.currentRole?.id || ''}
-                    onChange={(e) => {
-                      const selectedRole = availableRoles.find(r => r.id === e.target.value);
-                      if (selectedRole) {
-                        updateUserRole(user.userId, selectedRole.id, selectedRole.name);
-                      }
-                    }}
-                    className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  >
-                    <option value="">No Role</option>
-                    {availableRoles.map((role) => (
-                      <option key={role.id} value={role.id}>
-                        {role.name}
-                      </option>
-                    ))}
-                  </select>
+                  {(() => {
+                    const isUserAdmin = user.currentRole?.name === 'Admin';
+                    const isUserManager = user.currentRole?.name === 'Manager';
+                    const currentUserIsAdmin = hasRole('Admin');
+                    const currentUserIsManager = hasRole('Manager');
+                    const isSelf = user.email === currentUser?.email;
+                    
+                    // Enhanced permissions logic
+                    const canModifyThisUser = !isSelf && (
+                      currentUserIsAdmin || // Admins can modify anyone
+                      (currentUserIsManager && !isUserAdmin && !isUserManager) // Managers can only modify non-Admin/non-Manager users
+                    );
+                    
+                    return canModifyThisUser ? (
+                      <select
+                        value={user.currentRole?.id || ''}
+                        onChange={(e) => {
+                          const selectedRole = availableRoles.find(r => r.id === e.target.value);
+                          if (selectedRole) {
+                            updateUserRole(user.userId, selectedRole.id, selectedRole.name);
+                          }
+                        }}
+                        className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        <option value="">No Role</option>
+                        {getAvailableRolesForUser(user).map((role) => (
+                          <option key={role.id} value={role.id}>
+                            {role.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 border border-gray-300 rounded">
+                        {user.currentRole?.name || 'No Role'} {isSelf ? '(Self)' : '(Protected)'}
+                      </span>
+                    );
+                  })()}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                   {new Date(user.joinedAt).toLocaleDateString()}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                  <button
-                    onClick={() => removeUser(user.userId, user.name)}
-                    className="text-red-600 hover:text-red-900"
-                  >
-                    Remove
-                  </button>
+                  {(() => {
+                    const isUserAdmin = user.currentRole?.name === 'Admin';
+                    const isUserManager = user.currentRole?.name === 'Manager';
+                    const currentUserIsAdmin = hasRole('Admin');
+                    const currentUserIsManager = hasRole('Manager');
+                    const isSelf = user.email === currentUser?.email;
+                    
+                    // Enhanced permissions logic for removal
+                    const canRemoveThisUser = !isSelf && (
+                      currentUserIsAdmin || // Admins can remove anyone
+                      (currentUserIsManager && !isUserAdmin && !isUserManager) // Managers can only remove non-Admin/non-Manager users
+                    );
+                    
+                    return canRemoveThisUser ? (
+                      <button
+                        onClick={() => removeUser(user.userId, user.name)}
+                        className="text-red-600 hover:text-red-900"
+                      >
+                        Remove
+                      </button>
+                    ) : (
+                      <span className="text-gray-400 text-sm">
+                        {isSelf ? 'Self' : 'Protected'}
+                      </span>
+                    );
+                  })()}
                 </td>
               </tr>
             ))}

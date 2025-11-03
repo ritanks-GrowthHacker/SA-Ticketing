@@ -155,9 +155,35 @@ export async function GET(request: NextRequest) {
     const isCreator = ticket.created_by === decoded.sub || ticket.created_by === decoded.userId;
     const isAssignee = ticket.assigned_to === decoded.sub || ticket.assigned_to === decoded.userId;
 
+    // Check if user has Manager role in the same project
+    let isProjectManager = false;
+    if (userRole === 'Manager') {
+      const { data: userProjectRole, error: roleError } = await supabase
+        .from('user_project')
+        .select(`
+          project_id, role_id,
+          global_roles!user_project_role_id_fkey(name)
+        `)
+        .eq('user_id', decoded.sub || decoded.userId)
+        .eq('project_id', ticket.project_id)
+        .single();
+      
+      console.log('🔧 PROJECT MANAGER CHECK:', {
+        userProjectRole,
+        roleError,
+        userId: decoded.sub || decoded.userId,
+        projectId: ticket.project_id,
+        globalRoleName: (userProjectRole as any)?.global_roles?.name
+      });
+      
+      if (!roleError && userProjectRole && (userProjectRole as any).global_roles?.name === 'Manager') {
+        isProjectManager = true;
+      }
+    }
+
     // Debug logging to help identify the issue
     console.log(`[GET-TICKET-${Date.now()}] Access Control Debug:`, {
-      requestMethod: 'POST',
+      requestMethod: 'GET',
       ticketId: ticketId,
       userRole,
       ticketCreatedBy: ticket.created_by,
@@ -165,11 +191,13 @@ export async function GET(request: NextRequest) {
       decodedUserId: decoded.userId,
       ticketAssignedTo: ticket.assigned_to,
       isCreator,
-      isAssignee
+      isAssignee,
+      isProjectManager,
+      projectId: ticket.project_id
     });
 
-    // Check permissions based on role
-    const hasAccess = userRole === 'Admin' || isCreator || isAssignee;
+    // Check permissions based on role - Admin, Creator, Assignee, or Project Manager
+    const hasAccess = userRole === 'Admin' || isCreator || isAssignee || isProjectManager;
     
     console.log('Permission Check:', {
       hasAccess,
@@ -177,7 +205,8 @@ export async function GET(request: NextRequest) {
       isAdmin: userRole === 'Admin',
       isCreator,
       isAssignee,
-      condition: `${userRole} === 'Admin': ${userRole === 'Admin'} || isCreator: ${isCreator} || isAssignee: ${isAssignee}`
+      isProjectManager,
+      condition: `${userRole} === 'Admin': ${userRole === 'Admin'} || isCreator: ${isCreator} || isAssignee: ${isAssignee} || isProjectManager: ${isProjectManager}`
     });
 
     if (!hasAccess) {
@@ -186,14 +215,16 @@ export async function GET(request: NextRequest) {
         isAdmin: userRole === 'Admin',
         isCreator,
         isAssignee,
+        isProjectManager,
         ticketCreatedBy: ticket.created_by,
         userSubId: decoded.sub,
         userUserId: decoded.userId,
+        projectId: ticket.project_id,
         hasAccess
       });
       
       return NextResponse.json(
-        { error: 'Access denied - You can only view tickets you created or are assigned to' },
+        { error: 'Access denied - You can only view tickets you created, are assigned to, or manage within your projects' },
         { status: 403 }
       );
     }
@@ -244,11 +275,12 @@ export async function GET(request: NextRequest) {
           sort_order: priority.sort_order
         } : null,
         permissions: {
-          can_edit: userRole === 'Admin' || userRole === 'Manager' || isCreator || isAssignee,
-          can_delete: userRole === 'Admin' || userRole === 'Manager' || isCreator,
-          can_assign: userRole === 'Admin' || userRole === 'Manager',
+          can_edit: userRole === 'Admin' || isProjectManager || isCreator || isAssignee,
+          can_delete: userRole === 'Admin' || isProjectManager || isCreator,
+          can_assign: userRole === 'Admin' || isProjectManager,
           is_creator: isCreator,
-          is_assignee: isAssignee
+          is_assignee: isAssignee,
+          is_project_manager: isProjectManager
         }
       }
     };

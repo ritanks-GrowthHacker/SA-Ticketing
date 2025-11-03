@@ -43,29 +43,34 @@ export async function GET(req: Request) {
     const search = url.searchParams.get("search");
     const includeStats = url.searchParams.get("includeStats") === "true";
 
-    // Check if user belongs to the organization
-    const { data: userOrg, error: userOrgError } = await supabase
-      .from("user_organization_roles")
+    // Check if user belongs to the organization  
+    const { data: userOrgRole, error: orgRoleError } = await supabase
+      .from('user_organization_roles')
       .select(`
-        user_id,
-        organization_id,
         role_id,
-        organizations(id, name, domain),
-        global_roles!user_organization_roles_role_id_fkey(id, name, description)
+        global_roles!user_organization_roles_role_id_fkey(name)
       `)
-      .eq("user_id", decodedToken.sub)
-      .eq("organization_id", decodedToken.org_id)
-      .maybeSingle();
+      .eq('user_id', decodedToken.sub)
+      .eq('organization_id', decodedToken.org_id)
+      .single();
 
-    if (userOrgError || !userOrg) {
-      console.error("User organization validation error:", userOrgError);
+    if (orgRoleError || !userOrgRole) {
+      console.error("User organization validation error:", orgRoleError);
       return NextResponse.json(
         { error: "User not found or unauthorized" }, 
         { status: 403 }
       );
     }
 
-    const userRole = (userOrg as any).global_roles?.name;
+    // Prioritize JWT role (project-specific) over global org role
+    let actualUserRole = decodedToken.role || 'Member';
+    
+    // Only use global org role as fallback if no JWT role is provided
+    if (!decodedToken.role && userOrgRole && userOrgRole.global_roles) {
+      actualUserRole = (userOrgRole.global_roles as any).name;
+    }
+
+    const userRole = actualUserRole;
 
     let projectsQuery;
 
@@ -244,6 +249,43 @@ export async function GET(req: Request) {
       });
     }
 
+    // If format is user-projects, return user's project assignments with roles
+    if (format === "user-projects") {
+      console.log("🔧 DEBUG: Fetching user project assignments for switching...");
+      
+      const { data: userProjects, error: userProjectsError } = await supabase
+        .from("user_project")
+        .select(`
+          project_id,
+          role_id,
+          projects!user_project_project_id_fkey(
+            id,
+            name
+          ),
+          global_roles!user_project_role_id_fkey(
+            id,
+            name
+          )
+        `)
+        .eq('user_id', decodedToken.sub);
+
+      if (userProjectsError) {
+        console.error('❌ Error fetching user projects:', userProjectsError);
+        return NextResponse.json(
+          { error: "Failed to fetch user project assignments" },
+          { status: 500 }
+        );
+      }
+
+      console.log('✅ User projects fetched:', userProjects?.length || 0, 'assignments');
+      
+      return NextResponse.json({
+        message: "User project assignments retrieved successfully",
+        projects: userProjects,
+        success: true
+      });
+    }
+
     // Get all project statuses for the organization first
     const { data: projectStatuses, error: statusesError } = await supabase
       .from("project_statuses")
@@ -289,6 +331,14 @@ export async function GET(req: Request) {
           const totalCount = allProjectTickets?.length || 0;
           const teamMembersCount = teamMembers?.length || 0;
 
+          // Find project manager from team members
+          const projectManager = teamMembers?.find(member => 
+            (member.global_roles as any)?.name === 'Manager'
+          );
+          const managerName = projectManager 
+            ? (projectManager.users as any)?.name 
+            : null;
+
           // Count tickets by status - find completed/closed tickets  
           const completedTickets = allProjectTickets?.filter(t => {
             const statusName = (t as any).statuses?.name?.toLowerCase() || '';
@@ -328,6 +378,7 @@ export async function GET(req: Request) {
             openTickets: openCount,
             completedTickets: completedCount,
             teamMembers: teamMembersCount,
+            managerName,
             completionRate: totalCount > 0 
               ? Math.round((completedCount / totalCount) * 100)
               : 0,
@@ -371,7 +422,7 @@ export async function GET(req: Request) {
     // Fallback: If no statuses found, provide the known statuses
     let statusesToReturn = projectStatuses;
     if (!projectStatuses || projectStatuses.length === 0) {
-      console.log('⚠️ No statuses found in DB query, using fallback statuses');
+      console.log('⚠️ No statuses found in DB query, using fallback statuses for org:', decodedToken.org_id);
       statusesToReturn = [
         {
           id: "d05ef4b9-63be-42e2-b4a2-3d85537b9b7d",
@@ -380,7 +431,7 @@ export async function GET(req: Request) {
           color_code: "#10b981",
           sort_order: 2,
           is_active: true,
-          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+          organization_id: decodedToken.org_id
         },
         {
           id: "f85e266d-7b75-4b08-b775-2fc17ca4b2a6",
@@ -389,7 +440,7 @@ export async function GET(req: Request) {
           color_code: "#f59e0b",
           sort_order: 1,
           is_active: true,
-          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+          organization_id: decodedToken.org_id
         },
         {
           id: "9e001b85-22f5-435f-a95e-f546621c0ce3",
@@ -398,7 +449,7 @@ export async function GET(req: Request) {
           color_code: "#f97316", 
           sort_order: 3,
           is_active: true,
-          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+          organization_id: decodedToken.org_id
         },
         {
           id: "af968d18-dfcc-4d69-93d9-9e7932155ccd",
@@ -407,7 +458,7 @@ export async function GET(req: Request) {
           color_code: "#3b82f6",
           sort_order: 4,
           is_active: true,
-          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+          organization_id: decodedToken.org_id
         },
         {
           id: "66a0ccee-c989-4835-a828-bd9765958cf6",
@@ -416,7 +467,7 @@ export async function GET(req: Request) {
           color_code: "#6b7280",
           sort_order: 5,
           is_active: true,
-          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+          organization_id: decodedToken.org_id
         },
         {
           id: "df41226f-a012-4f83-95e0-c91b0f25f70a",
@@ -425,10 +476,17 @@ export async function GET(req: Request) {
           color_code: "#ef4444",
           sort_order: 6,
           is_active: true,
-          organization_id: "61b54072-4c6e-4482-857e-7a00a3bac5e2"
+          organization_id: decodedToken.org_id
         }
       ];
+      console.log('🔧 Fallback statuses created:', statusesToReturn.length, 'statuses');
     }
+
+    console.log('📤 FINAL API RESPONSE:', {
+      statusesCount: statusesToReturn?.length || 0,
+      statusesToReturn: statusesToReturn,
+      projectsCount: enrichedProjects.length
+    });
 
     return NextResponse.json({
       message: "Projects retrieved successfully",

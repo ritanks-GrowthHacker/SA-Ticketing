@@ -91,24 +91,50 @@ export async function PUT(req: NextRequest) {
       console.log('⚠️ Using fallback status validation for:', status_id);
     }
 
-    // Check permissions - Admin can update any project, Manager/User can update projects they are assigned to
-    const userRole = decodedToken.role;
+    // Permission check: Allow Admins OR check if JWT user is the Manager of this project
+    console.log('🔧 Project status update - User:', decodedToken.sub, 'Project:', project_id, 'JWT Role:', decodedToken.role);
     
-    if (userRole !== 'Admin') {
-      // Check if user is assigned to this project
-      const { data: userProject, error: userProjectError } = await supabase
+    // Check if user is Admin (can update any project)
+    if (decodedToken.role === 'Admin') {
+      console.log('✅ Global Admin access granted - can update any project');
+    } else {
+      // For non-Admins: Check if user has Manager role for this specific project
+      console.log('🔍 Checking if user is Manager of this project...');
+      
+      const { data: userProjectRole, error: roleCheckError } = await supabase
         .from('user_project')
-        .select('user_id, project_id')
-        .eq('user_id', decodedToken.sub)
+        .select(`
+          user_id,
+          global_roles!user_project_role_id_fkey(name)
+        `)
         .eq('project_id', project_id)
+        .eq('user_id', decodedToken.sub)
         .single();
 
-      if (userProjectError || !userProject) {
+      if (roleCheckError || !userProjectRole) {
+        console.log('❌ User not assigned to this project:', { roleCheckError, userId: decodedToken.sub, project_id });
         return NextResponse.json(
-          { error: "You don't have permission to update this project" }, 
+          { error: "Access denied. You are not assigned to this project." }, 
           { status: 403 }
         );
       }
+
+      const userRole = (userProjectRole.global_roles as any)?.name;
+      console.log('🔍 User role in this project:', userRole);
+
+      if (userRole !== 'Manager') {
+        console.log('❌ User does not have Manager role in this project:', { 
+          userRole, 
+          userId: decodedToken.sub,
+          project_id 
+        });
+        return NextResponse.json(
+          { error: `Access denied. Only project managers can update project status. Your role: ${userRole}` }, 
+          { status: 403 }
+        );
+      }
+      
+      console.log('✅ User confirmed as project manager - access granted');
     }
 
     // Update the project status

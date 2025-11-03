@@ -128,15 +128,34 @@ export async function GET(req: Request) {
     }
 
     const organizationId = tokenData.org_id;
-    const userRoles = tokenData.roles || [];
-    const isAdmin = userRoles.includes('Admin');
-    const isManager = userRoles.includes('Manager') || userRoles.includes('Team Lead');
+    const userId = tokenData.sub; // User ID from token
+    
+    // Get user's organization role using global roles system
+    const { data: userOrgRole, error: orgRoleError } = await supabase
+      .from('user_organization_roles')
+      .select(`
+        role_id,
+        global_roles!user_organization_roles_role_id_fkey(name)
+      `)
+      .eq('user_id', userId)
+      .eq('organization_id', organizationId)
+      .single();
 
-    if (!isAdmin && !isManager) {
-      return NextResponse.json({ 
-        error: "Access denied. Only Admin, Manager, or Team Lead can access metrics" 
-      }, { status: 403 });
+    // Prioritize JWT role (project-specific) over global org role
+    let actualUserRole = tokenData.role || 'Member';
+    
+    // Only use global org role as fallback if no JWT role is provided
+    if (!tokenData.role && userOrgRole && userOrgRole.global_roles) {
+      actualUserRole = (userOrgRole.global_roles as any).name;
     }
+
+    const isAdmin = actualUserRole === 'Admin';
+    const isManager = actualUserRole === 'Manager';
+    const isMember = actualUserRole === 'Member' || actualUserRole === 'Viewer';
+
+    console.log('🔧 Dashboard metrics - JWT role:', tokenData.role);
+    console.log('🔧 Dashboard metrics - Global org role:', userOrgRole?.global_roles ? (userOrgRole.global_roles as any).name : 'none');
+    console.log('🔧 Dashboard metrics - Final role:', actualUserRole);
 
     const dateRanges = getDateRanges();
 
@@ -405,8 +424,14 @@ export async function GET(req: Request) {
       if (projectId && projectId !== 'all') {
         // SPECIFIC PROJECT METRICS
         const targetProjectId = projectId;
-        // Project Tickets
+        // Project Tickets - Get all tickets for the project (not filtered by date for total count)
         const { data: projectTickets } = await supabase
+          .from('tickets')
+          .select('id, created_at, status_id, priority_id')
+          .eq('project_id', targetProjectId);
+        
+        // Project Tickets for current month (for comparison metrics)
+        const { data: currentMonthTickets } = await supabase
           .from('tickets')
           .select('id, created_at, status_id, priority_id')
           .eq('project_id', targetProjectId)
@@ -429,12 +454,11 @@ export async function GET(req: Request) {
           `)
           .eq('project_id', targetProjectId);
 
-        // Completion Rate (tickets with 'completed' status)
+        // Completion Rate (tickets with 'completed' status) - for all project tickets
         const { data: completedTickets } = await supabase
           .from('tickets')
           .select('id, statuses!inner(name)')
-          .eq('project_id', targetProjectId)
-          .gte('created_at', dateRanges.currentMonthStart);
+          .eq('project_id', targetProjectId);
 
         const completionRate = projectTickets?.length ? 
           ((completedTickets?.filter(t => (t as any).statuses?.name?.toLowerCase().includes('complete') || 
@@ -475,12 +499,12 @@ export async function GET(req: Request) {
 
         metrics.overview = {
           projectTickets: {
-            value: projectTickets?.length || 0,
+            value: projectTickets?.length || 0, // Total tickets in project (all time)
             change: calculatePercentageChange(
-              projectTickets?.length || 0,
-              previousProjectTickets?.length || 0
+              currentMonthTickets?.length || 0,    // Current month tickets
+              previousProjectTickets?.length || 0  // Previous month tickets
             ),
-            changeType: (projectTickets?.length || 0) >= (previousProjectTickets?.length || 0) ? 'positive' : 'neutral'
+            changeType: (currentMonthTickets?.length || 0) >= (previousProjectTickets?.length || 0) ? 'positive' : 'neutral'
           },
           teamMembers: {
             value: projectTeamMembers?.length || 0,
@@ -520,12 +544,43 @@ export async function GET(req: Request) {
             role: (mp as any).global_roles?.name
           })) || []
         };
+
+        // Get ticket counts for each team member
+        const teamMemberTicketCounts = projectTeamMembers ? await Promise.all(
+          projectTeamMembers.map(async (member) => {
+            const { count } = await supabase
+              .from('tickets')
+              .select('id', { count: 'exact', head: true })
+              .eq('project_id', targetProjectId)
+              .eq('assigned_to', (member as any).users?.id);
+            return { userId: (member as any).users?.id, ticketCount: count || 0 };
+          })
+        ) : [];
+
+        // Add team members data with ticket counts
+        (metrics as any).teamMembers = projectTeamMembers?.map(member => {
+          const ticketCount = teamMemberTicketCounts.find(tc => tc.userId === (member as any).users?.id)?.ticketCount || 0;
+          return {
+            id: (member as any).users?.id,
+            name: (member as any).users?.name,
+            email: (member as any).users?.email,
+            role: (member as any).global_roles?.name,
+            tickets: ticketCount,
+            status: 'Active' // Default status
+          };
+        }) || [];
       } else if (projectIds.length > 0) {
         // ALL PROJECTS METRICS FOR MANAGER - Aggregate across all managed projects
         console.log('🔧 MANAGER ALL PROJECTS: Aggregating metrics for projects:', projectIds);
 
-        // Get all tickets from managed projects
+        // Get all tickets from managed projects (all time for total count)
         const { data: allProjectTickets } = await supabase
+          .from('tickets')
+          .select('id, created_at, status_id, priority_id, project_id')
+          .in('project_id', projectIds);
+        
+        // Get current month tickets for comparison metrics
+        const { data: currentMonthAllTickets } = await supabase
           .from('tickets')
           .select('id, created_at, status_id, priority_id, project_id')
           .in('project_id', projectIds)
@@ -544,16 +599,16 @@ export async function GET(req: Request) {
           .select(`
             user_id, role_id, project_id,
             users!inner(id, name, email),
+            projects!inner(id, name),
             global_roles!user_project_role_id_fkey(name)
           `)
           .in('project_id', projectIds);
 
-        // Get completed tickets across all projects
+        // Get completed tickets across all projects (all time)
         const { data: allCompletedTickets } = await supabase
           .from('tickets')
           .select('id, statuses!inner(name)')
-          .in('project_id', projectIds)
-          .gte('created_at', dateRanges.currentMonthStart);
+          .in('project_id', projectIds);
 
         const completionRate = allProjectTickets?.length ? 
           ((allCompletedTickets?.filter(t => (t as any).statuses?.name?.toLowerCase().includes('complete') || 
@@ -599,12 +654,12 @@ export async function GET(req: Request) {
 
         metrics.overview = {
           totalTickets: {
-            value: allProjectTickets?.length || 0,
+            value: allProjectTickets?.length || 0, // Total tickets across all projects (all time)
             change: calculatePercentageChange(
-              allProjectTickets?.length || 0,
-              previousAllProjectTickets?.length || 0
+              currentMonthAllTickets?.length || 0,    // Current month tickets
+              previousAllProjectTickets?.length || 0  // Previous month tickets
             ),
-            changeType: (allProjectTickets?.length || 0) >= (previousAllProjectTickets?.length || 0) ? 'positive' : 'neutral'
+            changeType: (currentMonthAllTickets?.length || 0) >= (previousAllProjectTickets?.length || 0) ? 'positive' : 'neutral'
           },
           activeProjects: {
             value: projectIds.length,
@@ -645,6 +700,33 @@ export async function GET(req: Request) {
             role: (mp as any).global_roles?.name
           })) || []
         };
+
+        // Get ticket counts for each team member across all projects
+        const allTeamMemberTicketCounts = allProjectTeamMembers ? await Promise.all(
+          allProjectTeamMembers.map(async (member) => {
+            const { count } = await supabase
+              .from('tickets')
+              .select('id', { count: 'exact', head: true })
+              .in('project_id', projectIds)
+              .eq('assigned_to', (member as any).users?.id);
+            return { userId: (member as any).users?.id, ticketCount: count || 0 };
+          })
+        ) : [];
+
+        // Add aggregated team members data with ticket counts
+        (metrics as any).teamMembers = allProjectTeamMembers?.map(member => {
+          const ticketCount = allTeamMemberTicketCounts.find(tc => tc.userId === (member as any).users?.id)?.ticketCount || 0;
+          return {
+            id: (member as any).users?.id,
+            name: (member as any).users?.name,
+            email: (member as any).users?.email,
+            role: (member as any).global_roles?.name,
+            projectId: member.project_id,
+            projectName: (member as any).projects?.name || 'Unknown Project',
+            tickets: ticketCount,
+            status: 'Active' // Default status
+          };
+        }) || [];
       } else {
         // No managed projects - empty state
         console.log('⚠️ MANAGER: No managed projects found');
@@ -664,6 +746,193 @@ export async function GET(req: Request) {
           hasPreviousPage: false
         };
       }
+    } else if (isMember) {
+      // MEMBER METRICS - Only show data from projects where member is assigned
+      
+      // Get projects where user is assigned as member
+      const { data: memberProjects, error: memberProjectsError } = await supabase
+        .from('user_project')
+        .select(`
+          project_id, role_id,
+          projects!inner(id, name, organization_id),
+          global_roles!user_project_role_id_fkey(name)
+        `)
+        .eq('user_id', userId)
+        .eq('projects.organization_id', organizationId);
+
+      console.log('🔧 MEMBER PROJECTS QUERY:', { memberProjects, memberProjectsError, userId, organizationId });
+
+      const projectIds = memberProjects?.map(mp => mp.project_id) || [];
+      console.log('🔧 MEMBER DEBUG: Assigned projects:', projectIds, 'Selected project:', projectId);
+
+      // Apply project filtering if specific project selected
+      const filteredProjectIds = projectId && projectId !== 'all' 
+        ? projectIds.filter(id => id === projectId)
+        : projectIds;
+
+      console.log('🔧 MEMBER DEBUG: Filtered project IDs:', filteredProjectIds);
+
+      if (filteredProjectIds.length > 0) {
+        // MEMBER-SPECIFIC METRICS - Only from assigned/filtered projects
+        
+        // Get tickets from assigned/filtered projects only
+        console.log('🎯 MEMBER: Checking all tickets in projects:', filteredProjectIds);
+        
+        const { data: memberTickets, error: memberTicketsError } = await supabase
+          .from('tickets')
+          .select('id, created_at, status_id, priority_id')
+          .in('project_id', filteredProjectIds);
+
+        console.log('🎯 MEMBER: All tickets in projects result:', { memberTickets, memberTicketsError, count: memberTickets?.length });
+        
+        // Current month tickets from assigned/filtered projects
+        const { data: currentMonthMemberTickets } = await supabase
+          .from('tickets')
+          .select('id, created_at, status_id, priority_id')
+          .in('project_id', filteredProjectIds)
+          .gte('created_at', dateRanges.currentMonthStart);
+
+        // Previous month tickets for comparison
+        const { data: previousMemberTickets } = await supabase
+          .from('tickets')
+          .select('id')
+          .in('project_id', filteredProjectIds)
+          .gte('created_at', dateRanges.previousMonthStart)
+          .lt('created_at', dateRanges.currentMonthStart);
+
+        // My assigned tickets
+        const { data: myAssignedTickets } = await supabase
+          .from('tickets')
+          .select('id, created_at, status_id, priority_id')
+          .in('project_id', filteredProjectIds)
+          .eq('assigned_to', userId);
+
+        // My created tickets  
+        const { data: myCreatedTickets } = await supabase
+          .from('tickets')
+          .select('id, created_at, status_id, priority_id')
+          .in('project_id', filteredProjectIds)
+          .eq('created_by', userId);
+
+        // Recent tickets from my projects with details
+        console.log('🎯 MEMBER: Querying tickets for projects:', filteredProjectIds, 'offset:', offset, 'limit:', limit);
+        
+        const { data: recentMemberTickets, error: recentTicketsError } = await supabase
+          .from('tickets')
+          .select(`
+            id, title, created_at, status_id, priority_id, assigned_to, created_by,
+            projects(name),
+            creator:users!tickets_created_by_fkey(name, email),
+            assignee:users!tickets_assigned_to_fkey(name, email),
+            statuses!tickets_status_id_fkey(name, color_code)
+          `)
+          .in('project_id', filteredProjectIds)
+          .order('created_at', { ascending: false })
+          .limit(limit);
+
+        console.log('🎯 MEMBER: Recent tickets query result:', { recentMemberTickets, recentTicketsError });
+
+        // Calculate completion rate for member's tickets
+        const completedMemberTickets = myAssignedTickets?.filter(ticket => {
+          // Assuming status_id check - you might need to adjust based on your statuses
+          return (ticket as any).statuses?.name === 'Completed' || (ticket as any).statuses?.name === 'Closed';
+        }) || [];
+        
+        const completionRate = myAssignedTickets?.length ? 
+          Math.round((completedMemberTickets.length / myAssignedTickets.length) * 100) : 0;
+
+        // Build member overview
+        metrics.overview = {
+          myAssignedTickets: {
+            value: myAssignedTickets?.length || 0,
+            change: '0', // Could compare with previous period
+            changeType: 'neutral'
+          },
+          myCreatedTickets: {
+            value: myCreatedTickets?.length || 0,
+            change: '0', // Could compare with previous period
+            changeType: 'neutral'
+          },
+          projectsInvolved: {
+            value: projectIds.length,
+            change: '+0',
+            changeType: 'neutral'
+          },
+          myCompletionRate: {
+            value: `${completionRate}%`,
+            change: '+0%', // Could be calculated based on previous period
+            changeType: 'neutral'
+          }
+        };
+
+        console.log('🎯 MEMBER: recentMemberTickets raw data:', recentMemberTickets);
+
+        metrics.recentActivity = recentMemberTickets?.map(ticket => ({
+          id: ticket.id,
+          title: ticket.title,
+          status: (ticket as any).statuses?.name || 'Unknown',
+          time: formatTimeAgo(ticket.created_at),
+          project: (ticket as any).projects?.name || 'Unknown Project',
+          assignedTo: (ticket as any).assignee?.name || 'Unassigned',
+          createdBy: (ticket as any).creator?.name || 'Unknown',
+          assigned_to: (ticket as any).assignee?.name || 'Unassigned',
+          created_by: (ticket as any).creator?.name || 'Unknown',
+          priority: 'Normal' // Simplified
+        })) || [];
+
+        console.log('🎯 MEMBER: Formatted recentActivity:', metrics.recentActivity);
+
+        // Add member-specific data
+        metrics.quickStats = {
+          memberInfo: {
+            assignedProjects: memberProjects?.map(mp => ({
+              id: mp.project_id,
+              name: (mp as any).projects?.name,
+              role: (mp as any).global_roles?.name
+            })) || [],
+            totalProjectTickets: memberTickets?.length || 0,
+            myTicketRatio: myAssignedTickets?.length ? 
+              Math.round(((myAssignedTickets.length) / (memberTickets?.length || 1)) * 100) : 0
+          }
+        };
+
+        // Pagination for member tickets
+        const totalMemberTickets = memberTickets?.length || 0;
+        const totalPages = Math.ceil(totalMemberTickets / limit);
+        
+        metrics.pagination = {
+          currentPage: page,
+          totalPages,
+          totalItems: totalMemberTickets,
+          itemsPerPage: limit,
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1
+        };
+
+      } else {
+        // No assigned projects - empty state for member
+        console.log('⚠️ MEMBER: No assigned projects found');
+        metrics.overview = {
+          myAssignedTickets: { value: 0, change: '0%', changeType: 'neutral' },
+          myCreatedTickets: { value: 0, change: '0%', changeType: 'neutral' },
+          projectsInvolved: { value: 0, change: '0', changeType: 'neutral' },
+          myCompletionRate: { value: '0%', change: '0%', changeType: 'neutral' }
+        };
+        metrics.recentActivity = [];
+        metrics.pagination = {
+          currentPage: 1,
+          totalPages: 0,
+          totalItems: 0,
+          itemsPerPage: limit,
+          hasNextPage: false,
+          hasPreviousPage: false
+        };
+      }
+    } else {
+      // Unauthorized role
+      return NextResponse.json({ 
+        error: "Access denied. User role not recognized" 
+      }, { status: 403 });
     }
 
     // Chart data (simplified - could be more sophisticated)

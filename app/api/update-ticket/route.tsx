@@ -132,12 +132,30 @@ export async function PUT(request: NextRequest) {
     const isCreator = existingTicket.created_by === decoded.sub || existingTicket.created_by === decoded.userId;
     const isAssignee = existingTicket.assigned_to === decoded.sub || existingTicket.assigned_to === decoded.userId;
 
-    // Check edit permissions: Admin, Manager, Creator, or Assignee
-    const canEdit = userRole === 'Admin' || userRole === 'Manager' || isCreator || isAssignee;
+    // Check if user has Manager role in the same project
+    let isProjectManager = false;
+    if (userRole === 'Manager') {
+      const { data: userProjectRole, error: roleError } = await supabase
+        .from('user_project')
+        .select(`
+          project_id, role_id,
+          global_roles!user_project_role_id_fkey(name)
+        `)
+        .eq('user_id', decoded.sub || decoded.userId)
+        .eq('project_id', existingTicket.project_id)
+        .single();
+      
+      if (!roleError && userProjectRole && (userProjectRole as any).global_roles?.name === 'Manager') {
+        isProjectManager = true;
+      }
+    }
+
+    // Check edit permissions: Admin, Project Manager, Creator, or Assignee
+    const canEdit = userRole === 'Admin' || isProjectManager || isCreator || isAssignee;
 
     if (!canEdit) {
       return NextResponse.json(
-        { error: 'Access denied - You can only edit tickets you created or are assigned to, or if you are an Admin/Manager' },
+        { error: 'Access denied - You can only edit tickets you created, are assigned to, or manage within your projects' },
         { status: 403 }
       );
     }
@@ -419,10 +437,11 @@ export async function PUT(request: NextRequest) {
         } : null,
         permissions: {
           can_edit: canEdit,
-          can_delete: userRole === 'Admin' || userRole === 'Manager' || isCreator,
-          can_assign: userRole === 'Admin' || userRole === 'Manager',
+          can_delete: userRole === 'Admin' || isProjectManager || isCreator,
+          can_assign: userRole === 'Admin' || isProjectManager,
           is_creator: isCreator,
-          is_assignee: isAssignee
+          is_assignee: isAssignee,
+          is_project_manager: isProjectManager
         }
       }
     };

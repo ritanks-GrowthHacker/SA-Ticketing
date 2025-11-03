@@ -9,9 +9,13 @@ import { useAuthStore } from '../../store/authStore';
 import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
 import { useSearchParams, useRouter } from 'next/navigation';
 
-const AdminDashboard = () => {
-  console.log('🎯 ADMIN: AdminDashboard component rendered!');
-  const { token, organization, roles } = useAuthStore();
+interface AdminDashboardProps {
+  projectId?: string | null;
+}
+
+const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
+  console.log('🎯 ADMIN: AdminDashboard component rendered with projectId:', projectId);
+  const { token, organization, roles, currentProject, switchProject } = useAuthStore();
   const searchParams = useSearchParams();
   const router = useRouter();
   
@@ -29,7 +33,7 @@ const AdminDashboard = () => {
     lastUpdateTimestamp
   } = useDashboardStore();
   
-  const [selectedProject, setSelectedProject] = useState('all');
+  const [selectedProject, setSelectedProject] = useState(projectId || 'all');
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [selectedPriority, setSelectedPriority] = useState('all');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -111,6 +115,14 @@ const AdminDashboard = () => {
       }
     }
   }, [organization?.id, token]);
+
+  // Update selected project when projectId prop changes
+  useEffect(() => {
+    if (projectId && projectId !== selectedProject) {
+      console.log('🎯 ADMIN: Project context changed, updating filter:', { from: selectedProject, to: projectId });
+      setSelectedProject(projectId);
+    }
+  }, [projectId]);
 
   // Handle ticket click for editing
   const handleTicketClick = (ticketId: string) => {
@@ -384,12 +396,10 @@ const AdminDashboard = () => {
 
   return (
     <div className="space-y-6">
-      {/* Debug Info - Removed for production */}
-      
       {/* Header with Project Filter */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Admin Dashboard</h1>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">Organization overview and management</p>
         </div>
         
@@ -397,7 +407,38 @@ const AdminDashboard = () => {
           {/* Project Filter */}
           <ProjectSelect
             value={selectedProject}
-            onValueChange={setSelectedProject}
+            onValueChange={async (value) => {
+              setSelectedProject(value);
+              if (value && value !== 'all') {
+                try {
+                  // Call the switch project API
+                  const response = await fetch('/api/switch-project', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ projectId: value })
+                  });
+
+                  if (response.ok) {
+                    const data = await response.json();
+                    // Update the auth store with the new token and project data
+                    switchProject({
+                      token: data.token,
+                      project: {
+                        ...data.project,
+                        role: data.role  // Add the role to the project object
+                      }
+                    });
+                  } else {
+                    throw new Error('Failed to switch project');
+                  }
+                } catch (error) {
+                  console.error('Failed to switch project:', error);
+                }
+              }
+            }}
             placeholder="Select project to filter"
             includeAllOption={true}
           />
@@ -742,7 +783,6 @@ const AdminDashboard = () => {
         ticketId={selectedTicketId}
         onSuccess={handleTicketSuccess}
       />
-
     </div>
   );
 };

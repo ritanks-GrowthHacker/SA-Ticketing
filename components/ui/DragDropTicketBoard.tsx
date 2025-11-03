@@ -26,7 +26,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { Ticket, AlertCircle, Clock, CheckCircle, Loader, Info, GripVertical } from 'lucide-react';
+import { Ticket, AlertCircle, Clock, CheckCircle, Loader, Info, GripVertical, X } from 'lucide-react';
 
 interface TicketItem {
   id: string;
@@ -62,6 +62,7 @@ interface DragDropTicketBoardProps {
   statuses?: Array<{ id: string; name: string; color_code?: string; type: string }>;
   className?: string;
   compact?: boolean;
+  userRole?: string; // Add user role for authorization
 }
 
 const DragDropTicketBoard: React.FC<DragDropTicketBoardProps> = ({
@@ -71,12 +72,27 @@ const DragDropTicketBoard: React.FC<DragDropTicketBoardProps> = ({
   loading = false,
   statuses = [],
   className = '',
-  compact = false
+  compact = false,
+  userRole = ''
 }) => {
   const [isClient, setIsClient] = useState(false);
   const [localTickets, setLocalTickets] = useState(tickets);
   const [updatingTickets, setUpdatingTickets] = useState<Set<string>>(new Set());
   const [activeId, setActiveId] = useState<UniqueIdentifier | null>(null);
+  
+  // Toast notification state
+  const [notification, setNotification] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+    show: boolean;
+  }>({ type: 'info', message: '', show: false });
+
+  const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
+    setNotification({ type, message, show: true });
+    setTimeout(() => {
+      setNotification(prev => ({ ...prev, show: false }));
+    }, 4000);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -253,6 +269,9 @@ const DragDropTicketBoard: React.FC<DragDropTicketBoardProps> = ({
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     setActiveId(null);
+
+    // Note: Members can change ticket status (but not project status)
+    // Authorization for specific ticket changes can be added here if needed
 
     // CRITICAL: Block ALL drag operations if no API statuses
     if (statuses.length === 0) {
@@ -687,6 +706,26 @@ const DragDropTicketBoard: React.FC<DragDropTicketBoardProps> = ({
         <div className="text-center py-12 bg-gray-50 rounded-lg">
           <Ticket className="w-12 h-12 text-gray-300 mx-auto mb-4" />
           <p className="text-gray-500">No tickets found</p>
+        </div>
+      )}
+      
+      {/* Toast Notification */}
+      {notification.show && (
+        <div
+          className={`fixed bottom-4 right-4 z-60 px-6 py-4 rounded-lg shadow-lg transition-all duration-300 ${
+            notification.type === 'success'
+              ? 'bg-green-500 text-white'
+              : notification.type === 'error'
+              ? 'bg-red-500 text-white'
+              : 'bg-blue-500 text-white'
+          }`}
+        >
+          <div className="flex items-center space-x-3">
+            {notification.type === 'success' && <CheckCircle className="w-5 h-5" />}
+            {notification.type === 'error' && <X className="w-5 h-5" />}
+            {notification.type === 'info' && <Info className="w-5 h-5" />}
+            <span className="font-medium">{notification.message}</span>
+          </div>
         </div>
       )}
     </div>

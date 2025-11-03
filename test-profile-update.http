@@ -1,0 +1,11 @@
+### Test profile update
+PUT http://localhost:3000/api/update-user-profile
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_TOKEN
+
+{
+  "name": "Updated Name",
+  "about": "This is my updated about section",
+  "phone": "+1234567890",
+  "location": "New York, NY"
+}

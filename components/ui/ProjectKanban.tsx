@@ -46,6 +46,7 @@ interface ProjectKanbanProps {
   statuses?: ProjectStatus[];
   className?: string;
   compact?: boolean;
+  onNotification?: (type: 'success' | 'error' | 'info', message: string) => void;
 }
 
 const ProjectKanban: React.FC<ProjectKanbanProps> = ({
@@ -55,7 +56,8 @@ const ProjectKanban: React.FC<ProjectKanbanProps> = ({
   loading = false,
   statuses = [],
   className = '',
-  compact = false
+  compact = false,
+  onNotification
 }) => {
   const [isClient, setIsClient] = useState(false);
   const [localProjects, setLocalProjects] = useState(projects);
@@ -251,12 +253,18 @@ const ProjectKanban: React.FC<ProjectKanbanProps> = ({
       const success = await onProjectStatusUpdate(projectId, newStatusId);
       
       if (!success) {
-        // Silently revert on failure
+        // Revert on failure and show notification
         setLocalProjects(projects);
+        if (onNotification) {
+          onNotification('error', 'Failed to update project status - insufficient permissions');
+        }
       }
     } catch (error) {
-      // Silently handle errors and revert
+      // Handle errors and revert
       setLocalProjects(projects);
+      if (onNotification) {
+        onNotification('error', 'Failed to update project status');
+      }
     } finally {
       setUpdatingProjects(prev => {
         const newSet = new Set(prev);
@@ -295,57 +303,109 @@ const ProjectKanban: React.FC<ProjectKanbanProps> = ({
         ref={setNodeRef}
         style={style}
         className={`
-          ${compact ? 'p-3' : 'p-4'} bg-white rounded-lg border-2 border-gray-200 
-          hover:border-blue-300 transition-all duration-200 cursor-pointer
-          ${isDragging ? 'opacity-50 shadow-lg scale-105 rotate-2' : 'hover:shadow-md'}
-          ${isUpdating ? 'opacity-60' : ''}
+          ${compact ? 'p-4' : 'p-5'} bg-gradient-to-br from-white to-gray-50 rounded-xl 
+          border border-gray-200 shadow-sm hover:shadow-lg hover:border-blue-300 
+          transition-all duration-300 cursor-pointer group relative overflow-hidden
+          flex flex-col h-80
+          ${isDragging ? 'opacity-75 shadow-2xl scale-105 rotate-2 z-50' : ''}
+          ${isUpdating ? 'opacity-70' : ''}
         `}
         onClick={() => onProjectClick?.(project.id)}
         {...attributes}
         {...listeners}
       >
-        <div className="flex items-start justify-between mb-3">
+        {/* Background decoration */}
+        <div className="absolute top-0 right-0 w-20 h-20 bg-gradient-to-br from-blue-50 to-transparent rounded-full opacity-50 -mr-10 -mt-10"></div>
+        
+        {/* Header Section */}
+        <div className="flex items-start justify-between mb-4">
           <div className="flex items-center space-x-2">
-            <GripVertical className="w-4 h-4 text-gray-400" />
-            {isUpdating && <Loader className="w-4 h-4 animate-spin text-blue-500" />}
+            <div className="p-2 bg-blue-100 rounded-lg group-hover:bg-blue-200 transition-colors">
+              <FolderOpen className="w-4 h-4 text-blue-600" />
+            </div>
+            {isUpdating && (
+              <div className="flex items-center space-x-1">
+                <Loader className="w-4 h-4 animate-spin text-blue-500" />
+                <span className="text-xs text-blue-600 font-medium">Updating...</span>
+              </div>
+            )}
+          </div>
+          <GripVertical className="w-4 h-4 text-gray-400 group-hover:text-gray-600 transition-colors" />
+        </div>
+        
+        {/* Content Section - grows to fill space */}
+        <div className="flex-grow">
+          <h4 className={`${compact ? 'text-base' : 'text-lg'} font-bold text-gray-900 mb-2 line-clamp-2 group-hover:text-blue-900 transition-colors`}>
+            {project.name}
+          </h4>
+          
+          {project.description && (
+            <p className="text-sm text-gray-600 mb-4 line-clamp-2 leading-relaxed">
+              {project.description}
+            </p>
+          )}
+          
+          {/* Progress Bar */}
+          {project.progress_percentage !== undefined && (
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-xs font-medium text-gray-700">Progress</span>
+                <span className="text-xs font-bold text-blue-600">{project.progress_percentage}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div 
+                  className="bg-gradient-to-r from-blue-500 to-blue-600 h-2 rounded-full transition-all duration-500"
+                  style={{ width: `${project.progress_percentage}%` }}
+                ></div>
+              </div>
+            </div>
+          )}
+          
+          {/* Stats Grid */}
+          <div className="grid grid-cols-2 gap-3 text-xs mb-4">
+            {project.ticket_count !== undefined && (
+              <div className="flex items-center space-x-2 bg-orange-50 rounded-lg p-2">
+                <div className="p-1 bg-orange-100 rounded">
+                  <Ticket className="w-3 h-3 text-orange-600" />
+                </div>
+                <div>
+                  <div className="font-medium text-orange-900">{project.ticket_count}</div>
+                  <div className="text-orange-700">Tickets</div>
+                </div>
+              </div>
+            )}
+            
+            {project.team_members !== undefined && (
+              <div className="flex items-center space-x-2 bg-green-50 rounded-lg p-2">
+                <div className="p-1 bg-green-100 rounded">
+                  <Users className="w-3 h-3 text-green-600" />
+                </div>
+                <div>
+                  <div className="font-medium text-green-900">{project.team_members}</div>
+                  <div className="text-green-700">Members</div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
         
-        <h4 className={`${compact ? 'text-sm' : 'text-base'} font-medium text-gray-900 mb-2 line-clamp-2`}>
-          {project.name}
-        </h4>
-        
-        {project.description && (
-          <p className="text-xs text-gray-500 mb-3 line-clamp-2">
-            {project.description}
-          </p>
-        )}
-        
-        <div className="text-xs text-gray-500 space-y-1">
-          {project.ticket_count !== undefined && (
-            <div className="flex items-center space-x-1">
-              <Ticket className="w-3 h-3" />
-              <span>{project.ticket_count} tickets</span>
+        {/* Footer Section - always at bottom */}
+        <div className="mt-auto pt-3 border-t border-gray-100">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-1 text-gray-500">
+              <Calendar className="w-3 h-3" />
+              <span className="text-xs">Created {new Date(project.created_at).toLocaleDateString()}</span>
             </div>
-          )}
-          
-          {project.team_members !== undefined && (
-            <div className="flex items-center space-x-1">
-              <Users className="w-3 h-3" />
-              <span>{project.team_members} members</span>
-            </div>
-          )}
-          
-          {project.progress_percentage !== undefined && (
-            <div className="flex items-center space-x-1">
-              <TrendingUp className="w-3 h-3" />
-              <span>{project.progress_percentage}% complete</span>
-            </div>
-          )}
-          
-          <div className="flex items-center space-x-1">
-            <Calendar className="w-3 h-3" />
-            <span>{new Date(project.created_at).toLocaleDateString()}</span>
+            {project.progress_percentage !== undefined && (
+              <div className="flex items-center space-x-1">
+                <TrendingUp className="w-3 h-3 text-blue-500" />
+                <span className="text-xs font-medium text-blue-600">
+                  {project.progress_percentage >= 100 ? 'Complete' : 
+                   project.progress_percentage >= 75 ? 'Almost Done' : 
+                   project.progress_percentage >= 50 ? 'In Progress' : 'Starting'}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -386,12 +446,14 @@ const ProjectKanban: React.FC<ProjectKanbanProps> = ({
         <div
           ref={setNodeRef}
           className={`
-            space-y-3 min-h-32 p-2 rounded-lg transition-colors
+            min-h-32 p-2 rounded-lg transition-colors
             ${isOver ? 'bg-blue-50 ring-2 ring-blue-300' : 'bg-gray-50'}
           `}
         >
           <SortableContext items={columnProjects.map(p => p.id)} strategy={verticalListSortingStrategy}>
-            {columnProjects.map((project) => renderProject(project))}
+            <div className="space-y-3 flex flex-col">
+              {columnProjects.map((project) => renderProject(project))}
+            </div>
           </SortableContext>
           
           {columnProjects.length === 0 && (
