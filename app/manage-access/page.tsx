@@ -101,12 +101,12 @@ const ManageAccessPage = () => {
     }
   }, [selectedProject, token, role]);
 
-  // Clear selected users when switching to "All Projects" view (no actions available)
+  // Clear selected users when switching to "All Projects" view (unless admin working with unassigned users)
   useEffect(() => {
-    if (selectedProject === 'all') {
+    if (selectedProject === 'all' && role !== 'Admin') {
       setSelectedUsers([]);
     }
-  }, [selectedProject]);
+  }, [selectedProject, role]);
 
   const fetchData = async () => {
     try {
@@ -573,20 +573,25 @@ const ManageAccessPage = () => {
           <table className="min-w-full">
             <thead className="bg-gray-50">
               <tr>
-                {selectedProject !== 'all' && (
+                {(selectedProject !== 'all' || (selectedProject === 'all' && role === 'Admin')) && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    <input
-                      type="checkbox"
-                      checked={selectedUsers.length === filteredUsers.length && filteredUsers.length > 0}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedUsers(filteredUsers.map(u => u.id));
-                        } else {
-                          setSelectedUsers([]);
-                        }
-                      }}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    />
+                    {selectedProject !== 'all' && (
+                      <input
+                        type="checkbox"
+                        checked={selectedUsers.length === filteredUsers.length && filteredUsers.length > 0}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedUsers(filteredUsers.map(u => u.id));
+                          } else {
+                            setSelectedUsers([]);
+                          }
+                        }}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    )}
+                    {selectedProject === 'all' && role === 'Admin' && (
+                      <span className="text-xs">Actions</span>
+                    )}
                   </th>
                 )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -601,7 +606,7 @@ const ManageAccessPage = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Projects
                 </th>
-                {selectedProject !== 'all' && (
+                {(selectedProject !== 'all' || (selectedProject === 'all' && role === 'Admin')) && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[300px]">
                     Actions
                   </th>
@@ -615,20 +620,25 @@ const ManageAccessPage = () => {
                 
                 return (
                   <tr key={user.id} className={isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}>
-                    {selectedProject !== 'all' && (
+                    {(selectedProject !== 'all' || (selectedProject === 'all' && role === 'Admin' && userAssignments.length === 0)) && (
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedUsers([...selectedUsers, user.id]);
-                            } else {
-                              setSelectedUsers(selectedUsers.filter(id => id !== user.id));
-                            }
-                          }}
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        />
+                        {selectedProject !== 'all' && (
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedUsers([...selectedUsers, user.id]);
+                              } else {
+                                setSelectedUsers(selectedUsers.filter(id => id !== user.id));
+                              }
+                            }}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                        )}
+                        {selectedProject === 'all' && role === 'Admin' && userAssignments.length === 0 && (
+                          <div className="w-4 h-4"></div>
+                        )}
                       </td>
                     )}
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -688,6 +698,66 @@ const ManageAccessPage = () => {
                         )}
                       </div>
                     </td>
+                    
+                    {/* Show assignment controls for unassigned users in "All Projects" view (Admin only) */}
+                    {selectedProject === 'all' && role === 'Admin' && userAssignments.length === 0 && (
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <div className="flex items-center justify-between gap-4 w-full">
+                          
+                          {/* Project and Role Selection for unassigned users */}
+                          <div className="flex items-center gap-3 flex-wrap max-w-[70%]">
+                            <div className="min-w-[140px]">
+                              <ProjectSelect
+                                value={perUserProject[user.id] || ""}
+                                onValueChange={(val) => handlePerUserProjectChange(user.id, val)}
+                                includeAllOption={false}
+                                placeholder="Select Project"
+                                className="w-full"
+                              />
+                            </div>
+
+                            <div className="min-w-[120px]">
+                              <Select
+                                value={perUserRole[user.id] || ""}
+                                onValueChange={(val) => handlePerUserRoleChange(user.id, val)}
+                              >
+                                <SelectTrigger size="sm" className="w-full">
+                                  <SelectValue placeholder="Select Role" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectGroup>
+                                    <SelectLabel>Roles</SelectLabel>
+                                    {roles.map((r) => (
+                                      <SelectItem key={r.id} value={r.id}>
+                                        {r.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectGroup>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+
+                          {/* Assign Button for unassigned users */}
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              onClick={() => handlePerUserAssignment(user.id)}
+                              disabled={!perUserProject[user.id] || !perUserRole[user.id]}
+                              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                                perUserProject[user.id] && perUserRole[user.id]
+                                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                                  : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                              }`}
+                              title="Assign this user to project"
+                            >
+                              <Plus className="w-4 h-4 mr-1" />
+                              Assign
+                            </button>
+                          </div>
+
+                        </div>
+                      </td>
+                    )}
                   {selectedProject !== 'all' && (
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                       <div className="flex items-center justify-between gap-4 w-full">

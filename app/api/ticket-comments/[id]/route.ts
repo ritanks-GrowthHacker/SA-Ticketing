@@ -81,9 +81,10 @@ async function checkTicketAccess(ticketId: string, userId: string, organizationI
 }
 
 // GET /api/ticket-comments/[id] - Get a specific comment
-export async function GET(request: Request, { params }: { params: { id: string } }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const commentId = params.id;
+    const resolvedParams = await params;
+    const commentId = resolvedParams.id;
 
     // Get auth token
     const authHeader = request.headers.get('authorization');
@@ -171,9 +172,10 @@ export async function GET(request: Request, { params }: { params: { id: string }
 }
 
 // PUT /api/ticket-comments/[id] - Update a comment
-export async function PUT(request: Request, { params }: { params: { id: string } }) {
+export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const commentId = params.id;
+    const resolvedParams = await params;
+    const commentId = resolvedParams.id;
     const body: UpdateCommentRequest = await request.json();
     const { content, edit_reason } = body;
 
@@ -326,9 +328,10 @@ export async function PUT(request: Request, { params }: { params: { id: string }
 }
 
 // DELETE /api/ticket-comments/[id] - Soft delete a comment
-export async function DELETE(request: Request, { params }: { params: { id: string } }) {
+export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const commentId = params.id;
+    const resolvedParams = await params;
+    const commentId = resolvedParams.id;
 
     // Get auth token
     const authHeader = request.headers.get('authorization');
