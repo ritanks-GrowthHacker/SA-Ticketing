@@ -112,8 +112,11 @@ const Dashboard = () => {
     projectRole: currentProjectRole
   });
 
-  // Loading state
-  if (!isAuthenticated || !user) {
+  // Development mode bypass
+  const isDevelopmentBypass = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true';
+
+  // Loading state (bypass in development mode)
+  if (!isDevelopmentBypass && (!isAuthenticated || !user)) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="flex items-center space-x-2">

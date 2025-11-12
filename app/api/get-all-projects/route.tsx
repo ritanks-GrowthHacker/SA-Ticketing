@@ -378,6 +378,13 @@ export async function GET(req: Request) {
             openTickets: openCount,
             completedTickets: completedCount,
             teamMembers: teamMembersCount,
+            // Include the actual team member list so frontend can render members
+            teamMembersData: (teamMembers || []).map((m: any) => ({
+              id: m.user_id,
+              name: (m.users as any)?.name || null,
+              email: (m.users as any)?.email || null,
+              role: (m.global_roles as any)?.name || null
+            })),
             managerName,
             completionRate: totalCount > 0 
               ? Math.round((completedCount / totalCount) * 100)

@@ -62,6 +62,8 @@ interface ProjectMember {
     id: string;
     name: string;
     email: string;
+    profile_image?: string;
+    profile_picture_url?: string;
   };
   role: {
     id: string;
@@ -149,6 +151,28 @@ const ProjectDetailsPage = () => {
       fetchProjectMembers();
       fetchProjectStatuses();
       fetchAvailableRoles();
+      
+      // Temporary debug: Add a test member to see if UI works
+      // Remove this after debugging
+      // setProjectMembers([{
+      //   id: 'test-1',
+      //   user_id: 'test-user-1',
+      //   project_id: projectId,
+      //   role_id: 'test-role-1',
+      //   assigned_at: new Date().toISOString(),
+      //   user: {
+      //     id: 'test-user-1',
+      //     name: 'Test User',
+      //     email: 'test@example.com',
+      //     profile_picture_url: null,
+      //     profile_image: null
+      //   },
+      //   role: {
+      //     id: 'test-role-1',
+      //     name: 'Developer',
+      //     description: 'Software Developer'
+      //   }
+      // }]);
     } else {
       console.log('🔧 Missing dependencies - projectId:', !!projectId, 'token:', !!token);
     }
@@ -189,6 +213,9 @@ const ProjectDetailsPage = () => {
 
   const fetchProjectMembers = async () => {
     try {
+      console.log('🔧 fetchProjectMembers called for projectId:', projectId);
+      console.log('🔧 Making request to:', `/api/get-project-members/${projectId}`);
+      
       const response = await fetch(`/api/get-project-members/${projectId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -196,12 +223,21 @@ const ProjectDetailsPage = () => {
         }
       });
 
+      console.log('🔧 Project members response status:', response.status);
+      
       if (response.ok) {
         const data = await response.json();
+        console.log('🔧 Project members data received:', data);
+        console.log('🔧 Members array:', data.members);
+        console.log('🔧 Members count:', data.members?.length || 0);
         setProjectMembers(data.members || []);
+      } else {
+        console.error('🔧 Failed to fetch project members - status:', response.status);
+        const errorText = await response.text();
+        console.error('🔧 Error response:', errorText);
       }
     } catch (error) {
-      console.error('Error fetching project members:', error);
+      console.error('🔧 Error fetching project members:', error);
     }
   };
 
@@ -701,21 +737,10 @@ const ProjectDetailsPage = () => {
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-3">
                   <Users className="w-6 h-6 text-gray-400" />
-                  <h2 className="text-xl font-semibold">Team Management</h2>
+                  <h2 className="text-xl font-semibold">Project Team</h2>
                 </div>
                 
                 <div className="flex items-center space-x-3">
-                  <button
-                    onClick={() => {
-                      console.log('🔧 DEBUG: Available roles state:', availableRoles);
-                      console.log('🔧 DEBUG: Available roles length:', availableRoles.length);
-                      console.log('🔧 DEBUG: First role:', availableRoles[0]);
-                      alert(`Available roles: ${availableRoles.length} roles found. Check console for details.`);
-                    }}
-                    className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded text-sm"
-                  >
-                    Debug Roles
-                  </button>
                   {canManageUsers && (
                     <button
                       onClick={() => setShowAddUser(true)}
@@ -731,94 +756,76 @@ const ProjectDetailsPage = () => {
             
             <div className="p-6">
               {projectMembers.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="text-left py-3 px-4 font-medium text-gray-700">Name</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-700">Email</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-700">Role</th>
-                        <th className="text-left py-3 px-4 font-medium text-gray-700">Assigned</th>
-                        {canManageUsers && (
-                          <th className="text-left py-3 px-4 font-medium text-gray-700">Actions</th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {projectMembers.map((member) => (
-                        <tr key={member.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-4">
-                            <div className="flex items-center space-x-3">
-                              <div className="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                                {member.user.name.charAt(0).toUpperCase()}
-                              </div>
-                              <span className="font-medium text-gray-900">{member.user.name}</span>
-                            </div>
-                          </td>
-                          <td className="py-3 px-4 text-gray-600">{member.user.email}</td>
-                          <td className="py-3 px-4">
-                            {canManageUsers && editingMemberRole === member.id ? (
-                              <div className="flex items-center space-x-2">
-                                <select
-                                  value={member.role_id}
-                                  onChange={(e) => updateMemberRole(member.id, e.target.value)}
-                                  className="text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                                  autoFocus
-                                  onClick={() => console.log('🔧 Available roles for dropdown:', availableRoles)}
-                                >
-                                  <option value="">Select Role...</option>
-                                  {availableRoles.map(role => (
-                                    <option key={role.id} value={role.id}>
-                                      {role.name}
-                                    </option>
-                                  ))}
-                                </select>
-                                <button
-                                  onClick={() => setEditingMemberRole(null)}
-                                  className="text-gray-400 hover:text-gray-600"
-                                >
-                                  <X className="w-3 h-3" />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center space-x-2">
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                  {member.role.name}
-                                </span>
-                                {canManageUsers && (
-                                  <button
-                                    onClick={() => {
-                                      console.log('🔧 Edit button clicked. Available roles:', availableRoles);
-                                      console.log('🔧 Available roles length:', availableRoles.length);
-                                      setEditingMemberRole(member.id);
-                                    }}
-                                    className="text-gray-400 hover:text-blue-600"
-                                  >
-                                    <Edit2 className="w-3 h-3" />
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-gray-600">
-                            {new Date(member.assigned_at).toLocaleDateString()}
-                          </td>
-                          {canManageUsers && (
-                            <td className="py-3 px-4">
-                              <button className="text-red-600 hover:text-red-800">
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {projectMembers.map((member) => (
+                    <div 
+                      key={member.id} 
+                      className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                    >
+                      {/* Profile Header */}
+                      <div className="flex items-center space-x-3 mb-3">
+                        {/* Profile Picture or Initial */}
+                        <div className="relative">
+                          {member.user.profile_picture_url || member.user.profile_image ? (
+                            <img
+                              src={member.user.profile_picture_url || member.user.profile_image}
+                              alt={`${member.user.name}'s profile`}
+                              className="w-12 h-12 rounded-full object-cover border-2 border-gray-100"
+                              onError={(e) => {
+                                // Fallback to initials if image fails to load
+                                const target = e.target as HTMLImageElement;
+                                target.style.display = 'none';
+                                target.nextElementSibling!.classList.remove('hidden');
+                              }}
+                            />
+                          ) : null}
+                          <div className={`w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center text-white text-lg font-semibold ${
+                            member.user.profile_picture_url || member.user.profile_image ? 'hidden' : ''
+                          }`}>
+                            {member.user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)}
+                          </div>
+                        </div>
+                        
+                        {/* Name and Role */}
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-gray-900 truncate">
+                            {member.user.name}
+                          </h3>
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                            {member.role.name}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      {/* Contact Info */}
+                      <div className="space-y-2">
+                        <div className="flex items-center space-x-2 text-sm text-gray-600">
+                          <Mail className="w-4 h-4 text-gray-400" />
+                          <span className="truncate">{member.user.email}</span>
+                        </div>
+                        
+                        <div className="flex items-center space-x-2 text-sm text-gray-600">
+                          <Calendar className="w-4 h-4 text-gray-400" />
+                          <span>Joined {new Date(member.assigned_at).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                      
+                      {/* Role Description (if available) */}
+                      {member.role.description && (
+                        <div className="mt-3 pt-3 border-t border-gray-100">
+                          <p className="text-xs text-gray-500">
+                            {member.role.description}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
               ) : (
-                <div className="text-center py-8">
-                  <Users className="w-12 h-12 text-gray-300 mx-auto" />
-                  <p className="mt-4 text-gray-500">No team members assigned</p>
+                <div className="text-center py-12">
+                  <Users className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No team members assigned</h3>
+                  <p className="text-gray-500">This project doesn't have any team members yet.</p>
                 </div>
               )}
             </div>

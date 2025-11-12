@@ -1,0 +1,6 @@
+### Get All Available Departments
+GET {{baseUrl}}/api/get-departments
+Content-Type: application/json
+
+### Expected Response:
+# Should return all global departments that can be associated with organizations

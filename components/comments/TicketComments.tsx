@@ -4,9 +4,11 @@ import React, { useState, useEffect } from 'react';
 import { MessageCircle, Reply, Edit, Trash2, Send, MoreHorizontal, Clock, User } from 'lucide-react';
 import { useAuthStore } from '../../app/store/authStore';
 import { NestedComment, CreateCommentRequest, UpdateCommentRequest } from '../../db/comment-types';
+import MentionInput, { MentionUser } from '../ui/MentionInput';
 
 interface TicketCommentsProps {
   ticketId: string;
+  projectId: string; // Add projectId for fetching project members
   onCommentAdded?: () => void;
 }
 
@@ -170,16 +172,19 @@ const CommentItem: React.FC<CommentItemProps> = ({
   );
 };
 
-const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, onCommentAdded }) => {
+const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, projectId, onCommentAdded }) => {
   const { token, user } = useAuthStore();
   const [comments, setComments] = useState<NestedComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [newComment, setNewComment] = useState('');
+  const [newCommentMentions, setNewCommentMentions] = useState<MentionUser[]>([]);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState('');
+  const [replyMentions, setReplyMentions] = useState<MentionUser[]>([]);
   const [editingComment, setEditingComment] = useState<NestedComment | null>(null);
   const [editContent, setEditContent] = useState('');
+  const [editMentions, setEditMentions] = useState<MentionUser[]>([]);
 
   // Fetch comments
   const fetchComments = async () => {
@@ -234,8 +239,32 @@ const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, onCommentAdde
 
       if (response.ok) {
         const data = await response.json();
-        if (data.success) {
+        if (data.success && data.comment) {
+          // Send mention notifications if there are mentions
+          if (newCommentMentions.length > 0) {
+            try {
+              await fetch('/api/send-mention-notifications', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  ticketId: ticketId,
+                  commentId: data.comment.id,
+                  mentionedUserIds: newCommentMentions.map(m => m.id),
+                  commentText: newComment.trim()
+                })
+              });
+              console.log('✅ Mention notifications sent');
+            } catch (mentionError) {
+              console.error('Error sending mention notifications:', mentionError);
+              // Don't fail the comment creation if notifications fail
+            }
+          }
+
           setNewComment('');
+          setNewCommentMentions([]);
           await fetchComments(); // Refresh comments
           onCommentAdded?.();
         }
@@ -276,9 +305,32 @@ const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, onCommentAdde
 
       if (response.ok) {
         const data = await response.json();
-        if (data.success) {
+        if (data.success && data.comment) {
+          // Send mention notifications if there are mentions
+          if (replyMentions.length > 0) {
+            try {
+              await fetch('/api/send-mention-notifications', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  ticketId: ticketId,
+                  commentId: data.comment.id,
+                  mentionedUserIds: replyMentions.map(m => m.id),
+                  commentText: replyContent.trim()
+                })
+              });
+              console.log('✅ Reply mention notifications sent');
+            } catch (mentionError) {
+              console.error('Error sending reply mention notifications:', mentionError);
+            }
+          }
+
           setReplyingTo(null);
           setReplyContent('');
+          setReplyMentions([]);
           await fetchComments(); // Refresh comments
           onCommentAdded?.();
         }
@@ -294,6 +346,24 @@ const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, onCommentAdde
   const handleEdit = (comment: NestedComment) => {
     setEditingComment(comment);
     setEditContent(comment.content);
+    
+    // Extract existing mentions from comment content
+    const mentionRegex = /@\[([^\]]+)\]\(([^)]+)\)/g;
+    const extractedMentions: MentionUser[] = [];
+    let match;
+    
+    while ((match = mentionRegex.exec(comment.content)) !== null) {
+      const [, name, id] = match;
+      // We don't have full user details here, so create a basic mention object
+      // The MentionInput will handle fetching full details when needed
+      extractedMentions.push({
+        id: id,
+        name: name,
+        email: '', // Will be filled by MentionInput if needed
+      });
+    }
+    
+    setEditMentions(extractedMentions);
   };
 
   const handleSubmitEdit = async () => {
@@ -317,8 +387,31 @@ const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, onCommentAdde
       if (response.ok) {
         const data = await response.json();
         if (data.success) {
+          // Send mention notifications for new mentions in edited comment
+          if (editMentions.length > 0) {
+            try {
+              await fetch('/api/send-mention-notifications', {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                  ticketId: ticketId,
+                  commentId: editingComment.id,
+                  mentionedUserIds: editMentions.map(m => m.id),
+                  commentText: editContent.trim()
+                })
+              });
+              console.log('✅ Edit mention notifications sent');
+            } catch (mentionError) {
+              console.error('Error sending edit mention notifications:', mentionError);
+            }
+          }
+
           setEditingComment(null);
           setEditContent('');
+          setEditMentions([]);
           await fetchComments(); // Refresh comments
         }
       }
@@ -386,12 +479,16 @@ const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, onCommentAdde
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-lg font-semibold mb-4">Edit Comment</h3>
-            <textarea
+            <MentionInput
               value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+              onChange={(value, mentions) => {
+                setEditContent(value);
+                setEditMentions(mentions);
+              }}
+              placeholder="Edit your comment... Use @ to mention team members"
               rows={4}
-              placeholder="Edit your comment..."
+              projectId={projectId}
+              token={token || ''}
             />
             <div className="flex justify-end space-x-2 mt-4">
               <button
@@ -430,12 +527,16 @@ const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, onCommentAdde
               ✕
             </button>
           </div>
-          <textarea
+          <MentionInput
             value={replyContent}
-            onChange={(e) => setReplyContent(e.target.value)}
-            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+            onChange={(value, mentions) => {
+              setReplyContent(value);
+              setReplyMentions(mentions);
+            }}
+            placeholder="Write your reply... Use @ to mention team members"
             rows={3}
-            placeholder="Write your reply..."
+            projectId={projectId}
+            token={token || ''}
           />
           <div className="flex justify-end mt-2">
             <button
@@ -474,12 +575,16 @@ const TicketComments: React.FC<TicketCommentsProps> = ({ ticketId, onCommentAdde
 
           {/* Comment Input */}
           <div className="flex-1">
-            <textarea
+            <MentionInput
               value={newComment}
-              onChange={(e) => setNewComment(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+              onChange={(value, mentions) => {
+                setNewComment(value);
+                setNewCommentMentions(mentions);
+              }}
+              placeholder="Write a comment... Use @ to mention team members"
               rows={3}
-              placeholder="Write a comment..."
+              projectId={projectId}
+              token={token || ''}
             />
             <div className="flex justify-end mt-2">
               <button

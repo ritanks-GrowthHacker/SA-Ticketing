@@ -1,0 +1,38 @@
+### Test the Two-Stage Organization Setup Flow
+
+## 1. Test Department Selection (Page 1)
+POST http://localhost:3000/api/save-org-departments
+Content-Type: application/json
+
+{
+  "orgId": "your-org-id-here",
+  "selectedDepartments": [
+    "dept-id-1",
+    "dept-id-2"
+  ]
+}
+
+## 2. Test Get Organization Departments
+GET http://localhost:3000/api/get-org-departments?orgId=your-org-id-here
+
+## 3. Test Team Member Invitations (Page 2)
+POST http://localhost:3000/api/invite-team-members
+Content-Type: application/json
+
+{
+  "orgId": "your-org-id-here",
+  "teamMembers": [
+    {
+      "email": "john@example.com",
+      "department": "dept-id-1"
+    },
+    {
+      "email": "jane@example.com", 
+      "department": "dept-id-2"
+    }
+  ]
+}
+
+## 4. Navigate to Pages
+# Page 1: http://localhost:3000/org-setup?orgId=your-org-id-here
+# Page 2: http://localhost:3000/invite-family?orgId=your-org-id-here

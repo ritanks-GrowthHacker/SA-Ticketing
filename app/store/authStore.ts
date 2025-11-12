@@ -101,17 +101,41 @@ export interface AuthState {
   isAdmin: () => boolean
 }
 
+// Development mode bypass helper
+const isDevelopmentBypass = process.env.NEXT_PUBLIC_BYPASS_AUTH === 'true';
+
+// Default dev user for bypass mode
+const getDefaultDevUser = (): User => ({
+  id: 'dev-user-id',
+  name: 'Developer',
+  email: 'dev@example.com',
+  created_at: new Date().toISOString(),
+  profile_picture_url: undefined,
+  about: 'Development Mode User',
+  phone: undefined,
+  location: undefined,
+  job_title: 'Developer',
+  department: undefined
+});
+
+// Default dev organization for bypass mode
+const getDefaultDevOrganization = (): Organization => ({
+  id: 'dev-org-id',
+  name: 'Development Organization',
+  domain: 'dev.local'
+});
+
 // Create the Zustand store with persistence
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
-      // Initial state
-      isAuthenticated: false,
-      token: null,
-      user: null,
-      organization: null,
-      role: null,
-      roles: [],
+      // Initial state - with dev mode bypass
+      isAuthenticated: isDevelopmentBypass,
+      token: isDevelopmentBypass ? 'dev-token-123' : null,
+      user: isDevelopmentBypass ? getDefaultDevUser() : null,
+      organization: isDevelopmentBypass ? getDefaultDevOrganization() : null,
+      role: isDevelopmentBypass ? 'Admin' : null,
+      roles: isDevelopmentBypass ? ['Admin'] : [],
       currentProject: null,
       statuses: [],
       roles_list: [],

@@ -323,9 +323,9 @@ const Tickets = () => {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Tickets</h1>
           <p className="text-gray-600 mt-1">
-            {userAccess.canViewAllTickets 
+            {userAccess?.canViewAllTickets 
               ? 'Manage all tickets across projects' 
-              : `Manage tickets for your assigned projects (${userAccess.role})`}
+              : `Manage tickets for your assigned projects (${userAccess?.role || 'user'})`}
           </p>
         </div>
         <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center space-x-2">

@@ -31,6 +31,8 @@ export interface Project {
     openTickets: number;
     completedTickets: number;
     teamMembers: number;
+    // Optional list of team member objects (id, name, email, role)
+    teamMembersData?: { id: string; name?: string | null; email?: string | null; role?: string | null }[];
     managerName?: string;
     completionRate: number;
     statusBreakdown?: { [statusName: string]: number };

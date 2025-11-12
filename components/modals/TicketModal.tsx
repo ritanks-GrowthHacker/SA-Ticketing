@@ -557,6 +557,7 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
             <div className="px-6 py-4 overflow-y-auto max-h-[calc(90vh-120px)]">
               <TicketComments 
                 ticketId={ticketId!} 
+                projectId={formData.project_id}
                 onCommentAdded={() => {
                   // Optional: refresh ticket data or show notification
                 }} 

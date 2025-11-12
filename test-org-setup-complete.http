@@ -1,0 +1,28 @@
+### Update Users Table for Multiple Departments
+POST http://localhost:3000/api/update-users-table
+Content-Type: application/json
+
+{}
+
+### Test Organization Setup
+POST http://localhost:3000/api/org-setup  
+Content-Type: application/json
+
+{
+  "orgId": "test-org-123",
+  "selectedDepartments": ["dept-1", "dept-2"],
+  "userInvites": [
+    {
+      "name": "John Doe",
+      "email": "john@example.com",
+      "selectedDepartments": ["dept-1"],
+      "jobTitle": "Software Engineer"
+    },
+    {
+      "name": "Jane Smith", 
+      "email": "jane@example.com",
+      "selectedDepartments": ["dept-1", "dept-2"],
+      "jobTitle": "Product Manager"
+    }
+  ]
+}

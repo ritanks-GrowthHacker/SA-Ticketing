@@ -83,21 +83,9 @@ export async function GET(req: Request) {
     }
 
     if (entityType === 'departments' || entityType === 'all') {
-      const { data: departments, error: deptError } = await supabase
-        .from("departments")
-        .select("id, name, created_at, updated_at")
-        .eq("organization_id", organizationId)
-        .order("name", { ascending: true });
-
-      if (deptError) {
-        console.error("Departments fetch error:", deptError);
-        return NextResponse.json(
-          { error: "Failed to fetch departments" }, 
-          { status: 500 }
-        );
-      }
-
-      responseData.departments = departments || [];
+      // Departments are stored in organizations.associated_departments array
+      // For now, return empty array since there's no separate departments table
+      responseData.departments = [];
     }
 
     const response = {

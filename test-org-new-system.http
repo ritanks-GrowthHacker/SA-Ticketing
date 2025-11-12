@@ -1,0 +1,76 @@
+# Test New Organization Registration System (Email-First Verification)
+
+## Step 1: Register Organization (NO DB record created yet)
+POST http://localhost:3000/api/org-onboarding-new
+Content-Type: application/json
+
+{
+  "organizationName": "Tech Solutions Ltd",
+  "username": "techsolutions2",
+  "orgEmail": "test2@example.com",
+  "password": "SecurePassword123!",
+  "mobileNumber": "+1234567890",
+  "selectedDepartments": []
+}
+
+### Expected Response:
+# Status: 200 OK (NOT 201 - no org created yet)
+# {
+#   "success": true,
+#   "message": "Verification email sent. Please check your email for the OTP code.",
+#   "registrationId": "reg_1699123456789_abc123def",
+#   "orgEmail": "test2@example.com",
+#   "requiresVerification": true
+# }
+
+---
+
+## Step 2: Verify OTP (Creates organization record)
+POST http://localhost:3000/api/org-verify-email-new
+Content-Type: application/json
+
+{
+  "registrationId": "reg_1699123456789_abc123def",
+  "orgEmail": "test2@example.com",
+  "otp": "123456"
+}
+
+### Expected Response:
+# Status: 201 Created (Organization actually created NOW)
+# {
+#   "success": true,
+#   "message": "Organization verified and created successfully. You can now login.",
+#   "organization": {
+#     "id": "uuid-here",
+#     "name": "Tech Solutions Ltd",
+#     "username": "techsolutions2",
+#     "org_email": "test2@example.com"
+#   },
+#   "verified": true
+# }
+
+---
+
+## Step 3: Test Resend OTP (Before verification)
+POST http://localhost:3000/api/org-resend-otp-new
+Content-Type: application/json
+
+{
+  "registrationId": "reg_1699123456789_abc123def",
+  "orgEmail": "test2@example.com"
+}
+
+---
+
+## Step 4: Check Database (Should be empty until OTP verified)
+GET http://localhost:3000/api/debug-organizations
+
+---
+
+## Benefits of New System:
+# ✅ No unverified organizations in database
+# ✅ No username/email conflicts from unverified registrations  
+# ✅ Proper email verification before any DB commitment
+# ✅ Clean database with only legitimate organizations
+# ✅ Temporary storage cleans up automatically (30 min expiry)
+# ✅ Race condition protection for username/email uniqueness

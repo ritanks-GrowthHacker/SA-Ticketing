@@ -4,6 +4,7 @@ import "./globals.css";
 import { HydrateStore } from "./store/HydrateStore";
 import { ThemeProvider } from "./providers/ThemeProvider";
 import MainLayout from "@/components/ui/MainLayout";
+import DevNavigation from "@/components/DevNavigation";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,6 +36,7 @@ export default function RootLayout({
             <MainLayout>
               {children}
             </MainLayout>
+            <DevNavigation />
           </HydrateStore>
         </ThemeProvider>
       </body>

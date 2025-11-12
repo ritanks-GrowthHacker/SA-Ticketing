@@ -565,6 +565,25 @@ const Projects = () => {
                       <span className="text-gray-600">{new Date(project.created_at).toLocaleDateString()}</span>
                     </div>
                   </div>
+                  {/* Team member avatars/names (if available) */}
+                  {project.stats?.teamMembersData && project.stats.teamMembersData.length > 0 && (
+                    <div className="flex items-center space-x-2 mt-2">
+                      <div className="flex -space-x-2">
+                        {project.stats.teamMembersData.slice(0, 5).map((member: any, idx: number) => (
+                          <div
+                            key={member.id || idx}
+                            title={`${member.name || 'Unknown'}${member.role ? ` - ${member.role}` : ''}`}
+                            className="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-xs font-medium text-gray-700 border border-white"
+                          >
+                            {member.name ? member.name.split(' ').map((n: string) => n[0]).slice(0,2).join('') : member.email?.[0]?.toUpperCase() || '?'}
+                          </div>
+                        ))}
+                      </div>
+                      {project.stats.teamMembersData.length > 5 && (
+                        <div className="text-xs text-gray-500">+{project.stats.teamMembersData.length - 5} more</div>
+                      )}
+                    </div>
+                  )}
                   {project.stats?.managerName && (
                     <div className="flex items-center justify-between text-xs mt-2 pt-2 border-t border-gray-200">
                       <div className="flex items-center space-x-1">

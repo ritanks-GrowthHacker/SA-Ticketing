@@ -1,0 +1,21 @@
+### Test Get Global Roles
+GET http://localhost:3000/api/get-global-roles
+Content-Type: application/json
+
+###
+
+### Test Assign Role to User
+POST http://localhost:3000/api/assign-organization-role
+Content-Type: application/json
+
+{
+  "userId": "user-id-here",
+  "roleId": "role-id-here",
+  "organizationId": "org-id-here"
+}
+
+###
+
+### Test Get Organization Employees (with roles)
+GET http://localhost:3000/api/org-employees?orgId=your-org-id-here
+Content-Type: application/json

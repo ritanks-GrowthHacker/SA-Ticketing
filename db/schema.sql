@@ -9,11 +9,22 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ORGANIZATIONS TABLE
 -- =============================================
 CREATE TABLE IF NOT EXISTS organizations (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(255) NOT NULL,
-    domain VARCHAR(255) UNIQUE NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    domain TEXT UNIQUE,
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    username CHARACTER VARYING UNIQUE,
+    password_hash TEXT,
+    org_email CHARACTER VARYING UNIQUE,
+    is_active BOOLEAN DEFAULT false,
+    onboarded_at TIMESTAMP WITH TIME ZONE,
+    mobile_number CHARACTER VARYING CHECK (mobile_number IS NULL OR mobile_number::text ~ '^[\+]?[1-9][\d\-\(\)\s]{7,18}$'::text),
+    otp CHARACTER VARYING,
+    otp_expires_at TIMESTAMP WITH TIME ZONE,
+    otp_verified BOOLEAN DEFAULT false,
+    mobile_verified BOOLEAN DEFAULT false,
+    associated_departments UUID[]
 );
 
 -- Enable RLS for organizations

@@ -1,0 +1,11 @@
+### Debug Organization Lookup
+GET http://localhost:3000/api/debug-organizations
+
+### Test OTP Verification with Your Email
+POST http://localhost:3000/api/org-verify-email
+Content-Type: application/json
+
+{
+  "orgEmail": "saxena.ritank@gmail.com",
+  "otp": "123456"
+}

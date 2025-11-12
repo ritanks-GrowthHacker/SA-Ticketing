@@ -33,15 +33,8 @@ export class ApiClient {
 
     const data = await this.handleResponse(response)
     
-    // Update store with login data
-    useAuthStore.getState().login({
-      user: data.user,
-      organization: data.organization,
-      role: data.role,
-      roles: data.roles,
-      token: data.token,
-    })
-
+    // Don't update store here - OTP verification will handle login
+    // Just return the OTP response
     return data
   }
 
