@@ -21,8 +21,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get organization's departments
-    const { data: org, error: orgError } = await supabase
+    // First, get the organization to find its associated departments
+    const { data: organization, error: orgError } = await supabase
       .from('organizations')
       .select('associated_departments')
       .eq('id', orgId)
@@ -31,42 +31,44 @@ export async function GET(request: NextRequest) {
     if (orgError) {
       console.error('Error fetching organization:', orgError);
       return NextResponse.json(
-        { error: 'Organization not found' },
-        { status: 404 }
+        { error: 'Failed to fetch organization' },
+        { status: 500 }
       );
     }
 
-    // Get department details
-    let departments = [];
-    if (org.associated_departments && org.associated_departments.length > 0) {
-      const { data: deptData, error: deptError } = await supabase
-        .from('departments')
-        .select('*')
-        .in('id', org.associated_departments)
-        .eq('is_active', true)
-        .order('name');
+    // Get all departments for this organization
+    const { data: allDepartments, error: deptError } = await supabase
+      .from('departments')
+      .select('id, name, color_code, description')
+      .in('id', organization.associated_departments || [])
+      .order('name');
 
-      if (!deptError && deptData) {
-        departments = deptData;
-      }
+    if (deptError) {
+      console.error('Error fetching departments:', deptError);
     }
 
     // Get employees for this organization with their role information
     const { data: employees, error: employeeError } = await supabase
       .from('users')
       .select(`
-        *,
+        id,
+        name,
+        email,
+        job_title,
+        phone,
+        location,
+        department,
+        created_at,
         user_organization_roles!inner(
-          organization_id,
           role_id,
           global_roles(
             id,
-            name,
-            description
+            name
           )
         )
       `)
-      .eq('user_organization_roles.organization_id', orgId);
+      .eq('user_organization_roles.organization_id', orgId)
+      .order('name');
 
     if (employeeError) {
       console.error('Error fetching employees:', employeeError);
@@ -76,45 +78,35 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Process employees and add department information
+    // Map employees with their role information
     const employeesWithDepartments = (employees || []).map((employee: any) => {
       // Extract role information
       const roleInfo = employee.user_organization_roles?.[0]?.global_roles;
       
-      // Find department by name or ID
-      const dept = departments.find(d => 
-        d.name === employee.department || d.id === employee.department
-      );
-      
       return {
         ...employee,
-        department_id: dept?.id || null,
-        department_name: dept?.name || employee.department || 'Unassigned',
+        department_id: employee.department, // Use department name
+        department_name: employee.department || 'Unassigned',
         current_role: roleInfo?.name || null,
         current_role_id: roleInfo?.id || null,
         user_organization_roles: undefined // Remove nested data from response
       };
     });
 
-    // Count employees per department
-    const departmentsWithCounts = departments.map(dept => ({
-      ...dept,
-      employee_count: employeesWithDepartments.filter(emp => emp.department_id === dept.id).length
-    }));
-
-    // Add unassigned department if there are employees without departments
-    const unassignedCount = employeesWithDepartments.filter(emp => !emp.department_id).length;
-    if (unassignedCount > 0) {
-      departmentsWithCounts.push({
-        id: 'unassigned',
-        name: 'Unassigned',
-        color_code: '#6B7280',
-        employee_count: unassignedCount,
-        is_active: true,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      });
-    }
+    // Create department list with employee counts
+    const departmentsWithCounts = (allDepartments || []).map(dept => {
+      const employeeCount = employeesWithDepartments.filter(
+        emp => emp.department === dept.name
+      ).length;
+      
+      return {
+        id: dept.name, // Use department name as ID for filtering
+        name: dept.name,
+        employee_count: employeeCount,
+        color_code: dept.color_code || '#3B82F6',
+        description: dept.description
+      };
+    });
 
     return NextResponse.json({
       success: true,
