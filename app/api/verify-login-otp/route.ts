@@ -84,6 +84,22 @@ export async function POST(req: Request) {
       );
     }
 
+    // Get user's department roles
+    const { data: departmentRoles, error: deptRoleError } = await supabase
+      .from("user_department_roles")
+      .select(`
+        department_id,
+        role_id,
+        organization_id,
+        departments(id, name),
+        global_roles(id, name)
+      `)
+      .eq("user_id", user.id);
+
+    if (deptRoleError) {
+      console.error("Department role lookup error:", deptRoleError);
+    }
+
     const primaryOrg = userOrganizations[0] as any;
     const organization = primaryOrg.organizations;
     const role = primaryOrg.global_roles;
@@ -91,6 +107,15 @@ export async function POST(req: Request) {
     const allRoles = userOrganizations
       .map((uo: any) => uo.global_roles?.name)
       .filter(Boolean) as string[];
+
+    // Include department-level admin roles
+    const departmentAdminRoles = (departmentRoles || [])
+      .filter((dr: any) => dr.global_roles?.name === 'Admin')
+      .map((dr: any) => ({
+        department_id: dr.department_id,
+        department_name: dr.departments?.name,
+        role: dr.global_roles?.name
+      }));
 
     // Generate JWT token
     const tokenPayload = {
@@ -102,6 +127,7 @@ export async function POST(req: Request) {
       org_domain: organization.domain,
       role: role?.name || "Member",
       roles: allRoles,
+      department_roles: departmentAdminRoles, // Include department-level roles
       iss: process.env.JWT_ISSUER,
     };
 

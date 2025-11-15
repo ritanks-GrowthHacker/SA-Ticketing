@@ -438,5 +438,36 @@ CREATE INDEX IF NOT EXISTS idx_ticket_comments_organization_id ON ticket_comment
 COMMENT ON TABLE ticket_comments IS 'Comments on tickets with nested reply support';
 
 -- =============================================
+-- RESOURCE REQUESTS TABLE
+-- =============================================
+CREATE TABLE IF NOT EXISTS resource_requests (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL,
+    requested_by UUID NOT NULL,
+    requested_user_id UUID NOT NULL,
+    user_department_id UUID NOT NULL,
+    status CHARACTER VARYING NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+    message TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    reviewed_by UUID,
+    reviewed_at TIMESTAMP WITH TIME ZONE,
+    review_notes TEXT,
+    CONSTRAINT resource_requests_project_id_fkey FOREIGN KEY (project_id) REFERENCES projects(id),
+    CONSTRAINT resource_requests_requested_by_fkey FOREIGN KEY (requested_by) REFERENCES users(id),
+    CONSTRAINT resource_requests_requested_user_id_fkey FOREIGN KEY (requested_user_id) REFERENCES users(id),
+    CONSTRAINT resource_requests_user_department_id_fkey FOREIGN KEY (user_department_id) REFERENCES departments(id),
+    CONSTRAINT resource_requests_reviewed_by_fkey FOREIGN KEY (reviewed_by) REFERENCES users(id)
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_resource_requests_project_id ON resource_requests(project_id);
+CREATE INDEX IF NOT EXISTS idx_resource_requests_requested_by ON resource_requests(requested_by);
+CREATE INDEX IF NOT EXISTS idx_resource_requests_requested_user_id ON resource_requests(requested_user_id);
+CREATE INDEX IF NOT EXISTS idx_resource_requests_status ON resource_requests(status);
+
+COMMENT ON TABLE resource_requests IS 'Cross-department resource allocation requests for projects';
+
+-- =============================================
 -- END OF SCHEMA
 -- =============================================

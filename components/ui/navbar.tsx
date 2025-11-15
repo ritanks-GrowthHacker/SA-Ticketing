@@ -5,6 +5,7 @@ import { ChevronDown, LogOut, Settings, User } from 'lucide-react';
 import { useAuthStore } from '@/app/store/authStore';
 import { useRouter } from 'next/navigation';
 import { SimpleThemeToggle } from './ThemeToggle';
+import NotificationBell from './NotificationBell';
 
 interface NavbarProps {
   className?: string;
@@ -81,6 +82,9 @@ const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
 
       {/* Right side - User menu */}
       <div className="flex items-center space-x-4">
+        {/* Notification Bell */}
+        <NotificationBell />
+        
         {/* Theme Toggle */}
         <SimpleThemeToggle />
         

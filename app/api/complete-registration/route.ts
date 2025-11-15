@@ -60,6 +60,36 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
     }
 
+    // Assign default "Member" role to the user
+    const { data: memberRole } = await supabase
+      .from("global_roles")
+      .select("id")
+      .eq("name", "Member")
+      .single();
+
+    if (memberRole) {
+      // Assign organization-level Member role
+      await supabase
+        .from("user_organization_roles")
+        .insert({
+          user_id: user.id,
+          organization_id: invitation.organization_id,
+          role_id: memberRole.id
+        });
+
+      // Also assign department-level Member role
+      if (invitation.department_id) {
+        await supabase
+          .from("user_department_roles")
+          .insert({
+            user_id: user.id,
+            department_id: invitation.department_id,
+            organization_id: invitation.organization_id,
+            role_id: memberRole.id
+          });
+      }
+    }
+
     // Send OTP email
     const emailSent = await OTPService.sendOTP(email, otp, 'registration');
     

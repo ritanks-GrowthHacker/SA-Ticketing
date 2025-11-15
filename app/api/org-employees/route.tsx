@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/app/db/connections';
+import jwt from 'jsonwebtoken';
 
 export async function GET(request: NextRequest) {
   try {
@@ -21,6 +22,40 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Get user from token to check department-level permissions
+    const authHeader = request.headers.get('authorization');
+    let userDepartments: string[] = [];
+    let isOrgAdmin = false;
+    
+    if (authHeader) {
+      try {
+        const token = authHeader.replace('Bearer ', '');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key') as any;
+        
+        // Check if user is org-level admin
+        const userRole = decoded.role || decoded.roles?.[0];
+        isOrgAdmin = ['Admin', 'Super Admin'].includes(userRole);
+        
+        // Get user's department roles
+        if (!isOrgAdmin && decoded.sub) {
+          const { data: deptRoles } = await supabase
+            .from('user_department_roles')
+            .select('department_id, global_roles!inner(name)')
+            .eq('user_id', decoded.sub)
+            .eq('organization_id', orgId);
+          
+          // Filter departments where user is Admin
+          if (deptRoles) {
+            userDepartments = deptRoles
+              .filter((dr: any) => dr.global_roles?.name === 'Admin')
+              .map((dr: any) => dr.department_id);
+          }
+        }
+      } catch (error) {
+        console.error('Token verification error:', error);
+      }
+    }
+
     // First, get the organization to find its associated departments
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
@@ -37,18 +72,25 @@ export async function GET(request: NextRequest) {
     }
 
     // Get all departments for this organization
-    const { data: allDepartments, error: deptError } = await supabase
+    let departmentsQuery = supabase
       .from('departments')
       .select('id, name, color_code, description')
       .in('id', organization.associated_departments || [])
       .order('name');
+    
+    // If user is department admin (not org admin), filter to only their departments
+    if (!isOrgAdmin && userDepartments.length > 0) {
+      departmentsQuery = departmentsQuery.in('id', userDepartments);
+    }
+
+    const { data: allDepartments, error: deptError } = await departmentsQuery;
 
     if (deptError) {
       console.error('Error fetching departments:', deptError);
     }
 
     // Get employees for this organization with their role information
-    const { data: employees, error: employeeError } = await supabase
+    let employeesQuery = supabase
       .from('users')
       .select(`
         id,
@@ -58,6 +100,7 @@ export async function GET(request: NextRequest) {
         phone,
         location,
         department,
+        department_id,
         created_at,
         user_organization_roles!inner(
           role_id,
@@ -67,8 +110,14 @@ export async function GET(request: NextRequest) {
           )
         )
       `)
-      .eq('user_organization_roles.organization_id', orgId)
-      .order('name');
+      .eq('user_organization_roles.organization_id', orgId);
+    
+    // If user is department admin, filter employees to only their departments
+    if (!isOrgAdmin && userDepartments.length > 0) {
+      employeesQuery = employeesQuery.in('department_id', userDepartments);
+    }
+
+    const { data: employees, error: employeeError } = await employeesQuery.order('name');
 
     if (employeeError) {
       console.error('Error fetching employees:', employeeError);
@@ -83,10 +132,14 @@ export async function GET(request: NextRequest) {
       // Extract role information
       const roleInfo = employee.user_organization_roles?.[0]?.global_roles;
       
+      // Find matching department by ID or name
+      const deptId = employee.department_id;
+      const matchingDept = allDepartments?.find(d => d.id === deptId);
+      
       return {
         ...employee,
-        department_id: employee.department, // Use department name
-        department_name: employee.department || 'Unassigned',
+        department_id: deptId || employee.department,
+        department_name: matchingDept?.name || employee.department || 'Unassigned',
         current_role: roleInfo?.name || null,
         current_role_id: roleInfo?.id || null,
         user_organization_roles: undefined // Remove nested data from response
@@ -96,11 +149,11 @@ export async function GET(request: NextRequest) {
     // Create department list with employee counts
     const departmentsWithCounts = (allDepartments || []).map(dept => {
       const employeeCount = employeesWithDepartments.filter(
-        emp => emp.department === dept.name
+        emp => emp.department_id === dept.id || emp.department === dept.name
       ).length;
       
       return {
-        id: dept.name, // Use department name as ID for filtering
+        id: dept.id, // Use actual department UUID as ID
         name: dept.name,
         employee_count: employeeCount,
         color_code: dept.color_code || '#3B82F6',

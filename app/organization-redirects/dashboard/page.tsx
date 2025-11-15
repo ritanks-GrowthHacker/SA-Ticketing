@@ -87,7 +87,7 @@ export default function OrganizationDashboard() {
     }
   };
 
-  const assignRoleToUser = async (userId: string, roleId: string) => {
+  const assignRoleToUser = async (userId: string, roleId: string, departmentId?: string) => {
     setAssigningRole(userId);
     try {
       const response = await fetch('/api/assign-organization-role', {
@@ -98,7 +98,8 @@ export default function OrganizationDashboard() {
         body: JSON.stringify({
           user_id: userId,
           role_id: roleId,
-          organization_id: getCurrentOrgId()
+          organization_id: getCurrentOrgId(),
+          department_id: departmentId // Pass department ID for department-level role assignment
         }),
       });
 
@@ -377,7 +378,7 @@ export default function OrganizationDashboard() {
                                 value={employee.current_role_id || ''}
                                 onChange={(e) => {
                                   if (e.target.value) {
-                                    assignRoleToUser(employee.id, e.target.value);
+                                    assignRoleToUser(employee.id, e.target.value, department.id);
                                   }
                                 }}
                                 disabled={assigningRole === employee.id}

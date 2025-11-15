@@ -71,6 +71,16 @@ const ManageAccessPage = () => {
     show: boolean;
   }>({ type: 'info', message: '', show: false });
 
+  // Resource Request Modal states
+  const [showResourceModal, setShowResourceModal] = useState(false);
+  const [departments, setDepartments] = useState<any[]>([]);
+  const [selectedDepartment, setSelectedDepartment] = useState('');
+  const [departmentEmployees, setDepartmentEmployees] = useState<any[]>([]);
+  const [selectedEmployee, setSelectedEmployee] = useState('');
+  const [resourceRequests, setResourceRequests] = useState<any[]>([]);
+  const [pendingRequests, setPendingRequests] = useState<any[]>([]);
+  const [requestMessage, setRequestMessage] = useState('');
+
   // Function to show notifications
   const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
     setNotification({ type, message, show: true });
@@ -98,8 +108,26 @@ const ManageAccessPage = () => {
   useEffect(() => {
     if (token && role === 'Admin') {
       fetchAssignments();
+      fetchResourceRequests();
     }
   }, [selectedProject, token, role]);
+
+  // Fetch departments when modal opens
+  useEffect(() => {
+    if (showResourceModal) {
+      console.log('Modal opened, fetching departments...');
+      fetchDepartments();
+    }
+  }, [showResourceModal]);
+
+  // Fetch employees when department changes
+  useEffect(() => {
+    if (selectedDepartment) {
+      fetchDepartmentEmployees(selectedDepartment);
+    } else {
+      setDepartmentEmployees([]);
+    }
+  }, [selectedDepartment]);
 
   // Clear selected users when switching to "All Projects" view (unless admin working with unassigned users)
   useEffect(() => {
@@ -231,6 +259,146 @@ const ManageAccessPage = () => {
       console.warn('Network error fetching assignments:', error);
       setAssignments([]);
     }
+  };
+
+  // Fetch departments for resource request modal
+  const fetchDepartments = async () => {
+    try {
+      const authState = useAuthStore.getState();
+      const orgId = authState.organization?.id;
+      if (!orgId) {
+        console.error('No organization ID found');
+        return;
+      }
+
+      const response = await fetch(`/api/get-org-departments?orgId=${orgId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('Fetched departments:', data.departments);
+        setDepartments(data.departments || []);
+      } else {
+        console.error('Failed to fetch departments:', await response.text());
+      }
+    } catch (error) {
+      console.error('Error fetching departments:', error);
+    }
+  };
+
+  // Fetch employees by department
+  const fetchDepartmentEmployees = async (departmentId: string) => {
+    try {
+      const authState = useAuthStore.getState();
+      const orgId = authState.organization?.id;
+      if (!orgId) return;
+
+      const response = await fetch(`/api/get-department-employees?departmentId=${departmentId}&orgId=${orgId}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setDepartmentEmployees(data.employees || []);
+      }
+    } catch (error) {
+      console.error('Error fetching department employees:', error);
+    }
+  };
+
+  // Fetch resource requests for current project
+  const fetchResourceRequests = async () => {
+    if (selectedProject === 'all') return;
+
+    try {
+      const response = await fetch(`/api/get-resource-requests?projectId=${selectedProject}`, {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setResourceRequests(data.requests || []);
+      }
+    } catch (error) {
+      console.error('Error fetching resource requests:', error);
+    }
+  };
+
+  // Add employee to pending requests
+  const addToPendingRequests = () => {
+    if (!selectedEmployee || !selectedDepartment) return;
+
+    const employee = departmentEmployees.find(e => e.id === selectedEmployee);
+    const department = departments.find(d => d.id === selectedDepartment);
+
+    if (employee && department) {
+      setPendingRequests([...pendingRequests, {
+        user_id: employee.id,
+        user_name: employee.name,
+        user_email: employee.email,
+        user_job_title: employee.job_title,
+        department_id: department.id,
+        department_name: department.name,
+        message: requestMessage
+      }]);
+      
+      // Reset selections
+      setSelectedEmployee('');
+      setRequestMessage('');
+    }
+  };
+
+  // Submit all pending resource requests
+  const submitResourceRequests = async () => {
+    if (pendingRequests.length === 0 || selectedProject === 'all') return;
+
+    try {
+      const response = await fetch('/api/submit-resource-requests', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          project_id: selectedProject,
+          requests: pendingRequests.map(req => ({
+            user_id: req.user_id,
+            department_id: req.department_id,
+            message: req.message
+          }))
+        })
+      });
+
+      if (response.ok) {
+        showNotification('success', `${pendingRequests.length} resource request(s) submitted successfully`);
+        setPendingRequests([]);
+        setShowResourceModal(false);
+        setSelectedDepartment('');
+        setSelectedEmployee('');
+        setRequestMessage('');
+        fetchResourceRequests();
+      } else {
+        showNotification('error', 'Failed to submit resource requests');
+      }
+    } catch (error) {
+      console.error('Error submitting resource requests:', error);
+      showNotification('error', 'An error occurred while submitting requests');
+    }
+  };
+
+  // Remove from pending requests
+  const removeFromPending = (index: number) => {
+    setPendingRequests(pendingRequests.filter((_, i) => i !== index));
   };
 
   const handleAssignUsers = async (projectId: string, roleId: string) => {
@@ -563,9 +731,24 @@ const ManageAccessPage = () => {
             <h2 className="text-lg font-semibold text-gray-900">
               {selectedProject === 'all' ? 'All Organization Members' : 'Project Members'}
             </h2>
-            <span className="text-sm text-gray-500">
-              {filteredUsers.length} {selectedProject === 'all' ? 'members' : 'users'}
-            </span>
+            <div className="flex items-center space-x-3">
+              {selectedProject !== 'all' ? (
+                <button
+                  onClick={() => setShowResourceModal(true)}
+                  className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 shadow-sm"
+                >
+                  <UserCheck className="w-4 h-4 mr-2" />
+                  Ask Resource
+                </button>
+              ) : (
+                <div className="text-xs text-gray-500 italic">
+                  Select a project to request resources
+                </div>
+              )}
+              <span className="text-sm text-gray-500">
+                {filteredUsers.length} {selectedProject === 'all' ? 'members' : 'users'}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -864,6 +1047,84 @@ const ManageAccessPage = () => {
         )}
       </div>
 
+      {/* Resource Requests Table - Only show when project is selected */}
+      {selectedProject !== 'all' && resourceRequests.length > 0 && (
+        <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-900">
+              Resource Requests
+            </h2>
+            <p className="text-sm text-gray-600 mt-1">
+              Requests for resources from other departments
+            </p>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    User
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Department
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Requested On
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Message
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {resourceRequests.map((request: any) => (
+                  <tr key={request.id} className="hover:bg-gray-50">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900">{request.user.name}</div>
+                        <div className="text-sm text-gray-500">{request.user.email}</div>
+                        {request.user.job_title && (
+                          <div className="text-xs text-gray-400">{request.user.job_title}</div>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center">
+                        <div 
+                          className="w-3 h-3 rounded-full mr-2"
+                          style={{ backgroundColor: request.department.color_code || '#3B82F6' }}
+                        />
+                        <span className="text-sm text-gray-900">{request.department.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        request.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                        request.status === 'approved' ? 'bg-green-100 text-green-800' :
+                        request.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                        'bg-gray-100 text-gray-800'
+                      }`}>
+                        {request.status.charAt(0).toUpperCase() + request.status.slice(1)}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {new Date(request.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500">
+                      {request.message || '-'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Assignment Modal - Temporarily Disabled */}
       {false && (
         <AssignmentModal
@@ -960,6 +1221,151 @@ const ManageAccessPage = () => {
                   className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
                 >
                   Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Resource Request Modal */}
+      {showResourceModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen px-4">
+            <div className="fixed inset-0 bg-black opacity-30" onClick={() => setShowResourceModal(false)}></div>
+            
+            <div className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full z-50">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-semibold text-gray-900">Request Resources</h3>
+                <p className="text-sm text-gray-600 mt-1">Request team members from other departments</p>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {/* Department Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Department
+                  </label>
+                  <select
+                    value={selectedDepartment}
+                    onChange={(e) => setSelectedDepartment(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="">Choose a department...</option>
+                    {departments.length === 0 && (
+                      <option value="" disabled>Loading departments...</option>
+                    )}
+                    {departments.map(dept => (
+                      <option key={dept.id} value={dept.id}>{dept.name}</option>
+                    ))}
+                  </select>
+                  {departments.length === 0 && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      No departments found. Please make sure your organization has departments set up.
+                    </p>
+                  )}
+                </div>
+
+                {/* Employee Selection */}
+                {selectedDepartment && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Select Employee
+                    </label>
+                    <select
+                      value={selectedEmployee}
+                      onChange={(e) => setSelectedEmployee(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      disabled={departmentEmployees.length === 0}
+                    >
+                      <option value="">Choose an employee...</option>
+                      {departmentEmployees.map(emp => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.name} - {emp.job_title || emp.email}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Optional Message */}
+                {selectedEmployee && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Message (Optional)
+                    </label>
+                    <textarea
+                      value={requestMessage}
+                      onChange={(e) => setRequestMessage(e.target.value)}
+                      placeholder="Reason for requesting this resource..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      rows={3}
+                    />
+                  </div>
+                )}
+
+                {/* Add to List Button */}
+                {selectedEmployee && (
+                  <div className="flex justify-end">
+                    <button
+                      onClick={addToPendingRequests}
+                      className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add to Request List
+                    </button>
+                  </div>
+                )}
+
+                {/* Pending Requests List */}
+                {pendingRequests.length > 0 && (
+                  <div className="mt-6 border-t pt-4">
+                    <h4 className="text-sm font-medium text-gray-900 mb-3">
+                      Pending Requests ({pendingRequests.length})
+                    </h4>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {pendingRequests.map((req, index) => (
+                        <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                          <div className="flex-1">
+                            <div className="text-sm font-medium text-gray-900">{req.user_name}</div>
+                            <div className="text-xs text-gray-500">{req.department_name} - {req.user_email}</div>
+                          </div>
+                          <button
+                            onClick={() => removeFromPending(index)}
+                            className="ml-2 text-red-600 hover:text-red-800"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-between">
+                <button
+                  onClick={() => {
+                    setShowResourceModal(false);
+                    setPendingRequests([]);
+                    setSelectedDepartment('');
+                    setSelectedEmployee('');
+                    setRequestMessage('');
+                  }}
+                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={submitResourceRequests}
+                  disabled={pendingRequests.length === 0}
+                  className={`px-6 py-2 rounded-lg transition-colors ${
+                    pendingRequests.length > 0
+                      ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  Submit {pendingRequests.length > 0 && `(${pendingRequests.length})`} Request{pendingRequests.length !== 1 ? 's' : ''}
                 </button>
               </div>
             </div>
