@@ -4,10 +4,10 @@ import jwt from 'jsonwebtoken';
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const notificationId = params.id;
+    const { id: notificationId } = await params;
 
     // Verify user from token
     const authHeader = request.headers.get('authorization');
