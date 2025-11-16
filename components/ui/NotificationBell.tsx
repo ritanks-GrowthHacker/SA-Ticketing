@@ -50,16 +50,42 @@ const NotificationBell: React.FC = () => {
     const eventSource = new EventSource(`/api/notifications/stream?token=${encodeURIComponent(token)}`);
 
     eventSource.onmessage = (event) => {
-      const newNotification = JSON.parse(event.data);
-      setNotifications((prev) => [newNotification, ...prev]);
-      setUnreadCount((prev) => prev + 1);
+      const data = JSON.parse(event.data);
       
-      // Optional: Show browser notification
-      if (Notification.permission === 'granted') {
-        new Notification(newNotification.title, {
+      // Ignore connection messages
+      if (data.type === 'connected') return;
+      
+      const newNotification = data;
+      
+      // Check if notification already exists to prevent duplicates
+      setNotifications((prev) => {
+        const exists = prev.some(n => n.id === newNotification.id);
+        if (exists) return prev;
+        
+        setUnreadCount((count) => count + 1);
+        return [newNotification, ...prev];
+      });
+      
+      // Show browser notification
+      if (Notification.permission === 'granted' && newNotification.title) {
+        const notification = new Notification(newNotification.title, {
           body: newNotification.message,
-          icon: '/favicon.ico'
+          icon: '/favicon.ico',
+          tag: newNotification.entity_id,
+          requireInteraction: false,
         });
+
+        // Auto-close after 5 seconds
+        setTimeout(() => notification.close(), 5000);
+
+        // Handle click
+        notification.onclick = () => {
+          window.focus();
+          if (newNotification.entity_type === 'ticket') {
+            window.location.href = `/tickets/${newNotification.entity_id}`;
+          }
+          notification.close();
+        };
       }
     };
 
@@ -68,9 +94,15 @@ const NotificationBell: React.FC = () => {
       eventSource.close();
     };
 
-    // Request browser notification permission
+    // Auto-request browser notification permission
     if (Notification.permission === 'default') {
-      Notification.requestPermission();
+      setTimeout(() => {
+        Notification.requestPermission().then(permission => {
+          if (permission === 'granted') {
+            console.log('✅ Browser notifications enabled');
+          }
+        });
+      }, 2000); // Wait 2 seconds after page load
     }
 
     return () => {

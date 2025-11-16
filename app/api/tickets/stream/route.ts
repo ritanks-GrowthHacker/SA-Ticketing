@@ -2,10 +2,11 @@ import { NextRequest } from 'next/server';
 import { supabase } from '@/app/db/connections';
 import jwt from 'jsonwebtoken';
 
-// SSE endpoint for real-time notifications
+// SSE endpoint for real-time ticket updates
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const token = searchParams.get('token');
+  const projectId = searchParams.get('project_id');
 
   if (!token) {
     return new Response('Unauthorized - No token provided', { status: 401 });
@@ -22,6 +23,7 @@ export async function GET(request: NextRequest) {
     }
     
     const userId = decoded.sub;
+    const orgId = decoded.org_id;
 
     // Set up SSE headers
     const encoder = new TextEncoder();
@@ -32,7 +34,7 @@ export async function GET(request: NextRequest) {
         try {
           // Send initial connection message
           controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify({ type: 'connected', message: 'SSE connection established' })}\n\n`)
+            encoder.encode(`data: ${JSON.stringify({ type: 'connected', message: 'Ticket updates stream connected' })}\n\n`)
           );
 
           // Keep-alive interval
@@ -44,22 +46,48 @@ export async function GET(request: NextRequest) {
             }
           }, 30000); // Send keep-alive every 30 seconds
 
-          // Poll for new notifications every 3 seconds
+          // Poll for ticket updates every 2 seconds
           const pollInterval = setInterval(async () => {
             try {
-              const { data: newNotifications, error } = await supabase
-                .from('notifications')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('is_read', false)
-                .gt('created_at', lastCheckTime.toISOString())
-                .order('created_at', { ascending: false });
+              // Build query based on filters
+              let query = supabase
+                .from('tickets')
+                .select(`
+                  id,
+                  title,
+                  description,
+                  status_id,
+                  priority_id,
+                  assigned_to,
+                  created_by,
+                  project_id,
+                  updated_at,
+                  created_at,
+                  projects!inner(name, organization_id),
+                  status:statuses!tickets_status_id_fkey(id, name, color_code),
+                  priority:priorities!tickets_priority_id_fkey(id, name, color_code),
+                  assignee:users!tickets_assigned_to_fkey(id, name, email),
+                  creator:users!tickets_created_by_fkey(id, name, email)
+                `)
+                .eq('projects.organization_id', orgId)
+                .gt('updated_at', lastCheckTime.toISOString())
+                .order('updated_at', { ascending: false });
 
-              if (!error && newNotifications && newNotifications.length > 0) {
-                // Send each new notification
-                for (const notification of newNotifications) {
+              // Filter by project if specified
+              if (projectId) {
+                query = query.eq('project_id', projectId);
+              }
+
+              const { data: updatedTickets, error } = await query;
+
+              if (!error && updatedTickets && updatedTickets.length > 0) {
+                // Send each updated ticket
+                for (const ticket of updatedTickets) {
                   controller.enqueue(
-                    encoder.encode(`data: ${JSON.stringify(notification)}\n\n`)
+                    encoder.encode(`data: ${JSON.stringify({
+                      type: 'ticket_update',
+                      ticket: ticket
+                    })}\n\n`)
                   );
                 }
                 
@@ -67,9 +95,9 @@ export async function GET(request: NextRequest) {
                 lastCheckTime = new Date();
               }
             } catch (error) {
-              console.error('Error polling notifications:', error);
+              console.error('Error polling ticket updates:', error);
             }
-          }, 3000); // Poll every 3 seconds
+          }, 2000); // Poll every 2 seconds
 
           // Cleanup on close
           request.signal.addEventListener('abort', () => {

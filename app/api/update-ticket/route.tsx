@@ -132,26 +132,37 @@ export async function PUT(request: NextRequest) {
     const isCreator = existingTicket.created_by === decoded.sub || existingTicket.created_by === decoded.userId;
     const isAssignee = existingTicket.assigned_to === decoded.sub || existingTicket.assigned_to === decoded.userId;
 
+    // Get user's actual organization role
+    const { data: userOrgRole } = await supabase
+      .from('user_organization_roles')
+      .select(`
+        role_id,
+        global_roles!user_organization_roles_role_id_fkey(name)
+      `)
+      .eq('user_id', decoded.sub)
+      .eq('organization_id', decoded.org_id)
+      .single();
+
+    const actualUserRole = (userOrgRole?.global_roles as any)?.name || userRole;
+
     // Check if user has Manager role in the same project
     let isProjectManager = false;
-    if (userRole === 'Manager') {
-      const { data: userProjectRole, error: roleError } = await supabase
-        .from('user_project')
-        .select(`
-          project_id, role_id,
-          global_roles!user_project_role_id_fkey(name)
-        `)
-        .eq('user_id', decoded.sub || decoded.userId)
-        .eq('project_id', existingTicket.project_id)
-        .single();
-      
-      if (!roleError && userProjectRole && (userProjectRole as any).global_roles?.name === 'Manager') {
-        isProjectManager = true;
-      }
+    const { data: userProjectRole, error: roleError } = await supabase
+      .from('user_project')
+      .select(`
+        project_id, role_id,
+        global_roles!user_project_role_id_fkey(name)
+      `)
+      .eq('user_id', decoded.sub || decoded.userId)
+      .eq('project_id', existingTicket.project_id)
+      .single();
+    
+    if (!roleError && userProjectRole && (userProjectRole as any).global_roles?.name === 'Manager') {
+      isProjectManager = true;
     }
 
     // Check edit permissions: Admin, Project Manager, Creator, or Assignee
-    const canEdit = userRole === 'Admin' || isProjectManager || isCreator || isAssignee;
+    const canEdit = actualUserRole === 'Admin' || isProjectManager || isCreator || isAssignee;
 
     if (!canEdit) {
       return NextResponse.json(
@@ -166,10 +177,10 @@ export async function PUT(request: NextRequest) {
         .from('statuses')
         .select('id')
         .eq('id', status_id)
-        .eq('organization_id', decoded.org_id)
+        .or(`organization_id.eq.${decoded.org_id},organization_id.is.null`)
         .eq('type', 'ticket')
         .eq('is_active', true)
-        .single();
+        .maybeSingle();
 
       if (statusError || !validStatus) {
         return NextResponse.json(
@@ -181,20 +192,32 @@ export async function PUT(request: NextRequest) {
 
     // Validate priority_id if provided
     if (priority_id) {
-      const { data: validPriority, error: priorityError } = await supabase
+      // Check both statuses table (type=priority) and priorities table
+      const { data: priorityStatus } = await supabase
         .from('statuses')
         .select('id')
         .eq('id', priority_id)
-        .eq('organization_id', decoded.org_id)
+        .or(`organization_id.eq.${decoded.org_id},organization_id.is.null`)
         .eq('type', 'priority')
         .eq('is_active', true)
-        .single();
+        .maybeSingle();
 
-      if (priorityError || !validPriority) {
-        return NextResponse.json(
-          { error: 'Invalid priority ID' },
-          { status: 400 }
-        );
+      if (!priorityStatus) {
+        // Check legacy priorities table
+        const { data: priorityRow } = await supabase
+          .from('priorities')
+          .select('id')
+          .eq('id', priority_id)
+          .or(`organization_id.eq.${decoded.org_id},organization_id.is.null`)
+          .eq('is_active', true)
+          .maybeSingle();
+
+        if (!priorityRow) {
+          return NextResponse.json(
+            { error: 'Invalid priority ID' },
+            { status: 400 }
+          );
+        }
       }
     }
 
@@ -208,7 +231,7 @@ export async function PUT(request: NextRequest) {
         .select(`
           user_id,
           organization_id,
-          users(id, name, email)
+          users!inner(id, name, email, department_id)
         `)
         .eq('user_id', assigned_to)
         .eq('organization_id', decoded.org_id)
@@ -226,32 +249,18 @@ export async function PUT(request: NextRequest) {
         );
       }
 
-      // Then check if user is assigned to the project
-      const { data: userInProject, error: projectError } = await supabase
-        .from('user_project')
-        .select('user_id, project_id')
-        .eq('user_id', assigned_to)
-        .eq('project_id', existingTicket.project_id)
-        .single();
+      // Check if current user can assign to this user (department + shared project access)
+      const canAssign = await checkAssignmentPermission(
+        decoded.sub,
+        assigned_to,
+        existingTicket.project_id,
+        decoded.org_id
+      );
 
-      if (projectError || !userInProject) {
-        console.error('User not in project:', projectError);
-        console.log('Project validation params:', {
-          user_id: assigned_to,
-          project_id: existingTicket.project_id
-        });
-        
-        // Debug: Show what projects this user is assigned to
-        const { data: userProjects } = await supabase
-          .from('user_project')
-          .select('project_id, projects(name)')
-          .eq('user_id', assigned_to);
-        
-        console.log('Available projects for user:', userProjects);
-        
+      if (!canAssign) {
         return NextResponse.json(
-          { error: 'Invalid assignee - User not assigned to this project' },
-          { status: 400 }
+          { error: 'You cannot assign tickets to users outside your department or shared projects' },
+          { status: 403 }
         );
       }
 
@@ -377,12 +386,12 @@ export async function PUT(request: NextRequest) {
         .eq('id', updatedTicket.status_id)
         .single() : Promise.resolve({ data: null, error: null }),
       
-      // Priority (if exists)
+      // Priority (if exists) - check priorities table
       updatedTicket.priority_id ? supabase
-        .from('statuses')
-        .select('id, name, type, color_code, sort_order')
+        .from('priorities')
+        .select('id, name, description, color_code, sort_order')
         .eq('id', updatedTicket.priority_id)
-        .single() : Promise.resolve({ data: null, error: null })
+        .maybeSingle() : Promise.resolve({ data: null, error: null })
     ]);
 
     const project = projectResult.data;
@@ -431,14 +440,14 @@ export async function PUT(request: NextRequest) {
         priority: priority ? {
           id: priority.id,
           name: priority.name,
-          type: priority.type,
+          type: 'priority', // Priorities don't have type field, hardcode it
           color_code: priority.color_code,
           sort_order: priority.sort_order
         } : null,
         permissions: {
           can_edit: canEdit,
-          can_delete: userRole === 'Admin' || isProjectManager || isCreator,
-          can_assign: userRole === 'Admin' || isProjectManager,
+          can_delete: actualUserRole === 'Admin' || isProjectManager || isCreator,
+          can_assign: actualUserRole === 'Admin' || isProjectManager,
           is_creator: isCreator,
           is_assignee: isAssignee,
           is_project_manager: isProjectManager
@@ -531,8 +540,8 @@ async function sendTicketUpdateNotifications(
     // Check for priority changes
     if (updateData.priority_id && updateData.priority_id !== oldTicket.priority_id) {
       const [oldPriority, newPriority] = await Promise.all([
-        oldTicket.priority_id ? supabase.from('statuses').select('name').eq('id', oldTicket.priority_id).single() : Promise.resolve({ data: null }),
-        supabase.from('statuses').select('name').eq('id', updateData.priority_id).single()
+        oldTicket.priority_id ? supabase.from('priorities').select('name').eq('id', oldTicket.priority_id).maybeSingle() : Promise.resolve({ data: null }),
+        supabase.from('priorities').select('name').eq('id', updateData.priority_id).maybeSingle()
       ]);
       
       changes.push({
@@ -584,7 +593,7 @@ async function sendTicketUpdateNotifications(
 
     console.log(`📧 Sending update notifications to ${recipients.size} recipients for ticket ${updatedTicket.id}`);
 
-    // Send emails to all recipients
+    // Send emails and create in-app notifications for all recipients
     const emailPromises = Array.from(recipients).map(async (recipientId) => {
       try {
         const { data: recipient, error: recipientError } = await supabase
@@ -598,6 +607,20 @@ async function sendTicketUpdateNotifications(
           return;
         }
 
+        // Create in-app notification
+        const changesText = changes.map(c => c.field).join(', ');
+        await supabase
+          .from('notifications')
+          .insert({
+            user_id: recipientId,
+            entity_type: 'ticket',
+            entity_id: updatedTicket.id,
+            title: 'Ticket Updated',
+            message: `Ticket "${updatedTicket.title}" was updated. Changes: ${changesText}`,
+            type: 'info'
+          });
+
+        // Send email notification
         const emailResult = await emailService.sendTicketUpdateEmail(
           recipient.email,
           updatedTicket.id,
@@ -615,7 +638,7 @@ async function sendTicketUpdateNotifications(
         }
 
       } catch (error) {
-        console.error(`Error sending email to recipient ${recipientId}:`, error);
+        console.error(`Error sending notification to recipient ${recipientId}:`, error);
       }
     });
 
@@ -624,4 +647,88 @@ async function sendTicketUpdateNotifications(
   } catch (error) {
     console.error('Error in sendTicketUpdateNotifications:', error);
   }
+}
+
+// Helper function to check if user can assign tickets to another user
+async function checkAssignmentPermission(
+  creatorId: string,
+  assigneeId: string,
+  projectId: string,
+  orgId: string
+): Promise<boolean> {
+  console.log('🔧 Checking assignment permission:', { creatorId, assigneeId, projectId, orgId });
+
+  // Get creator's role and department
+  const { data: creatorData } = await supabase
+    .from('users')
+    .select('department_id')
+    .eq('id', creatorId)
+    .single();
+
+  const { data: creatorOrgRole } = await supabase
+    .from('user_organization_roles')
+    .select(`
+      role_id,
+      global_roles!user_organization_roles_role_id_fkey(name)
+    `)
+    .eq('user_id', creatorId)
+    .eq('organization_id', orgId)
+    .single();
+
+  const creatorRole = (creatorOrgRole?.global_roles as any)?.name || 'User';
+  console.log('🔧 Creator role:', creatorRole, 'department:', creatorData?.department_id);
+
+  // Org Admins can assign to anyone in the organization
+  if (creatorRole === 'Admin') {
+    console.log('✅ Org Admin - can assign to anyone');
+    return true;
+  }
+
+  // Get assignee's department
+  const { data: assigneeData } = await supabase
+    .from('users')
+    .select('department_id')
+    .eq('id', assigneeId)
+    .single();
+
+  console.log('🔧 Assignee department:', assigneeData?.department_id);
+
+  // Check if users are in the same department
+  if (creatorData?.department_id && assigneeData?.department_id) {
+    if (creatorData.department_id === assigneeData.department_id) {
+      console.log('✅ Same department - can assign');
+      return true;
+    }
+  }
+
+  // Check if the project is shared with assignee's department
+  if (assigneeData?.department_id) {
+    const { data: sharedProject } = await supabase
+      .from('shared_projects')
+      .select('project_id, department_id')
+      .eq('project_id', projectId)
+      .eq('department_id', assigneeData.department_id)
+      .single();
+
+    if (sharedProject) {
+      console.log('✅ Project shared with assignee department - can assign');
+      return true;
+    }
+  }
+
+  // Check if assignee has direct access to the project via user_project
+  const { data: assigneeProjectAccess } = await supabase
+    .from('user_project')
+    .select('user_id')
+    .eq('user_id', assigneeId)
+    .eq('project_id', projectId)
+    .single();
+
+  if (assigneeProjectAccess) {
+    console.log('✅ Assignee has direct project access - can assign');
+    return true;
+  }
+
+  console.log('❌ Cannot assign - no shared access');
+  return false;
 }

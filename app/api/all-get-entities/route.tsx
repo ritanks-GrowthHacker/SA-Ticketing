@@ -39,7 +39,7 @@ export async function GET(req: Request) {
       let statusQuery = supabase
         .from("statuses")
         .select("id, name, type, color_code, sort_order, is_active, created_at")
-        .eq("organization_id", organizationId)
+        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
         .eq("is_active", true)
         .order("sort_order", { ascending: true })
         .order("name", { ascending: true });
@@ -58,10 +58,29 @@ export async function GET(req: Request) {
         );
       }
 
+      // Get priorities from priorities table for backward compatibility
+      const { data: prioritiesFromTable } = await supabase
+        .from("priorities")
+        .select("id, name, description, color_code, sort_order, is_active, created_at")
+        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+
+      // Map priorities to match status structure
+      const prioritiesAsStatuses = (prioritiesFromTable || []).map((p: any) => ({
+        id: p.id,
+        name: p.name,
+        type: 'priority',
+        color_code: p.color_code,
+        sort_order: p.sort_order,
+        is_active: p.is_active,
+        created_at: p.created_at
+      }));
+
       responseData.statuses = {
         ticket: statuses?.filter((s: any) => s.type === 'ticket') || [],
-        priority: statuses?.filter((s: any) => s.type === 'priority') || [],
-        all: statuses || []
+        priority: prioritiesAsStatuses,
+        all: [...(statuses || []), ...prioritiesAsStatuses]
       };
     }
 
@@ -83,9 +102,44 @@ export async function GET(req: Request) {
     }
 
     if (entityType === 'departments' || entityType === 'all') {
-      // Departments are stored in organizations.associated_departments array
-      // For now, return empty array since there's no separate departments table
-      responseData.departments = [];
+      // Fetch departments from departments table
+      const { data: departments, error: deptError } = await supabase
+        .from("departments")
+        .select("id, name, description, color_code, sort_order, is_active, created_at")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("name", { ascending: true });
+
+      if (deptError) {
+        console.error("Departments fetch error:", deptError);
+        return NextResponse.json(
+          { error: "Failed to fetch departments" }, 
+          { status: 500 }
+        );
+      }
+
+      responseData.departments = departments || [];
+    }
+
+    if (entityType === 'priorities' || entityType === 'all') {
+      // Fetch priorities from priorities table
+      const { data: priorities, error: priorityError } = await supabase
+        .from("priorities")
+        .select("id, name, description, color_code, sort_order, is_active, created_at")
+        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("name", { ascending: true });
+
+      if (priorityError) {
+        console.error("Priorities fetch error:", priorityError);
+        return NextResponse.json(
+          { error: "Failed to fetch priorities" }, 
+          { status: 500 }
+        );
+      }
+
+      responseData.priorities = priorities || [];
     }
 
     const response = {
@@ -99,6 +153,7 @@ export async function GET(req: Request) {
         statuses: responseData.statuses?.all?.length || 0,
         roles: responseData.roles?.length || 0,
         departments: responseData.departments?.length || 0,
+        priorities: responseData.priorities?.length || 0,
         ...(responseData.statuses && {
           ticket_statuses: responseData.statuses.ticket.length,
           priority_statuses: responseData.statuses.priority.length

@@ -27,6 +27,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Ticket, AlertCircle, Clock, CheckCircle, Loader, Info, GripVertical, X } from 'lucide-react';
+import { useTicketUpdates } from '@/app/hooks/useTicketUpdates';
 
 interface TicketItem {
   id: string;
@@ -86,6 +87,43 @@ const DragDropTicketBoard: React.FC<DragDropTicketBoardProps> = ({
     message: string;
     show: boolean;
   }>({ type: 'info', message: '', show: false });
+
+  // Real-time ticket updates
+  useTicketUpdates({
+    onUpdate: (updatedTicket) => {
+      console.log('🔄 Kanban: Real-time ticket update received:', updatedTicket);
+      setLocalTickets(prev => {
+        const exists = prev.some(t => t.id === updatedTicket.id);
+        if (exists) {
+          // Update existing ticket
+          return prev.map(t => t.id === updatedTicket.id ? {
+            ...t,
+            status: updatedTicket.status?.name || t.status,
+            status_id: updatedTicket.status_id || t.status_id,
+            priority: updatedTicket.priority?.name || t.priority,
+            priority_id: updatedTicket.priority_id || t.priority_id,
+            assignedTo: updatedTicket.assignee?.name || t.assignedTo,
+            assigned_to: updatedTicket.assigned_to || t.assigned_to,
+          } : t);
+        } else {
+          // New ticket created - add to list
+          return [...prev, {
+            id: updatedTicket.id,
+            title: updatedTicket.title,
+            status: updatedTicket.status?.name || 'Unknown',
+            status_id: updatedTicket.status_id,
+            priority: updatedTicket.priority?.name || 'Unknown',
+            priority_id: updatedTicket.priority_id,
+            assignedTo: updatedTicket.assignee?.name,
+            assigned_to: updatedTicket.assigned_to,
+            createdBy: updatedTicket.creator?.name,
+            created_by: updatedTicket.created_by,
+            description: updatedTicket.description,
+          }];
+        }
+      });
+    }
+  });
 
   const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
     setNotification({ type, message, show: true });

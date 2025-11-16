@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useOrganizationStore } from '../../store/organizationStore';
+import { useAuthStore } from '../../store/authStore';
 
 interface Employee {
   id: string;
@@ -54,6 +55,7 @@ interface DashboardStats {
 export default function OrganizationDashboard() {
   const router = useRouter();
   const { currentOrg, getCurrentOrgId } = useOrganizationStore();
+  const { token } = useAuthStore();
   
   const [stats, setStats] = useState<DashboardStats>({ total_employees: 0, total_departments: 0 });
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -67,13 +69,14 @@ export default function OrganizationDashboard() {
   // Check organization access
   useEffect(() => {
     const orgId = getCurrentOrgId();
-    if (!orgId || !currentOrg) {
+    if (!orgId || !currentOrg || !token) {
+      if (!token) return; // Wait for token to load
       router.push('/org-login');
       return;
     }
     fetchDashboardData();
     fetchGlobalRoles();
-  }, [currentOrg, getCurrentOrgId, router]);
+  }, [currentOrg, getCurrentOrgId, router, token]);
 
   const fetchGlobalRoles = async () => {
     try {
@@ -88,12 +91,15 @@ export default function OrganizationDashboard() {
   };
 
   const assignRoleToUser = async (userId: string, roleId: string, departmentId?: string) => {
+    if (!token) return;
+    
     setAssigningRole(userId);
     try {
       const response = await fetch('/api/assign-organization-role', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           user_id: userId,
@@ -118,14 +124,18 @@ export default function OrganizationDashboard() {
 
   const fetchDashboardData = async () => {
     const orgId = getCurrentOrgId();
-    if (!orgId) return;
+    if (!orgId || !token) return;
 
     setLoading(true);
     try {
-      // Fetch dashboard stats and employees
+      // Fetch dashboard stats and employees with authorization header
+      const headers = {
+        'Authorization': `Bearer ${token}`
+      };
+
       const [statsResponse, employeesResponse] = await Promise.all([
-        fetch(`/api/org-dashboard-stats?orgId=${orgId}`),
-        fetch(`/api/org-employees?orgId=${orgId}`)
+        fetch(`/api/org-dashboard-stats?orgId=${orgId}`, { headers }),
+        fetch(`/api/org-employees?orgId=${orgId}`, { headers })
       ]);
 
       if (statsResponse.ok) {

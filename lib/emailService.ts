@@ -491,6 +491,89 @@ SA Ticketing System
       text: textContent
     });
   }
+
+  async sendTicketCommentEmail(
+    to: string,
+    ticketId: string,
+    ticketTitle: string,
+    projectName: string,
+    recipientName: string,
+    commenterName: string,
+    commentContent: string,
+    isReply: boolean = false
+  ): Promise<{ success: boolean; messageId?: string; error?: string }> {
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+    const ticketUrl = `${appUrl}/tickets/${ticketId}`;
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+            .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+            .comment-box { background: white; padding: 20px; border-left: 4px solid #667eea; margin: 20px 0; border-radius: 5px; }
+            .button { display: inline-block; padding: 12px 30px; background: #667eea; color: white; text-decoration: none; border-radius: 5px; margin: 20px 0; }
+            .footer { text-align: center; margin-top: 20px; color: #666; font-size: 12px; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <h1>💬 New Comment on Ticket</h1>
+            </div>
+            <div class="content">
+              <p>Hi <strong>${recipientName}</strong>,</p>
+              
+              <p><strong>${commenterName}</strong> ${isReply ? 'replied to a comment' : 'added a comment'} on ticket:</p>
+              
+              <div class="comment-box">
+                <h3>${ticketTitle}</h3>
+                <p><strong>Project:</strong> ${projectName}</p>
+                <p><strong>Comment:</strong></p>
+                <p style="color: #555; font-style: italic;">"${commentContent}"</p>
+              </div>
+
+              <a href="${ticketUrl}" class="button">View Ticket</a>
+
+              <p style="margin-top: 30px; color: #666; font-size: 14px;">
+                Stay updated and respond to keep the conversation going!
+              </p>
+
+              <div class="footer">
+                <p>This is an automated notification from Ticketing Metrix System</p>
+                <p>© ${new Date().getFullYear()} All rights reserved</p>
+              </div>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+
+    const textContent = `
+      New Comment on Ticket
+      
+      Hi ${recipientName},
+      
+      ${commenterName} ${isReply ? 'replied to a comment' : 'added a comment'} on ticket: ${ticketTitle}
+      Project: ${projectName}
+      
+      Comment: "${commentContent}"
+      
+      View ticket: ${ticketUrl}
+      
+      This is an automated message from Ticketing Metrix System.
+    `;
+
+    return this.sendEmail({
+      to,
+      subject: `💬 New Comment on "${ticketTitle}" - ${projectName}`,
+      html,
+      text: textContent
+    });
+  }
 }
 
 // Export singleton instance

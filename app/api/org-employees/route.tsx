@@ -90,6 +90,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get employees for this organization with their role information
+    // Use left join to include employees with only department roles
     let employeesQuery = supabase
       .from('users')
       .select(`
@@ -101,16 +102,26 @@ export async function GET(request: NextRequest) {
         location,
         department,
         department_id,
+        organization_id,
         created_at,
-        user_organization_roles!inner(
+        user_organization_roles(
           role_id,
+          organization_id,
+          global_roles(
+            id,
+            name
+          )
+        ),
+        user_department_roles(
+          role_id,
+          department_id,
           global_roles(
             id,
             name
           )
         )
       `)
-      .eq('user_organization_roles.organization_id', orgId);
+      .eq('organization_id', orgId);
     
     // If user is department admin, filter employees to only their departments
     if (!isOrgAdmin && userDepartments.length > 0) {
@@ -129,8 +140,25 @@ export async function GET(request: NextRequest) {
 
     // Map employees with their role information
     const employeesWithDepartments = (employees || []).map((employee: any) => {
-      // Extract role information
-      const roleInfo = employee.user_organization_roles?.[0]?.global_roles;
+      // Extract role information - prioritize org role, fallback to department role
+      let roleInfo = null;
+      let roleType = null;
+      
+      if (employee.user_organization_roles && employee.user_organization_roles.length > 0) {
+        const orgRole = employee.user_organization_roles.find((r: any) => r.organization_id === orgId);
+        if (orgRole?.global_roles) {
+          roleInfo = orgRole.global_roles;
+          roleType = 'organization';
+        }
+      }
+      
+      if (!roleInfo && employee.user_department_roles && employee.user_department_roles.length > 0) {
+        const deptRole = employee.user_department_roles.find((r: any) => r.department_id === employee.department_id);
+        if (deptRole?.global_roles) {
+          roleInfo = deptRole.global_roles;
+          roleType = 'department';
+        }
+      }
       
       // Find matching department by ID or name
       const deptId = employee.department_id;
@@ -142,7 +170,9 @@ export async function GET(request: NextRequest) {
         department_name: matchingDept?.name || employee.department || 'Unassigned',
         current_role: roleInfo?.name || null,
         current_role_id: roleInfo?.id || null,
-        user_organization_roles: undefined // Remove nested data from response
+        role_type: roleType,
+        user_organization_roles: undefined, // Remove nested data from response
+        user_department_roles: undefined
       };
     });
 

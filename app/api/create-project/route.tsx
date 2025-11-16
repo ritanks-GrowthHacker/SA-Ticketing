@@ -68,7 +68,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Check if user belongs to the organization
+    // Check if user belongs to the organization (org-level OR dept-level)
     const { data: userOrg, error: userOrgError } = await supabase
       .from("user_organization_roles")
       .select(`
@@ -82,8 +82,22 @@ export async function POST(req: Request) {
       .eq("organization_id", decodedToken.org_id)
       .maybeSingle();
 
-    if (userOrgError || !userOrg) {
-      console.error("User organization validation error:", userOrgError);
+    // Also check department roles if no org-level role
+    const { data: deptRoles, error: deptRoleError } = await supabase
+      .from("user_department_roles")
+      .select(`
+        user_id,
+        organization_id,
+        department_id,
+        role_id,
+        departments(id, name),
+        global_roles(id, name, description)
+      `)
+      .eq("user_id", decodedToken.sub)
+      .eq("organization_id", decodedToken.org_id);
+
+    if ((userOrgError || !userOrg) && (deptRoleError || !deptRoles || deptRoles.length === 0)) {
+      console.error("User organization validation error:", userOrgError, deptRoleError);
       return NextResponse.json(
         { error: "User not found or unauthorized" }, 
         { status: 403 }
@@ -170,6 +184,46 @@ export async function POST(req: Request) {
         { error: "Failed to create project" }, 
         { status: 500 }
       );
+    }
+
+    // Associate project with user's PRIMARY department only
+    // Get user's primary department_id from users table
+    const { data: userData, error: userDataError } = await supabase
+      .from("users")
+      .select("department_id")
+      .eq("id", decodedToken.sub)
+      .maybeSingle();
+
+    console.log("🔍 CREATE PROJECT - User department check:", {
+      userId: decodedToken.sub,
+      userDepartmentId: userData?.department_id,
+      userDataError: userDataError,
+      projectId: project.id
+    });
+
+    if (!userDataError && userData?.department_id) {
+      const { error: deptAssignError } = await supabase
+        .from("project_department")
+        .insert({
+          project_id: project.id,
+          department_id: userData.department_id
+        });
+
+      console.log("✅ Project assigned to department:", {
+        projectId: project.id,
+        departmentId: userData.department_id,
+        error: deptAssignError
+      });
+
+      if (deptAssignError) {
+        console.error("Department assignment error:", deptAssignError);
+        // Non-critical - project is already created, continue
+      }
+    } else {
+      console.warn("⚠️ Project created WITHOUT department association:", {
+        projectId: project.id,
+        reason: userDataError ? "User data error" : "No department_id on user"
+      });
     }
 
     // Fetch related data separately

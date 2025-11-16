@@ -14,7 +14,8 @@ import {
   Clock,
   AlertCircle,
   Users,
-  Shield
+  Shield,
+  Inbox
 } from 'lucide-react';
 import { useAuthStore } from '../../app/store/authStore';
 
@@ -36,6 +37,7 @@ interface TicketItem {
 const navItems: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
   { name: 'Projects', href: '/projects', icon: FolderOpen },
+  { name: 'Requests', href: '/requests', icon: Inbox, adminOnly: true },
   { name: 'Manage Access', href: '/manage-access', icon: Users, adminOnly: true },
   { name: 'Profile', href: '/profile', icon: User },
   { name: 'Tickets', href: '/tickets', icon: Ticket },

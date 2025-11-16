@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { HydrateStore } from "./store/HydrateStore";
 import { ThemeProvider } from "./providers/ThemeProvider";
+import { RealtimeProvider } from "./providers/RealtimeProvider";
 import MainLayout from "@/components/ui/MainLayout";
 import DevNavigation from "@/components/DevNavigation";
 
@@ -33,10 +34,12 @@ export default function RootLayout({
       >
         <ThemeProvider>
           <HydrateStore>
-            <MainLayout>
-              {children}
-            </MainLayout>
-            <DevNavigation />
+            <RealtimeProvider>
+              <MainLayout>
+                {children}
+              </MainLayout>
+              <DevNavigation />
+            </RealtimeProvider>
           </HydrateStore>
         </ThemeProvider>
       </body>

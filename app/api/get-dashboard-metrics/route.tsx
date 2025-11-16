@@ -141,13 +141,38 @@ export async function GET(req: Request) {
       .eq('organization_id', organizationId)
       .single();
 
+    // Check if user has department roles
+    const { data: userDeptRoles } = await supabase
+      .from('user_department_roles')
+      .select(`
+        role_id,
+        department_id,
+        global_roles(name)
+      `)
+      .eq('user_id', userId)
+      .eq('organization_id', organizationId);
+
+    // Get user's primary department
+    const { data: userData } = await supabase
+      .from('users')
+      .select('department_id')
+      .eq('id', userId)
+      .maybeSingle();
+
+    const userDepartmentId = userData?.department_id;
+
     // Prioritize JWT role (project-specific) over global org role
     let actualUserRole = tokenData.role || 'Member';
     
     // Only use global org role as fallback if no JWT role is provided
     if (!tokenData.role && userOrgRole && userOrgRole.global_roles) {
       actualUserRole = (userOrgRole.global_roles as any).name;
+    } else if (!tokenData.role && !userOrgRole && userDeptRoles && userDeptRoles.length > 0) {
+      actualUserRole = (userDeptRoles[0].global_roles as any)?.name || 'Member';
     }
+
+    // Check if user is dept-only admin
+    const isDeptOnlyAdmin = !userOrgRole && userDeptRoles && userDeptRoles.length > 0;
 
     const isAdmin = actualUserRole === 'Admin';
     const isManager = actualUserRole === 'Manager';
@@ -236,6 +261,32 @@ export async function GET(req: Request) {
         .from('projects')
         .select('id, name, created_at')
         .eq('organization_id', organizationId);
+      
+      // Department-level admin: filter by department
+      if (isDeptOnlyAdmin && userDepartmentId) {
+        // Get projects owned by department OR shared with department
+        const { data: ownedProjectIds } = await supabase
+          .from('project_department')
+          .select('project_id')
+          .eq('department_id', userDepartmentId);
+        
+        const { data: sharedProjectIds } = await supabase
+          .from('shared_projects')
+          .select('project_id')
+          .eq('department_id', userDepartmentId);
+        
+        const projectIds = [
+          ...(ownedProjectIds?.map(p => p.project_id) || []),
+          ...(sharedProjectIds?.map(p => p.project_id) || [])
+        ];
+        
+        if (projectIds.length > 0) {
+          activeProjectsQuery = activeProjectsQuery.in('id', projectIds);
+        } else {
+          // No projects for this department
+          activeProjectsQuery = activeProjectsQuery.eq('id', '00000000-0000-0000-0000-000000000000');
+        }
+      }
       
       // If project filter is applied, get only that specific project
       if (projectId) {
@@ -388,6 +439,33 @@ export async function GET(req: Request) {
           changeType: 'positive' // Lower resolution time is better
         }
       };
+
+      // Add shared projects count for department admins
+      if (isDeptOnlyAdmin && userDepartmentId) {
+        const { data: sharedProjectsData } = await supabase
+          .from('shared_projects')
+          .select('project_id', { count: 'exact' })
+          .eq('department_id', userDepartmentId);
+
+        metrics.overview.sharedProjects = {
+          value: sharedProjectsData?.length || 0,
+          change: '0%',
+          changeType: 'neutral' as const
+        };
+
+        // Get pending requests count
+        const { data: pendingRequests } = await supabase
+          .from('resource_requests')
+          .select('id', { count: 'exact' })
+          .eq('user_department_id', userDepartmentId)
+          .eq('status', 'pending');
+
+        metrics.overview.pendingRequests = {
+          value: pendingRequests?.length || 0,
+          change: '0%',
+          changeType: 'neutral' as const
+        };
+      }
 
       metrics.recentActivity = recentTickets?.map(ticket => ({
         id: ticket.id,

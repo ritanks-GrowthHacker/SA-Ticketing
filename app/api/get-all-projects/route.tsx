@@ -43,40 +43,76 @@ export async function GET(req: Request) {
     const search = url.searchParams.get("search");
     const includeStats = url.searchParams.get("includeStats") === "true";
 
-    // Check if user belongs to the organization  
-    const { data: userOrgRole, error: orgRoleError } = await supabase
+    // Check if user belongs to the organization - check both org and department roles
+    const { data: userOrgRoles, error: orgRoleError } = await supabase
       .from('user_organization_roles')
       .select(`
         role_id,
         global_roles!user_organization_roles_role_id_fkey(name)
       `)
       .eq('user_id', decodedToken.sub)
-      .eq('organization_id', decodedToken.org_id)
-      .single();
+      .eq('organization_id', decodedToken.org_id);
 
-    if (orgRoleError || !userOrgRole) {
-      console.error("User organization validation error:", orgRoleError);
+    const { data: userDeptRoles, error: deptRoleError } = await supabase
+      .from('user_department_roles')
+      .select(`
+        role_id,
+        department_id,
+        global_roles(name)
+      `)
+      .eq('user_id', decodedToken.sub)
+      .eq('organization_id', decodedToken.org_id);
+
+    // User must have either org role or department role
+    if ((!userOrgRoles || userOrgRoles.length === 0) && (!userDeptRoles || userDeptRoles.length === 0)) {
+      console.error("User organization validation error - no org or dept roles found");
       return NextResponse.json(
         { error: "User not found or unauthorized" }, 
         { status: 403 }
       );
     }
 
-    // Prioritize JWT role (project-specific) over global org role
+    // Prioritize JWT role, then org role, then department role
     let actualUserRole = decodedToken.role || 'Member';
     
-    // Only use global org role as fallback if no JWT role is provided
-    if (!decodedToken.role && userOrgRole && userOrgRole.global_roles) {
-      actualUserRole = (userOrgRole.global_roles as any).name;
+    if (!decodedToken.role) {
+      if (userOrgRoles && userOrgRoles.length > 0) {
+        actualUserRole = (userOrgRoles[0].global_roles as any)?.name || 'Member';
+      } else if (userDeptRoles && userDeptRoles.length > 0) {
+        actualUserRole = (userDeptRoles[0].global_roles as any)?.name || 'Member';
+      }
     }
 
     const userRole = actualUserRole;
 
+    // Determine if user is dept-only admin (has dept roles but not org-level Admin role)
+    const isDeptOnlyAdmin = !userOrgRoles || userOrgRoles.length === 0 || 
+      (userOrgRoles.every((r: any) => r.global_roles?.name !== 'Admin'));
+    
+    // Get user's PRIMARY department from users table (not all dept roles)
+    const { data: userData, error: userDataError } = await supabase
+      .from('users')
+      .select('department_id')
+      .eq('id', decodedToken.sub)
+      .maybeSingle();
+    
+    const userDepartmentIds = userData?.department_id ? [userData.department_id] : [];
+
+    console.log("🔍 GET PROJECTS - User check:", {
+      userId: decodedToken.sub,
+      userRole,
+      isDeptOnlyAdmin,
+      userDepartmentId: userData?.department_id,
+      userDepartmentIds,
+      hasOrgRoles: userOrgRoles?.length || 0,
+      hasDeptRoles: userDeptRoles?.length || 0
+    });
+
     let projectsQuery;
 
     // Role-based filtering
-    if (userRole === "Admin") {
-      // Admin can see all projects in the organization
+    if (userRole === "Admin" && !isDeptOnlyAdmin) {
+      // Org-level Admin can see all projects in the organization
       projectsQuery = supabase
         .from("projects")
         .select(`
@@ -100,6 +136,159 @@ export async function GET(req: Request) {
           )
         `)
         .eq("organization_id", decodedToken.org_id);
+
+    } else if (userRole === "Admin" && isDeptOnlyAdmin && userDepartmentIds.length > 0) {
+      // Department-level Admin sees:
+      // 1. Projects owned by their department (project_department)
+      // 2. Projects shared with their department (shared_projects)
+      
+      // Fetch owned projects
+      const ownedProjectsQuery = supabase
+        .from("projects")
+        .select(`
+          id,
+          name,
+          description,
+          status_id,
+          created_at,
+          updated_at,
+          organization_id,
+          created_by,
+          organizations(id, name, domain),
+          users!projects_created_by_fkey(id, name, email),
+          project_department!inner(department_id),
+          project_statuses(
+            id,
+            name,
+            description,
+            color_code,
+            sort_order,
+            is_active
+          )
+        `)
+        .eq("organization_id", decodedToken.org_id)
+        .in("project_department.department_id", userDepartmentIds);
+
+      // Fetch shared projects
+      const sharedProjectsQuery = supabase
+        .from("projects")
+        .select(`
+          id,
+          name,
+          description,
+          status_id,
+          created_at,
+          updated_at,
+          organization_id,
+          created_by,
+          organizations(id, name, domain),
+          users!projects_created_by_fkey(id, name, email),
+          shared_projects!inner(department_id),
+          project_statuses(
+            id,
+            name,
+            description,
+            color_code,
+            sort_order,
+            is_active
+          )
+        `)
+        .eq("organization_id", decodedToken.org_id)
+        .in("shared_projects.department_id", userDepartmentIds);
+
+      // Apply search filter if provided
+      if (search) {
+        ownedProjectsQuery.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
+        sharedProjectsQuery.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
+      }
+
+      // Execute both queries
+      const [ownedResult, sharedResult] = await Promise.all([
+        ownedProjectsQuery.order("created_at", { ascending: false }),
+        sharedProjectsQuery.order("created_at", { ascending: false })
+      ]);
+
+      if (ownedResult.error) {
+        console.error("Owned projects retrieval error:", ownedResult.error);
+        return NextResponse.json(
+          { error: "Failed to retrieve projects" }, 
+          { status: 500 }
+        );
+      }
+
+      if (sharedResult.error) {
+        console.error("Shared projects retrieval error:", sharedResult.error);
+        return NextResponse.json(
+          { error: "Failed to retrieve shared projects" }, 
+          { status: 500 }
+        );
+      }
+
+      // Combine and deduplicate projects
+      const ownedProjects = ownedResult.data || [];
+      const sharedProjects = sharedResult.data || [];
+      const allProjectIds = new Set<string>();
+      const combinedProjects: any[] = [];
+
+      // Add owned projects
+      ownedProjects.forEach((project: any) => {
+        if (!allProjectIds.has(project.id)) {
+          allProjectIds.add(project.id);
+          combinedProjects.push({ ...project, is_shared: false });
+        }
+      });
+
+      // Add shared projects (avoiding duplicates)
+      sharedProjects.forEach((project: any) => {
+        if (!allProjectIds.has(project.id)) {
+          allProjectIds.add(project.id);
+          combinedProjects.push({ ...project, is_shared: true });
+        }
+      });
+
+      // Sort combined results by created_at descending
+      combinedProjects.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      const projects = combinedProjects;
+
+      // Handle dropdown format
+      if (format === "dropdown") {
+        const dropdownProjects = projects.map((project: any) => ({
+          id: project.id,
+          name: project.name,
+          value: project.id,
+          label: project.name
+        }));
+
+        return NextResponse.json({
+          success: true,
+          projects: dropdownProjects,
+          totalCount: dropdownProjects.length
+        });
+      }
+
+      // For dept admins with combined projects, process them directly
+      // without going through the projectsQuery flow
+      const enrichedProjects = await Promise.all(
+        projects.map(async (project: any) => {
+          return {
+            ...project,
+            is_shared: project.is_shared || false
+          };
+        })
+      );
+
+      return NextResponse.json({
+        message: "Projects retrieved successfully",
+        projects: enrichedProjects,
+        totalCount: enrichedProjects.length,
+        userRole: userRole,
+        filters: {
+          search
+        }
+      });
 
     } else if (userRole === "Manager") {
       // Manager can see only projects they are assigned to

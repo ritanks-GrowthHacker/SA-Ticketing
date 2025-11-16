@@ -117,12 +117,12 @@ export async function GET(request: NextRequest) {
         .eq('id', ticket.status_id)
         .single() : Promise.resolve({ data: null, error: null }),
       
-      // Priority (if exists)
+      // Priority (if exists) - check priorities table
       ticket.priority_id ? supabase
-        .from('statuses')
-        .select('id, name, type, color_code, sort_order')
+        .from('priorities')
+        .select('id, name, description, color_code, sort_order')
         .eq('id', ticket.priority_id)
-        .single() : Promise.resolve({ data: null, error: null })
+        .maybeSingle() : Promise.resolve({ data: null, error: null })
     ]);
 
     const project = projectResult.data;
@@ -270,7 +270,7 @@ export async function GET(request: NextRequest) {
         priority: priority ? {
           id: priority.id,
           name: priority.name,
-          type: priority.type,
+          type: 'priority', // Priorities don't have type field, hardcode it
           color_code: priority.color_code,
           sort_order: priority.sort_order
         } : null,

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Search, Filter, MoreVertical, MessageSquare, Clock, AlertCircle, ChevronDown, X, FolderOpen } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
+import { useTicketUpdates } from '../hooks/useTicketUpdates';
 
 interface Ticket {
   id: string;
@@ -75,6 +76,29 @@ const Tickets = () => {
   const [statuses, setStatuses] = useState<any[]>([]);
   const [priorities, setPriorities] = useState<any[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+
+  // Real-time ticket updates
+  useTicketUpdates({
+    projectId: projectFilter !== 'all' ? projectFilter : undefined,
+    onUpdate: (updatedTicket) => {
+      console.log('🔄 Real-time ticket update received:', updatedTicket);
+      setTickets(prev => {
+        const exists = prev.some(t => t.id === updatedTicket.id);
+        if (exists) {
+          // Update existing ticket
+          return prev.map(t => t.id === updatedTicket.id ? {
+            ...t,
+            ...updatedTicket,
+            statuses: updatedTicket.status || t.statuses,
+            priorities: updatedTicket.priority || t.priorities,
+          } : t);
+        } else {
+          // New ticket created - prepend to list
+          return [updatedTicket, ...prev];
+        }
+      });
+    }
+  });
 
   // Fetch statuses and priorities
   const fetchEntities = async () => {

@@ -61,29 +61,32 @@ BEGIN
   -- Get department name
   SELECT name INTO department_name FROM departments WHERE id = NEW.user_department_id;
   
-  -- Create notification for each admin of the department
+  -- Create notification for each admin of the department (exclude the requester)
   FOR admin_id IN 
     SELECT * FROM get_department_admins(NEW.user_department_id, (SELECT organization_id FROM projects WHERE id = NEW.project_id))
   LOOP
-    INSERT INTO notifications (
-      user_id,
-      entity_type,
-      entity_id,
-      title,
-      message,
-      type,
-      is_read,
-      created_at
-    ) VALUES (
-      admin_id,
-      'resource_request',
-      NEW.id,
-      'New Resource Request',
-      requester_name || ' has requested ' || requested_user_name || ' from your department (' || department_name || ')',
-      'resource_request',
-      false,
-      NOW()
-    );
+    -- Only send notification if admin is not the requester
+    IF admin_id != NEW.requested_by THEN
+      INSERT INTO notifications (
+        user_id,
+        entity_type,
+        entity_id,
+        title,
+        message,
+        type,
+        is_read,
+        created_at
+      ) VALUES (
+        admin_id,
+        'resource_request',
+        NEW.id,
+        'New Resource Request',
+        requester_name || ' has requested ' || requested_user_name || ' from your department (' || department_name || ')',
+        'resource_request',
+        false,
+        NOW()
+      );
+    END IF;
   END LOOP;
   
   RETURN NEW;

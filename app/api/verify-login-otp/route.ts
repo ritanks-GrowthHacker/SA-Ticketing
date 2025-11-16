@@ -58,7 +58,18 @@ export async function POST(req: Request) {
       })
       .eq("id", user.id);
 
-    // Get user organizations and roles
+    // Get updated user info with organization_id
+    const { data: fullUser, error: fullUserError } = await supabase
+      .from("users")
+      .select("id, name, email, organization_id, department_id, created_at")
+      .eq("id", user.id)
+      .single();
+
+    if (fullUserError || !fullUser) {
+      return NextResponse.json({ error: "Failed to fetch user details" }, { status: 500 });
+    }
+
+    // Get user organizations from user_organization_roles (org-level roles)
     const { data: userOrganizations, error: orgError } = await supabase
       .from("user_organization_roles")
       .select(`
@@ -71,20 +82,9 @@ export async function POST(req: Request) {
 
     if (orgError) {
       console.error("Organization lookup error:", orgError);
-      return NextResponse.json(
-        { error: "Failed to fetch user organizations" }, 
-        { status: 500 }
-      );
     }
 
-    if (!userOrganizations || userOrganizations.length === 0) {
-      return NextResponse.json(
-        { error: "User is not associated with any organization" }, 
-        { status: 403 }
-      );
-    }
-
-    // Get user's department roles
+    // Get user's department roles (department-level roles)
     const { data: departmentRoles, error: deptRoleError } = await supabase
       .from("user_department_roles")
       .select(`
@@ -100,13 +100,58 @@ export async function POST(req: Request) {
       console.error("Department role lookup error:", deptRoleError);
     }
 
-    const primaryOrg = userOrganizations[0] as any;
-    const organization = primaryOrg.organizations;
-    const role = primaryOrg.global_roles;
+    // Determine organization: prioritize org roles, fallback to department roles, then user.organization_id
+    let organization: any = null;
+    let role: any = null;
+    let allRoles: string[] = [];
 
-    const allRoles = userOrganizations
-      .map((uo: any) => uo.global_roles?.name)
-      .filter(Boolean) as string[];
+    if (userOrganizations && userOrganizations.length > 0) {
+      // User has org-level role
+      const primaryOrg = userOrganizations[0] as any;
+      organization = primaryOrg.organizations;
+      role = primaryOrg.global_roles;
+      allRoles = userOrganizations
+        .map((uo: any) => uo.global_roles?.name)
+        .filter(Boolean) as string[];
+    } else if (departmentRoles && departmentRoles.length > 0) {
+      // User only has department-level role, get org from department role
+      const primaryDeptRole = departmentRoles[0] as any;
+      const orgId = primaryDeptRole.organization_id || fullUser.organization_id;
+      
+      if (orgId) {
+        const { data: orgData } = await supabase
+          .from("organizations")
+          .select("id, name, domain")
+          .eq("id", orgId)
+          .single();
+        
+        if (orgData) {
+          organization = orgData;
+          role = primaryDeptRole.global_roles;
+          allRoles = [role?.name || "Member"];
+        }
+      }
+    } else if (fullUser.organization_id) {
+      // Fallback to user's direct organization_id
+      const { data: orgData } = await supabase
+        .from("organizations")
+        .select("id, name, domain")
+        .eq("id", fullUser.organization_id)
+        .single();
+      
+      if (orgData) {
+        organization = orgData;
+        role = { name: "Member" }; // Default role
+        allRoles = ["Member"];
+      }
+    }
+
+    if (!organization) {
+      return NextResponse.json(
+        { error: "User is not associated with any organization" }, 
+        { status: 403 }
+      );
+    }
 
     // Include department-level admin roles
     const departmentAdminRoles = (departmentRoles || [])
@@ -154,7 +199,7 @@ export async function POST(req: Request) {
       role: role?.name || "Member",
       roles: allRoles,
       token,
-      organizations: userOrganizations.map((uo: any) => ({
+      organizations: (userOrganizations || []).map((uo: any) => ({
         id: uo.organizations.id,
         name: uo.organizations.name,
         domain: uo.organizations.domain,
