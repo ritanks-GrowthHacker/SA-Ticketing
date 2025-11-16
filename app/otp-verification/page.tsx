@@ -4,10 +4,12 @@ import React, { useState, useEffect } from 'react';
 import { Mail, Clock, CheckCircle, ArrowRight, Shield } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useOrganizationStore } from '../store/organizationStore';
+import { useAuthStore } from '../store/authStore';
 
 const OrgOTPVerification: React.FC = () => {
   const router = useRouter();
   const { currentOrg, getCurrentOrgId, setCurrentOrgById } = useOrganizationStore();
+  const { login } = useAuthStore();
   const [otp, setOtp] = useState(['', '', '', '', '', '']);
   const [isVerifying, setIsVerifying] = useState(false);
   const [timeLeft, setTimeLeft] = useState(300); // 5 minutes
@@ -97,6 +99,28 @@ const OrgOTPVerification: React.FC = () => {
         // Update store with latest organization data
         if (result.organization) {
           setCurrentOrgById(result.organization.id, result.organization);
+        }
+        
+        // Get the token from localStorage and update auth store
+        const orgToken = localStorage.getItem('orgToken');
+        if (orgToken && result.organization) {
+          // Set auth store with organization login data
+          login({
+            user: {
+              id: result.organization.id,
+              name: result.organization.name,
+              email: result.organization.email,
+              created_at: new Date().toISOString(),
+            },
+            organization: {
+              id: result.organization.id,
+              name: result.organization.name,
+              domain: result.organization.domain || '',
+            },
+            role: 'Admin', // Organization accounts are admins by default
+            roles: ['Admin'],
+            token: orgToken,
+          });
         }
         
         setTimeout(() => {
