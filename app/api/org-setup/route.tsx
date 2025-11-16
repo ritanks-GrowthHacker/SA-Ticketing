@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     // Verify organization exists and is verified
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
-      .select('id, name, org_email, otp_verified')
+      .select('id, name, org_email, otp_verified, domain')
       .eq('id', orgId)
       .single();
 
@@ -47,6 +47,26 @@ export async function POST(request: NextRequest) {
         { error: 'Organization email must be verified first' },
         { status: 400 }
       );
+    }
+
+    // Validate email domains if organization has a domain set
+    if (organization.domain && userInvites.length > 0) {
+      const orgDomain = organization.domain.toLowerCase();
+      const invalidEmails = userInvites.filter((invite: UserInvite) => {
+        const emailDomain = invite.email.split('@')[1]?.toLowerCase();
+        return emailDomain !== orgDomain;
+      });
+
+      if (invalidEmails.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Email domain mismatch. All invitations must use the organization's domain: @${orgDomain}`,
+            invalidEmails: invalidEmails.map(inv => inv.email),
+            expectedDomain: orgDomain
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Update organization with selected departments

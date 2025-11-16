@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
     // Get organization details
     const { data: organization, error: orgError } = await supabase
       .from('organizations')
-      .select('name, associated_departments')
+      .select('name, domain, associated_departments')
       .eq('id', orgId)
       .single();
 
@@ -53,6 +53,26 @@ export async function POST(request: NextRequest) {
         { error: 'Organization not found' },
         { status: 404 }
       );
+    }
+
+    // Validate email domains if organization has a domain set
+    if (organization.domain) {
+      const orgDomain = organization.domain.toLowerCase();
+      const invalidEmails = validMembers.filter((member: TeamMember) => {
+        const emailDomain = member.email.split('@')[1]?.toLowerCase();
+        return emailDomain !== orgDomain;
+      });
+
+      if (invalidEmails.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Email domain mismatch. All invitations must use the organization's domain: @${orgDomain}`,
+            invalidEmails: invalidEmails.map(m => m.email),
+            expectedDomain: orgDomain
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // Get department details for validation and email content
