@@ -162,7 +162,33 @@ export async function POST(req: Request) {
         role: dr.global_roles?.name
       }));
 
-    // Generate JWT token
+    // Get user's first project from database (for default project context)
+    const { data: defaultProjectData, error: projectError } = await supabase
+      .from("user_project")
+      .select(`
+        project_id,
+        role_id,
+        projects(id, name),
+        global_roles(id, name)
+      `)
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .single();
+
+    let defaultProject = null;
+    let defaultProjectRole = null;
+
+    if (!projectError && defaultProjectData) {
+      const projectData = defaultProjectData as any;
+      defaultProject = {
+        id: projectData.projects?.id,
+        name: projectData.projects?.name
+      };
+      defaultProjectRole = projectData.global_roles?.name;
+    }
+
+    // Generate JWT token with project context
     const tokenPayload = {
       sub: user.id,
       email: user.email,
@@ -173,6 +199,9 @@ export async function POST(req: Request) {
       role: role?.name || "Member",
       roles: allRoles,
       department_roles: departmentAdminRoles, // Include department-level roles
+      project_id: defaultProject?.id || null, // Add default project ID
+      project_name: defaultProject?.name || null, // Add default project name
+      project_role: defaultProjectRole || role?.name || "Member", // Project-specific role
       iss: process.env.JWT_ISSUER,
     };
 
@@ -199,6 +228,7 @@ export async function POST(req: Request) {
       role: role?.name || "Member",
       roles: allRoles,
       token,
+      currentProject: defaultProject, // Include default project info
       organizations: (userOrganizations || []).map((uo: any) => ({
         id: uo.organizations.id,
         name: uo.organizations.name,

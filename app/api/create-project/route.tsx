@@ -119,8 +119,24 @@ export async function POST(req: Request) {
       );
     }
 
-    const userRole = (userOrg as any).global_roles;
-    const userOrganization = (userOrg as any).organizations;
+    // Determine user role and organization (prioritize org-level, fallback to dept-level)
+    let userRole: any = null;
+    let userOrganization: any = null;
+    
+    if (userOrg) {
+      userRole = (userOrg as any).global_roles;
+      userOrganization = (userOrg as any).organizations;
+    } else if (deptRoles && deptRoles.length > 0) {
+      // User only has department-level roles
+      userRole = (deptRoles[0] as any).global_roles;
+      // Get organization info separately
+      const { data: orgData } = await supabase
+        .from("organizations")
+        .select("id, name, domain")
+        .eq("id", decodedToken.org_id)
+        .single();
+      userOrganization = orgData;
+    }
 
     // Check if the user has permission to create projects (Admin or Manager)
     if (!userRole || !["Admin", "Manager"].includes(userRole.name)) {
@@ -225,6 +241,8 @@ export async function POST(req: Request) {
         reason: userDataError ? "User data error" : "No department_id on user"
       });
     }
+
+    // (no automatic user_project assignment in this revert)
 
     // Fetch related data separately
     let createdBy = null;

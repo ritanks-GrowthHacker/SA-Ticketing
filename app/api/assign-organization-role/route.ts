@@ -21,7 +21,7 @@ export async function POST(req: Request) {
         .eq("user_id", user_id)
         .eq("department_id", department_id)
         .eq("organization_id", organization_id)
-        .single();
+        .maybeSingle();
 
       if (existingDeptAssignment) {
         // Update existing department role assignment
@@ -42,6 +42,11 @@ export async function POST(req: Request) {
             { status: 500 }
           );
         }
+
+        return NextResponse.json({
+          success: true,
+          message: "Department role updated successfully"
+        });
       } else {
         // Create new department role assignment
         const { error: insertError } = await supabase
@@ -60,12 +65,12 @@ export async function POST(req: Request) {
             { status: 500 }
           );
         }
-      }
 
-      return NextResponse.json({
-        success: true,
-        message: "Department role assigned successfully"
-      });
+        return NextResponse.json({
+          success: true,
+          message: "Department role assigned successfully"
+        });
+      }
     }
 
     // Otherwise, assign organization-level role (for backward compatibility)
@@ -75,7 +80,7 @@ export async function POST(req: Request) {
       .select("id")
       .eq("user_id", user_id)
       .eq("organization_id", organization_id)
-      .single();
+      .maybeSingle();
 
     if (existingAssignment) {
       // Update existing role assignment
@@ -95,6 +100,11 @@ export async function POST(req: Request) {
           { status: 500 }
         );
       }
+
+      return NextResponse.json({
+        success: true,
+        message: "Role updated successfully"
+      });
     } else {
       // Create new role assignment
       const { error: insertError } = await supabase
@@ -112,12 +122,12 @@ export async function POST(req: Request) {
           { status: 500 }
         );
       }
-    }
 
-    return NextResponse.json({
-      success: true,
-      message: "Role assigned successfully"
-    });
+      return NextResponse.json({
+        success: true,
+        message: "Role assigned successfully"
+      });
+    }
 
   } catch (error) {
     console.error("Role assignment error:", error);

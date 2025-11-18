@@ -75,6 +75,11 @@ export interface AuthState {
     role: string
     roles: string[]
     token: string
+    currentProject?: {
+      id: string
+      name: string
+      role?: string
+    } | null
   }) => void
   logout: () => void
   switchProject: (projectData: {
@@ -151,7 +156,14 @@ export const useAuthStore = create<AuthState>()(
           user: loginData.user,
           organization: loginData.organization,
           role: loginData.role,
-          roles: loginData.roles,
+          roles: loginData.roles || [],
+          currentProject: loginData.currentProject 
+            ? {
+                id: loginData.currentProject.id,
+                name: loginData.currentProject.name,
+                role: loginData.currentProject.role || loginData.role
+              }
+            : null, // Set default project from login
         })
       },
 

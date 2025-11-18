@@ -87,13 +87,14 @@ export default function AuthPage() {
     setShowOTP(false)
     setOtpData(null)
     
-    // Store the authentication data for login/registration
+    // Store the authentication data for login/registration, including default project
     authLogin({
       user: data.user,
       organization: data.organization,
       role: data.role,
       roles: data.roles,
-      token: data.token
+      token: data.token,
+      currentProject: data.currentProject || null // Store default project from login response
     })
     
     setSuccess('OTP verified successfully! Redirecting to dashboard...')

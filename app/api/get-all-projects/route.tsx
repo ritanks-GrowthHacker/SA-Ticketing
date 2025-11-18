@@ -63,12 +63,27 @@ export async function GET(req: Request) {
       .eq('user_id', decodedToken.sub)
       .eq('organization_id', decodedToken.org_id);
 
-    // User must have either org role or department role
-    if ((!userOrgRoles || userOrgRoles.length === 0) && (!userDeptRoles || userDeptRoles.length === 0)) {
-      console.error("User organization validation error - no org or dept roles found");
+    // Check if user has any project assignments even without org/dept roles
+    const { data: userProjects } = await supabase
+      .from('user_project')
+      .select('project_id')
+      .eq('user_id', decodedToken.sub)
+      .limit(1);
+
+    // If user has no org role, dept role, AND no project assignments, return pending state
+    if ((!userOrgRoles || userOrgRoles.length === 0) && 
+        (!userDeptRoles || userDeptRoles.length === 0) && 
+        (!userProjects || userProjects.length === 0)) {
+      console.log("⏳ New user with no access yet - returning pending state");
       return NextResponse.json(
-        { error: "User not found or unauthorized" }, 
-        { status: 403 }
+        { 
+          success: true,
+          pending_access: true,
+          message: "Your account is pending project assignment by an administrator",
+          projects: [],
+          totalCount: 0
+        }, 
+        { status: 200 }
       );
     }
 

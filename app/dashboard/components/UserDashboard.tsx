@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, User, Target, Filter, LayoutGrid, List, AlertCircle } from 'lucide-react';
 import { TicketModal } from '../../../components/modals';
 import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
+import { DepartmentProjectFilter } from './DepartmentProjectFilter';
 import { useAuthStore } from '../../store/authStore';
 import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
 
@@ -27,12 +28,7 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
   console.log('🚨 MEMBER: organization:', organization);  
   console.log('🚨 MEMBER: user:', user);
   
-  // FORCE CLEAR ALL CACHE ON EVERY RENDER (TEMPORARY DEBUG)
-  useEffect(() => {
-    console.log('🧹 MEMBER: FORCE CLEARING ALL DASHBOARD CACHE');
-    localStorage.removeItem('dashboard-store');
-    sessionStorage.removeItem('dashboard-store');
-  }, []);
+  // (no-op) preserve dashboard cache between renders
   const { 
     getCachedData, 
     setCachedData, 
@@ -58,16 +54,61 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
       setSelectedProject(currentProject.id);
     }
   }, [projectId, currentProject?.id]);
+  
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
-  const [loading, setLoading] = useState(false); // Start with false to show UI immediately
-  const [dataLoading, setDataLoading] = useState(true); // Separate state for data loading
+  const [loading, setLoading] = useState(false);
+  const [dataLoading, setDataLoading] = useState(true);
   const [showDragDropView, setShowDragDropView] = useState(false);
   const [statuses, setStatuses] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
-  const [availableProjects, setAvailableProjects] = useState<ProjectInfo[]>([]);
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
+  
+  // Pending access state
+  const [pendingAccess, setPendingAccess] = useState(false);
+  
+  // Handle project change from the filter component
+  const handleProjectChange = async (projectId: string, departmentId?: string) => {
+    try {
+      setSelectedProject(projectId);
+      console.log('🔄 Switching to project:', projectId);
+      
+      // Call the switch project API to rebuild JWT
+      const response = await fetch('/api/switch-project', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ projectId })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        console.log('✅ Project switch successful:', data);
+        // Update the auth store with the new token and project data
+        switchProject({
+          token: data.token,
+          project: {
+            id: data.project.id,
+            name: data.project.name,
+            role: data.role
+          }
+        });
+        
+        // Refresh dashboard metrics
+        await fetchDashboardMetrics();
+      } else {
+        console.error('❌ Failed to switch project');
+        throw new Error('Failed to switch project');
+      }
+    } catch (error) {
+      console.error('❌ Error switching project:', error);
+      // Revert selection on error
+      setSelectedProject(currentProject?.id || '');
+    }
+  };
   
   // Fetch dashboard metrics with caching
   const fetchDashboardMetrics = async () => {
@@ -113,11 +154,6 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
         
         if (data.success && data.data) {
           setMetrics(data.data);
-          
-          // Extract available projects for dropdown
-          if (data.data.quickStats?.memberInfo?.assignedProjects) {
-            setAvailableProjects(data.data.quickStats.memberInfo.assignedProjects);
-          }
           
           console.log('✅ MEMBER: Dashboard metrics loaded successfully');
           console.log('✅ MEMBER: Recent activity count:', data.data.recentActivity?.length || 0);
@@ -175,13 +211,17 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
           const data = await response.json();
           console.log('✅ MEMBER: Dashboard API response:', data);
           
+          // Check for pending access state
+          if (data.pending_access) {
+            console.log('⏳ MEMBER: User has pending access');
+            setPendingAccess(true);
+            setDataLoading(false);
+            return;
+          }
+          
           if (data.success && data.data) {
             setMetrics(data.data);
-            
-            // Extract available projects for dropdown
-            if (data.data.quickStats?.memberInfo?.assignedProjects) {
-              setAvailableProjects(data.data.quickStats.memberInfo.assignedProjects);
-            }
+            setPendingAccess(false);
             
             setDataLoading(false);
             console.log('✅ MEMBER: Dashboard metrics loaded via useEffect');
@@ -356,6 +396,45 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
     );
   }
 
+  // Pending access state UI
+  if (pendingAccess) {
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-gray-600 mt-1">
+            Welcome, {user?.name || 'Member'}
+          </p>
+        </div>
+
+        {/* Pending Access Message */}
+        <div className="flex items-center justify-center min-h-[500px]">
+          <div className="max-w-md w-full bg-white rounded-xl shadow-lg border border-gray-200 p-8 text-center">
+            <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-yellow-100 mb-4">
+              <Clock className="h-8 w-8 text-yellow-600" />
+            </div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">
+              Account Pending Setup
+            </h3>
+            <p className="text-gray-600 mb-6">
+              Your account has been created successfully! An administrator will assign you to a project soon.
+            </p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <p className="text-sm text-blue-800">
+                <strong>What happens next?</strong><br/>
+                Once assigned, you'll be able to view tickets, create new ones, and collaborate with your team.
+              </p>
+            </div>
+            <p className="text-sm text-gray-500">
+              You can still navigate to other pages using the sidebar. Contact your administrator if you have questions.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header with Project Filter */}
@@ -368,58 +447,12 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
         </div>
         
         <div className="flex items-center space-x-3">
-          {/* Project Filter */}
-          {availableProjects.length > 0 && (
-            <select
-              value={selectedProject}
-              onChange={async (e) => {
-                const value = e.target.value;
-                setSelectedProject(value);
-                if (value && token) {
-                  try {
-                    console.log('🔄 Switching to project:', value);
-                    // Call the switch project API
-                    const response = await fetch('/api/switch-project', {
-                      method: 'POST',
-                      headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${token}`
-                      },
-                      body: JSON.stringify({ projectId: value })
-                    });
-
-                    if (response.ok) {
-                      const data = await response.json();
-                      console.log('✅ Project switch successful:', data);
-                      // Update the auth store with the new token and project data
-                      switchProject({
-                        token: data.token,
-                        project: {
-                          id: data.project.id,
-                          name: data.project.name,
-                          role: data.role
-                        }
-                      });
-                    } else {
-                      console.error('❌ Failed to switch project');
-                      throw new Error('Failed to switch project');
-                    }
-                  } catch (error) {
-                    console.error('❌ Error switching project:', error);
-                    // Revert selection on error
-                    setSelectedProject(currentProject?.id || '');
-                  }
-                }
-              }}
-              className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-            >
-              {availableProjects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-          )}
+          {/* Department and Project Filters */}
+          <DepartmentProjectFilter
+            token={token || ''}
+            onProjectChange={handleProjectChange}
+            initialProjectId={selectedProject}
+          />
           
           <button 
             onClick={() => {

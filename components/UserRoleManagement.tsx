@@ -13,6 +13,8 @@ interface User {
     name: string;
     description: string;
   } | null;
+  roleLevel?: 'organization' | 'department';
+  departmentName?: string;
 }
 
 interface Role {
@@ -65,6 +67,21 @@ export default function UserRoleManagement() {
     }
   }, [canManage, token, organization]);
 
+  // Auto-dismiss success/error messages after 5 seconds
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
+
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
   const fetchUsers = async () => {
     try {
       setIsLoading(true);
@@ -92,6 +109,11 @@ export default function UserRoleManagement() {
 
   const updateUserRole = async (userId: string, roleId: string, roleName: string) => {
     try {
+      setError(null);
+      setSuccess(null);
+      
+      console.log('🔄 Updating role for user:', userId, 'to:', roleName);
+      
       const response = await fetch('/api/manage-user-role', {
         method: 'PUT',
         headers: {
@@ -106,14 +128,21 @@ export default function UserRoleManagement() {
       });
 
       const data = await response.json();
+      console.log('📡 Role update response:', data);
 
       if (response.ok) {
-        setSuccess(`User role updated to ${roleName} successfully`);
-        fetchUsers(); // Refresh the list
+        setSuccess(`✅ User role updated to ${roleName} successfully`);
+        // Force refresh after a short delay to ensure DB is updated
+        setTimeout(() => {
+          console.log('🔄 Refreshing user list...');
+          fetchUsers();
+        }, 500);
       } else {
+        console.error('❌ Role update failed:', data.error);
         setError(data.error || 'Failed to update user role');
       }
     } catch (err) {
+      console.error('❌ Role update error:', err);
       setError('Failed to update user role');
     }
   };
@@ -285,43 +314,59 @@ export default function UserRoleManagement() {
                   </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  {(() => {
-                    const isUserAdmin = user.currentRole?.name === 'Admin';
-                    const isUserManager = user.currentRole?.name === 'Manager';
-                    const currentUserIsAdmin = hasRole('Admin');
-                    const currentUserIsManager = hasRole('Manager');
-                    const isSelf = user.email === currentUser?.email;
-                    
-                    // Enhanced permissions logic
-                    const canModifyThisUser = !isSelf && (
-                      currentUserIsAdmin || // Admins can modify anyone
-                      (currentUserIsManager && !isUserAdmin && !isUserManager) // Managers can only modify non-Admin/non-Manager users
-                    );
-                    
-                    return canModifyThisUser ? (
-                      <select
-                        value={user.currentRole?.id || ''}
-                        onChange={(e) => {
-                          const selectedRole = availableRoles.find(r => r.id === e.target.value);
-                          if (selectedRole) {
-                            updateUserRole(user.userId, selectedRole.id, selectedRole.name);
-                          }
-                        }}
-                        className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      >
-                        <option value="">No Role</option>
-                        {getAvailableRolesForUser(user).map((role) => (
-                          <option key={role.id} value={role.id}>
-                            {role.name}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 border border-gray-300 rounded">
-                        {user.currentRole?.name || 'No Role'} {isSelf ? '(Self)' : '(Protected)'}
-                      </span>
-                    );
-                  })()}
+                  <div className="flex flex-col">
+                    {(() => {
+                      const isUserAdmin = user.currentRole?.name === 'Admin';
+                      const isUserManager = user.currentRole?.name === 'Manager';
+                      const currentUserIsAdmin = hasRole('Admin');
+                      const currentUserIsManager = hasRole('Manager');
+                      const isSelf = user.email === currentUser?.email;
+                      
+                      // Enhanced permissions logic
+                      const canModifyThisUser = !isSelf && (
+                        currentUserIsAdmin || // Admins can modify anyone
+                        (currentUserIsManager && !isUserAdmin && !isUserManager) // Managers can only modify non-Admin/non-Manager users
+                      );
+                      
+                      return canModifyThisUser ? (
+                        <>
+                          <select
+                            value={user.currentRole?.id || ''}
+                            onChange={(e) => {
+                              const selectedRole = availableRoles.find(r => r.id === e.target.value);
+                              if (selectedRole) {
+                                updateUserRole(user.userId, selectedRole.id, selectedRole.name);
+                              }
+                            }}
+                            className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          >
+                            <option value="">No Role</option>
+                            {getAvailableRolesForUser(user).map((role) => (
+                              <option key={role.id} value={role.id}>
+                                {role.name}
+                              </option>
+                            ))}
+                          </select>
+                          {user.roleLevel && (
+                            <span className="text-xs text-gray-500 mt-1">
+                              {user.roleLevel === 'organization' ? '🏢 Org-level' : `🏬 Dept: ${user.departmentName || 'N/A'}`}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <div className="flex flex-col">
+                          <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 border border-gray-300 rounded">
+                            {user.currentRole?.name || 'No Role'} {isSelf ? '(Self)' : '(Protected)'}
+                          </span>
+                          {user.roleLevel && (
+                            <span className="text-xs text-gray-500 mt-1">
+                              {user.roleLevel === 'organization' ? '🏢 Org-level' : `🏬 Dept: ${user.departmentName || 'N/A'}`}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                   {new Date(user.joinedAt).toLocaleDateString()}
