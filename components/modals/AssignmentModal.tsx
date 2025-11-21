@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useAuthStore } from '@/app/store/authStore';
 import { X, Users, FolderOpen, Shield } from 'lucide-react';
 import BaseModal from './BaseModal';
 import { ProjectSelect } from '../../components/ui/ProjectSelect';
@@ -60,7 +61,7 @@ export const AssignmentModal: React.FC<AssignmentModalProps> = ({
   const fetchRoles = async () => {
     try {
       setRolesLoading(true);
-      const token = localStorage.getItem('authToken');
+      const token = useAuthStore.getState().token;
       if (!token) return;
 
       const response = await fetch('/api/all-get-entities', {

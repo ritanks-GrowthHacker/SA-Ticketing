@@ -1,10 +1,12 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Users, Search, Plus, Trash2, Shield, UserCheck, UserX, Filter } from 'lucide-react';
+import { Users, Search, Plus, Trash2, Shield, UserCheck, UserX, Filter, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { ProjectSelect } from '../../components/ui/ProjectSelect';
 import { AssignmentModal } from '../../components/modals';
+import { isRoleDisabled, getDisabledRoleMessage } from '@/lib/roleHierarchy';
+import { useApiCall } from '../hooks/useApiCall';
 import {
   Select,
   SelectContent,
@@ -21,6 +23,9 @@ interface User {
   email: string;
   created_at: string;
   profile_picture_url?: string;
+  department?: string;
+  department_id?: string;
+  role?: string; // Org/dept role
 }
 
 interface Project {
@@ -50,16 +55,22 @@ interface ProjectAssignment {
 }
 
 const ManageAccessPage = () => {
-  const { token, role, isAuthenticated, user } = useAuthStore();
+  const { token, role, isAuthenticated, user, currentDepartment, currentProject, roles } = useAuthStore();
+  const { apiCall } = useApiCall();
+  
+  // Get effective role - PRIORITY: project role > department role > global role (PROJECT ROLE IS DOMINANT)
+  const effectiveRole = currentProject?.role || currentDepartment?.role || role || roles?.[0] || 'User';
+  
   const [users, setUsers] = useState<User[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
-  const [roles, setRoles] = useState<Role[]>([]);
+  const [rolesData, setRolesData] = useState<Role[]>([]);
   const [assignments, setAssignments] = useState<ProjectAssignment[]>([]);
   const [perUserProject, setPerUserProject] = useState<Record<string, string>>({});
   const [perUserRole, setPerUserRole] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedProject, setSelectedProject] = useState('all');
+  // IMPORTANT: Default to current project from JWT (project-based system)
+  const [selectedProject, setSelectedProject] = useState(currentProject?.id || 'all');
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [assignmentLoading, setAssignmentLoading] = useState(false);
@@ -70,6 +81,17 @@ const ManageAccessPage = () => {
     message: string;
     show: boolean;
   }>({ type: 'info', message: '', show: false });
+
+  // Conflict detection modal states
+  const [showConflictModal, setShowConflictModal] = useState(false);
+  const [conflictData, setConflictData] = useState<{
+    userId: string;
+    userName: string;
+    projectId: string;
+    projectName: string;
+    roleId: string;
+    existingProjects: Array<{ project_name: string; role_name: string }>;
+  } | null>(null);
 
   // Resource Request Modal states
   const [showResourceModal, setShowResourceModal] = useState(false);
@@ -90,27 +112,52 @@ const ManageAccessPage = () => {
     }, 3000);
   };
 
-  // Redirect if not admin
+  // Redirect if not admin or manager
   useEffect(() => {
-    if (isAuthenticated && role !== 'Admin') {
+    if (isAuthenticated && effectiveRole !== 'Admin' && effectiveRole !== 'Manager') {
       window.location.href = '/dashboard';
     }
-  }, [isAuthenticated, role]);
+  }, [isAuthenticated, effectiveRole]);
 
   // Fetch initial data
   useEffect(() => {
-    if (token && role === 'Admin') {
+    console.log('🔍 MANAGE ACCESS: Check data fetch', { 
+      hasToken: !!token, 
+      effectiveRole, 
+      isAuthenticated,
+      currentProject: currentProject?.id,
+      currentProjectRole: currentProject?.role,
+      currentDepartment: currentDepartment?.id 
+    });
+    
+    if (token && (effectiveRole === 'Admin' || effectiveRole === 'Manager')) {
+      console.log('✅ MANAGE ACCESS: Fetching data...');
       fetchData();
+    } else {
+      console.log('⚠️ MANAGE ACCESS: Not fetching data', { hasToken: !!token, effectiveRole });
     }
-  }, [token, role]);
+  }, [token, effectiveRole, currentDepartment?.id]);
+
+  // Sync selectedProject with dashboard's currentProject selection
+  useEffect(() => {
+    const newSelectedProject = currentProject?.id || 'all';
+    if (selectedProject !== newSelectedProject) {
+      console.log('🔄 MANAGE ACCESS: Syncing project filter with dashboard:', {
+        old: selectedProject,
+        new: newSelectedProject,
+        projectName: currentProject?.name
+      });
+      setSelectedProject(newSelectedProject);
+    }
+  }, [currentProject?.id]);
 
   // Refresh assignments when project filter changes
   useEffect(() => {
-    if (token && role === 'Admin') {
+    if (token && (effectiveRole === 'Admin' || effectiveRole === 'Manager')) {
       fetchAssignments();
       fetchResourceRequests();
     }
-  }, [selectedProject, token, role]);
+  }, [selectedProject, token, effectiveRole]);
 
   // Fetch departments when modal opens
   useEffect(() => {
@@ -129,23 +176,25 @@ const ManageAccessPage = () => {
     }
   }, [selectedDepartment]);
 
-  // Clear selected users when switching to "All Projects" view (unless admin working with unassigned users)
+  // Clear selected users when switching to "All Projects" view (unless admin/manager working with unassigned users)
   useEffect(() => {
-    if (selectedProject === 'all' && role !== 'Admin') {
+    if (selectedProject === 'all' && effectiveRole !== 'Admin' && effectiveRole !== 'Manager') {
       setSelectedUsers([]);
     }
-  }, [selectedProject, role]);
+  }, [selectedProject, effectiveRole]);
 
   const fetchData = async () => {
     try {
+      console.log('📊 MANAGE ACCESS: Starting fetchData...');
       setLoading(true);
       await Promise.all([
         fetchUsers(),
         fetchProjects(),
         fetchAssignments()
       ]);
+      console.log('✅ MANAGE ACCESS: fetchData complete');
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('❌ MANAGE ACCESS: Error in fetchData:', error);
     } finally {
       setLoading(false);
     }
@@ -153,7 +202,8 @@ const ManageAccessPage = () => {
 
   const fetchUsers = async () => {
     try {
-      const url = new URL('/api/manage-user-role', window.location.origin);
+      // PROJECT-BASED SYSTEM: Get eligible users (exclude Sales, HR, Administration)
+      const url = new URL('/api/get-eligible-users', window.location.origin);
       const response = await fetch(url.toString(), {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -163,29 +213,33 @@ const ManageAccessPage = () => {
 
       if (response.ok) {
         const data = await response.json();
-        // Transform users to match expected interface (id, name, email, created_at, profile_picture_url)
-        const transformedUsers = (data.users || []).map((u: any) => ({
-          id: u.userId, // manage-user-role returns userId, we need id
-          name: u.name,
-          email: u.email,
-          created_at: u.joinedAt, // manage-user-role returns joinedAt
-          profile_picture_url: u.profile_picture_url,
-        }));
-        setUsers(transformedUsers);
-        // manage-user-role returns availableRoles
-        setRoles(data.availableRoles || []);
+        console.log(`✅ MANAGE ACCESS: Loaded ${data.users.length} eligible users (${data.totalUsers} total)`);
+        setUsers(data.users || []);
       } else {
         const err = await response.json().catch(() => ({}));
-        console.error('Failed to fetch users:', err);
+        console.error('Failed to fetch eligible users:', err);
+        showNotification('error', 'Failed to load users');
       }
+      
+      // Also fetch available roles for assignment
+      await fetchRoles();
     } catch (error) {
       console.error('Error fetching users:', error);
+      showNotification('error', 'Error loading users');
     }
   };
 
   const fetchProjects = async () => {
     try {
-      const response = await fetch('/api/get-all-projects', {
+      const url = new URL('/api/get-all-projects', window.location.origin);
+      
+      // Filter by current department if available
+      if (currentDepartment?.id) {
+        url.searchParams.append('department_id', currentDepartment.id);
+        console.log(`🔍 MANAGE ACCESS: Filtering projects by department ${currentDepartment.name} (${currentDepartment.id})`);
+      }
+      
+      const response = await fetch(url.toString(), {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -194,7 +248,10 @@ const ManageAccessPage = () => {
       
       if (response.ok) {
         const data = await response.json();
+        console.log(`✅ MANAGE ACCESS: Loaded ${data.projects?.length || 0} projects`);
         setProjects(data.projects || []);
+      } else {
+        console.error('Failed to fetch projects');
       }
     } catch (error) {
       console.error('Error fetching projects:', error);
@@ -213,7 +270,7 @@ const ManageAccessPage = () => {
       if (response.ok) {
         const data = await response.json();
         // all-get-entities nests results under `data`
-        setRoles(data.data?.roles || []);
+        setRolesData(data.data?.roles || []);
       }
     } catch (error) {
       console.error('Error fetching roles:', error);
@@ -523,9 +580,36 @@ const ManageAccessPage = () => {
       return;
     }
 
+    // Check if user is already assigned to other projects
+    const userAssignments = assignments.filter(a => a.user_id === userId);
+    const user = users.find(u => u.id === userId);
+    
+    if (userAssignments.length > 0) {
+      // Show conflict modal
+      const selectedProject = projects.find(p => p.id === projectId);
+      setConflictData({
+        userId,
+        userName: user?.name || 'User',
+        projectId,
+        projectName: selectedProject?.name || 'Project',
+        roleId,
+        existingProjects: userAssignments.map(a => ({
+          project_name: a.project_name,
+          role_name: a.role_name
+        }))
+      });
+      setShowConflictModal(true);
+      return;
+    }
+
+    // Proceed with assignment if no conflicts
+    await performAssignment(userId, projectId, roleId);
+  };
+
+  const performAssignment = async (userId: string, projectId: string, roleId: string) => {
     try {
       setAssignmentLoading(true);
-      const response = await fetch('/api/create-project-user-relation', {
+      const response = await apiCall('/api/create-project-user-relation', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -541,10 +625,35 @@ const ManageAccessPage = () => {
       if (response.ok) {
         await fetchAssignments();
         showNotification('success', 'User assigned successfully');
+        // Clear the per-user selections
+        setPerUserProject(prev => {
+          const updated = { ...prev };
+          delete updated[userId];
+          return updated;
+        });
+        setPerUserRole(prev => {
+          const updated = { ...prev };
+          delete updated[userId];
+          return updated;
+        });
       } else {
-        const err = await response.json().catch(() => ({}));
-        console.error('Assign error:', err);
-        showNotification('error', 'Failed to assign user');
+        // Try to parse error response
+        let errorMessage = 'Failed to assign user';
+        try {
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const err = await response.json();
+            console.error('Assign error (JSON):', err);
+            errorMessage = err?.error || errorMessage;
+          } else {
+            const textError = await response.text();
+            console.error('Assign error (Text):', textError);
+            errorMessage = textError || errorMessage;
+          }
+        } catch (parseError) {
+          console.error('Error parsing response:', parseError);
+        }
+        showNotification('error', errorMessage);
       }
     } catch (error) {
       console.error('Network error assigning user:', error);
@@ -552,6 +661,14 @@ const ManageAccessPage = () => {
     } finally {
       setAssignmentLoading(false);
     }
+  };
+
+  const handleConfirmConflictAssignment = async () => {
+    if (!conflictData) return;
+    
+    setShowConflictModal(false);
+    await performAssignment(conflictData.userId, conflictData.projectId, conflictData.roleId);
+    setConflictData(null);
   };
 
   const handleBulkAssign = async () => {
@@ -621,13 +738,15 @@ const ManageAccessPage = () => {
 
   // Filter users based on search term and project selection
   const filteredUsers = users.filter(userItem => {
-    // Exclude current admin user from the list
-    if (user && userItem.id === user.id && role === 'Admin') {
+    // Exclude current admin/manager user from the list
+    if (user && userItem.id === user.id && (effectiveRole === 'Admin' || effectiveRole === 'Manager')) {
       return false;
     }
 
     const matchesSearch = userItem.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         userItem.email.toLowerCase().includes(searchTerm.toLowerCase());
+                         userItem.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (userItem.department && userItem.department.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                         (userItem.role && userItem.role.toLowerCase().includes(searchTerm.toLowerCase()));
 
     if (!matchesSearch) return false;
 
@@ -638,6 +757,9 @@ const ManageAccessPage = () => {
 
     // When a specific project is selected -> show users assigned to that project
     return assignments.some(a => a.user_id === userItem.id && a.project_id === selectedProject);
+  }).sort((a, b) => {
+    // Sort by created_at: newest first (descending order)
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
 
   // Get selected user names for the modal
@@ -645,13 +767,13 @@ const ManageAccessPage = () => {
     .map(userId => users.find(u => u.id === userId)?.name)
     .filter(Boolean) as string[];
 
-  if (!isAuthenticated || role !== 'Admin') {
+  if (!isAuthenticated || (effectiveRole !== 'Admin' && effectiveRole !== 'Manager')) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <Shield className="w-16 h-16 text-red-500 mx-auto mb-4" />
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h1>
-          <p className="text-gray-600">Only administrators can access this page.</p>
+          <p className="text-gray-600">Only administrators and managers can access this page.</p>
         </div>
       </div>
     );
@@ -673,8 +795,8 @@ const ManageAccessPage = () => {
           <h1 className="text-2xl font-bold text-gray-900">Manage Access</h1>
           <p className="text-gray-600 mt-1">
             {selectedProject === 'all' 
-              ? 'Viewing all organization members - select a specific project to manage assignments'
-              : 'Assign users to projects and manage permissions'
+              ? 'Select a specific project to manage team assignments'
+              : 'Assign eligible users to this project (Sales, HR, and Administration require resource requests)'
             }
           </p>
         </div>
@@ -704,7 +826,7 @@ const ManageAccessPage = () => {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
                 type="text"
-                placeholder="Search users by name or email..."
+                placeholder="Search by name, email, department, or role..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -752,11 +874,11 @@ const ManageAccessPage = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto scrollbar-hide">
           <table className="min-w-full">
             <thead className="bg-gray-50">
               <tr>
-                {(selectedProject !== 'all' || (selectedProject === 'all' && role === 'Admin')) && (
+                {(selectedProject !== 'all' || (selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager'))) && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     {selectedProject !== 'all' && (
                       <input
@@ -772,7 +894,7 @@ const ManageAccessPage = () => {
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
                     )}
-                    {selectedProject === 'all' && role === 'Admin' && (
+                    {selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager') && (
                       <span className="text-xs">Actions</span>
                     )}
                   </th>
@@ -784,12 +906,18 @@ const ManageAccessPage = () => {
                   Email
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Department
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Org/Dept Role
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Joined
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Projects
                 </th>
-                {(selectedProject !== 'all' || (selectedProject === 'all' && role === 'Admin')) && (
+                {(selectedProject !== 'all' || (selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager'))) && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[300px]">
                     Actions
                   </th>
@@ -803,7 +931,7 @@ const ManageAccessPage = () => {
                 
                 return (
                   <tr key={user.id} className={isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}>
-                    {(selectedProject !== 'all' || (selectedProject === 'all' && role === 'Admin' && userAssignments.length === 0)) && (
+                    {(selectedProject !== 'all' || (selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager') && userAssignments.length === 0)) && (
                       <td className="px-6 py-4 whitespace-nowrap">
                         {selectedProject !== 'all' && (
                           <input
@@ -819,7 +947,7 @@ const ManageAccessPage = () => {
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                           />
                         )}
-                        {selectedProject === 'all' && role === 'Admin' && userAssignments.length === 0 && (
+                        {selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager') && userAssignments.length === 0 && (
                           <div className="w-4 h-4"></div>
                         )}
                       </td>
@@ -855,6 +983,28 @@ const ManageAccessPage = () => {
                       {user.email}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                      {user.department ? (
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                          {user.department}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400 italic">No department</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                      {user.role ? (
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          user.role === 'Admin' ? 'bg-red-100 text-red-800' : 
+                          user.role === 'Manager' ? 'bg-blue-100 text-blue-800' : 
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {user.role}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400 italic">No role</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                       {new Date(user.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -882,8 +1032,8 @@ const ManageAccessPage = () => {
                       </div>
                     </td>
                     
-                    {/* Show assignment controls for unassigned users in "All Projects" view (Admin only) */}
-                    {selectedProject === 'all' && role === 'Admin' && userAssignments.length === 0 && (
+                    {/* Show assignment controls for unassigned users in "All Projects" view (Admin/Manager only) */}
+                    {selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager') && userAssignments.length === 0 && (
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex items-center justify-between gap-4 w-full">
                           
@@ -910,7 +1060,7 @@ const ManageAccessPage = () => {
                                 <SelectContent>
                                   <SelectGroup>
                                     <SelectLabel>Roles</SelectLabel>
-                                    {roles.map((r) => (
+                                    {rolesData.map((r) => (
                                       <SelectItem key={r.id} value={r.id}>
                                         {r.name}
                                       </SelectItem>
@@ -968,11 +1118,20 @@ const ManageAccessPage = () => {
                               <SelectContent>
                                 <SelectGroup>
                                   <SelectLabel>Roles</SelectLabel>
-                                  {roles.map((r) => (
-                                    <SelectItem key={r.id} value={r.id}>
-                                      {r.name}
-                                    </SelectItem>
-                                  ))}
+                                  {rolesData.map((r) => {
+                                    const disabled = isRoleDisabled(effectiveRole, r.name);
+                                    return (
+                                      <SelectItem 
+                                        key={r.id} 
+                                        value={r.id}
+                                        disabled={disabled}
+                                        className={disabled ? "opacity-50 cursor-not-allowed" : ""}
+                                        title={disabled ? getDisabledRoleMessage(r.name) : undefined}
+                                      >
+                                        {r.name}
+                                      </SelectItem>
+                                    );
+                                  })}
                                 </SelectGroup>
                               </SelectContent>
                             </Select>
@@ -1059,7 +1218,7 @@ const ManageAccessPage = () => {
             </p>
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto scrollbar-hide">
             <table className="min-w-full">
               <thead className="bg-gray-50">
                 <tr>
@@ -1237,14 +1396,19 @@ const ManageAccessPage = () => {
             <div className="relative bg-white rounded-lg shadow-xl max-w-2xl w-full z-50">
               <div className="px-6 py-4 border-b border-gray-200">
                 <h3 className="text-lg font-semibold text-gray-900">Request Resources</h3>
-                <p className="text-sm text-gray-600 mt-1">Request team members from other departments</p>
+                <p className="text-sm text-gray-600 mt-1">
+                  Request team members from <strong>Sales, Human Resource, or Administration</strong> departments
+                </p>
+                <p className="text-xs text-blue-600 mt-1">
+                  💡 Other departments can be assigned directly from the user list above
+                </p>
               </div>
 
               <div className="p-6 space-y-4">
                 {/* Department Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Department
+                    Select Department *
                   </label>
                   <select
                     value={selectedDepartment}
@@ -1255,13 +1419,27 @@ const ManageAccessPage = () => {
                     {departments.length === 0 && (
                       <option value="" disabled>Loading departments...</option>
                     )}
-                    {departments.map(dept => (
-                      <option key={dept.id} value={dept.id}>{dept.name}</option>
-                    ))}
+                    {departments
+                      .filter(dept => {
+                        const name = dept.name.toLowerCase();
+                        return name.includes('sales') || name.includes('human resource') || name.includes('hr') || name.includes('administration');
+                      })
+                      .map(dept => (
+                        <option key={dept.id} value={dept.id}>{dept.name}</option>
+                      ))
+                    }
                   </select>
                   {departments.length === 0 && (
                     <p className="text-xs text-gray-500 mt-1">
                       No departments found. Please make sure your organization has departments set up.
+                    </p>
+                  )}
+                  {departments.length > 0 && departments.filter(dept => {
+                    const name = dept.name.toLowerCase();
+                    return name.includes('sales') || name.includes('human resource') || name.includes('hr') || name.includes('administration');
+                  }).length === 0 && (
+                    <p className="text-xs text-amber-600 mt-1">
+                      ⚠️ No restricted departments (Sales, HR, Administration) found
                     </p>
                   )}
                 </div>
@@ -1366,6 +1544,77 @@ const ManageAccessPage = () => {
                   }`}
                 >
                   Submit {pendingRequests.length > 0 && `(${pendingRequests.length})`} Request{pendingRequests.length !== 1 ? 's' : ''}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Conflict Detection Modal */}
+      {showConflictModal && conflictData && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
+            <div 
+              className="fixed inset-0 bg-black opacity-30 transition-opacity" 
+              aria-hidden="true" 
+              onClick={() => {
+                setShowConflictModal(false);
+                setConflictData(null);
+                setAssignmentLoading(false);
+              }}
+            ></div>
+            <span className="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            
+            <div className="relative inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full z-50">
+              <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                <div className="sm:flex sm:items-start">
+                  <div className="mx-auto shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 sm:mx-0 sm:h-10 sm:w-10">
+                    <AlertCircle className="h-6 w-6 text-yellow-600" aria-hidden="true" />
+                  </div>
+                  <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left flex-1">
+                    <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
+                      Assignment Conflict Detected
+                    </h3>
+                    <div className="mt-2">
+                      <p className="text-sm text-gray-500">
+                        <strong>{conflictData.userName}</strong> is already assigned to the following project(s):
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        {conflictData.existingProjects.map((proj, index) => (
+                          <div key={index} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                            <span className="text-sm font-medium text-gray-900">{proj.project_name}</span>
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                              {proj.role_name}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-sm text-gray-500 mt-3">
+                        Do you want to proceed with assigning them to <strong>{conflictData.projectName}</strong>?
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
+                <button
+                  type="button"
+                  onClick={handleConfirmConflictAssignment}
+                  className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm"
+                >
+                  Yes, Assign Anyway
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowConflictModal(false);
+                    setConflictData(null);
+                    setAssignmentLoading(false); // Reset loading state
+                  }}
+                  className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
+                >
+                  Cancel
                 </button>
               </div>
             </div>

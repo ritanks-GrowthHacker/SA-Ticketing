@@ -46,17 +46,28 @@ export async function POST(req: Request) {
 
     console.log('✅ SWITCH-PROJECT: User has access with role:', roleData.name);
 
-    // Generate new JWT with project context
+    // Generate new JWT with project context (preserving org_role from old token)
     const newTokenPayload = {
       sub: userId,
+      email: decoded.email,
+      name: decoded.name,
       org_id: organizationId,
+      org_name: decoded.org_name,
+      org_domain: decoded.org_domain,
+      org_role: decoded.org_role || decoded.role, // Preserve org role for profile
       project_id: projectId,
       project_name: projectData.name,
-      role: roleData.name,
-      roles: [roleData.name], // Add roles array for compatibility
+      project_role: roleData.name, // THIS IS THE DOMINANT ROLE
+      role: roleData.name, // Alias for compatibility
+      roles: [roleData.name],
       role_id: roleData.id,
+      departments: decoded.departments || [], // Preserve departments
+      department_id: decoded.department_id, // Preserve current department
+      department_name: decoded.department_name,
+      department_role: decoded.department_role,
+      iss: process.env.JWT_ISSUER,
       iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60) // 24 hours
+      exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // 7 days to match login
     };
 
     const newToken = jwt.sign(newTokenPayload, process.env.JWT_SECRET as string);

@@ -384,7 +384,7 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
         description: formData.description.trim() || undefined,
         assigned_to: formData.assigned_to || undefined,
         status_id: formData.status_id || undefined,
-        priority_id: formData.priority_id || undefined
+        ...(formData.priority_id && formData.priority_id.trim() !== '' && { priority_id: formData.priority_id })
       };
 
       const response = await fetch(apiEndpoint, {

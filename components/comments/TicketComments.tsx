@@ -23,6 +23,11 @@ interface CommentItemProps {
 
 const MAX_NESTED_LEVEL = 5; // Limit nesting depth for UX
 
+// Helper function to convert @[Name](id) to @Name for display
+const formatMentionsForDisplay = (text: string): string => {
+  return text.replace(/@\[([^\]]+)\]\([^)]+\)/g, '@$1');
+};
+
 const CommentItem: React.FC<CommentItemProps> = ({ 
   comment, 
   onReply, 
@@ -121,7 +126,7 @@ const CommentItem: React.FC<CommentItemProps> = ({
             {isDeleted ? (
               <span className="italic text-gray-500">[This comment has been deleted]</span>
             ) : (
-              comment.content
+              formatMentionsForDisplay(comment.content)
             )}
           </div>
         </div>

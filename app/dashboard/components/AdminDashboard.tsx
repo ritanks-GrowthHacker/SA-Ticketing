@@ -8,6 +8,7 @@ import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
 import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
 import { useSearchParams, useRouter } from 'next/navigation';
+import { DepartmentProjectFilter } from './DepartmentProjectFilter';
 
 interface AdminDashboardProps {
   projectId?: string | null;
@@ -19,6 +20,8 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
   const searchParams = useSearchParams();
   const router = useRouter();
   
+  // Get project role from JWT
+  const projectRole = currentProject?.role || 'Admin';
 
   const { 
     getCachedData, 
@@ -33,7 +36,7 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
     lastUpdateTimestamp
   } = useDashboardStore();
   
-  const [selectedProject, setSelectedProject] = useState(projectId || 'all');
+  const [selectedProject, setSelectedProject] = useState(projectId || currentProject?.id || '');
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [selectedPriority, setSelectedPriority] = useState('all');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
@@ -45,6 +48,7 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
   const [showDragDropView, setShowDragDropView] = useState(false);
   const [statuses, setStatuses] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
   const [priorities, setPriorities] = useState<Array<{ id: string; name: string; color_code?: string; type: string }>>([]);
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0); // Add refresh key for project filter
   
   // Pagination state with URL persistence
   const [currentPage, setCurrentPage] = useState(() => {
@@ -139,8 +143,9 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
 
   const handleProjectModalClose = () => {
     setIsCreateProjectModalOpen(false);
-    // Refresh dashboard data after project creation
+    // Refresh dashboard data and project filter after project creation
     fetchDashboardMetrics(true);
+    setProjectRefreshKey(prev => prev + 1); // Trigger project filter refresh
   };
 
   const handleTicketSuccess = () => {
@@ -396,80 +401,69 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
 
   return (
     <div className="space-y-6">
-      {/* Header with Project Filter */}
+      {/* Header with Department & Project Filter */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">Organization overview and management</p>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
+            {currentProject && (
+              <span className="px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm font-medium rounded-full border border-blue-200 dark:border-blue-700">
+                {projectRole}
+              </span>
+            )}
+          </div>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">
+            {currentProject ? `${currentProject.name} - Department overview and management` : 'Department overview and management'}
+          </p>
         </div>
         
         <div className="flex items-center space-x-3">
-          {/* Project Filter */}
-          <ProjectSelect
-            value={selectedProject}
-            onValueChange={async (value) => {
-              setSelectedProject(value);
-              if (value && value !== 'all') {
-                try {
-                  // Call the switch project API
-                  const response = await fetch('/api/switch-project', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ projectId: value })
-                  });
-
-                  if (response.ok) {
-                    const data = await response.json();
-                    // Update the auth store with the new token and project data
-                    switchProject({
-                      token: data.token,
-                      project: {
-                        ...data.project,
-                        role: data.role  // Add the role to the project object
-                      }
+          {/* Department & Project Filter */}
+          {token && (
+            <DepartmentProjectFilter
+              token={token}
+              refreshKey={projectRefreshKey}
+              onProjectChange={async (projectId, departmentId) => {
+                setSelectedProject(projectId);
+                if (projectId && token) {
+                  try {
+                    console.log('🔄 Admin switching to project:', projectId, 'in department:', departmentId);
+                    // Call the switch project API
+                    const response = await fetch('/api/switch-project', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                      },
+                      body: JSON.stringify({ projectId })
                     });
-                  } else {
-                    throw new Error('Failed to switch project');
+
+                    if (response.ok) {
+                      const data = await response.json();
+                      console.log('✅ Project switch successful:', data);
+                      // Update the auth store with the new token and project data
+                      switchProject({
+                        token: data.token,
+                        project: {
+                          id: data.project.id,
+                          name: data.project.name,
+                          role: data.role
+                        }
+                      });
+                      
+                      // Refresh dashboard metrics
+                      fetchDashboardMetrics();
+                    } else {
+                      console.error('❌ Failed to switch project');
+                    }
+                  } catch (error) {
+                    console.error('❌ Error switching project:', error);
                   }
-                } catch (error) {
-                  console.error('Failed to switch project:', error);
                 }
-              }
-            }}
-            placeholder="Select project to filter"
-            includeAllOption={true}
-          />
-          
-          {/* Status Filter */}
-          <select
-            value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-          >
-            <option value="all">All Status</option>
-            {statuses.map((status) => (
-              <option key={status.id} value={status.id}>
-                {status.name}
-              </option>
-            ))}
-          </select>
-          
-          {/* Priority Filter */}
-          <select
-            value={selectedPriority}
-            onChange={(e) => setSelectedPriority(e.target.value)}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-          >
-            <option value="all">All Priority</option>
-            {priorities.map((priority) => (
-              <option key={priority.id} value={priority.id}>
-                {priority.name}
-              </option>
-            ))}
-          </select>
+              }}
+              initialProjectId={selectedProject}
+            />
+          )}
           
           {/* Refresh Button */}
           <button 

@@ -58,10 +58,10 @@ export async function POST(req: Request) {
       })
       .eq("id", user.id);
 
-    // Get updated user info with organization_id
+    // Get updated user info with organization_id and profile picture
     const { data: fullUser, error: fullUserError } = await supabase
       .from("users")
-      .select("id, name, email, organization_id, department_id, created_at")
+      .select("id, name, email, organization_id, department_id, created_at, profile_picture_url, about, phone, location, job_title")
       .eq("id", user.id)
       .single();
 
@@ -84,17 +84,19 @@ export async function POST(req: Request) {
       console.error("Organization lookup error:", orgError);
     }
 
-    // Get user's department roles (department-level roles)
+    // Get user's department roles (department-level roles) ordered by created_at
     const { data: departmentRoles, error: deptRoleError } = await supabase
       .from("user_department_roles")
       .select(`
         department_id,
         role_id,
         organization_id,
+        created_at,
         departments(id, name),
         global_roles(id, name)
       `)
-      .eq("user_id", user.id);
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true }); // First department = default
 
     if (deptRoleError) {
       console.error("Department role lookup error:", deptRoleError);
@@ -104,6 +106,8 @@ export async function POST(req: Request) {
     let organization: any = null;
     let role: any = null;
     let allRoles: string[] = [];
+    let currentDepartment: any = null; // The active department for JWT
+    let currentDepartmentRole: string | null = null; // User's role in the current department
 
     if (userOrganizations && userOrganizations.length > 0) {
       // User has org-level role
@@ -113,10 +117,21 @@ export async function POST(req: Request) {
       allRoles = userOrganizations
         .map((uo: any) => uo.global_roles?.name)
         .filter(Boolean) as string[];
+      
+      // If user also has department roles, set first department as current
+      if (departmentRoles && departmentRoles.length > 0) {
+        const firstDept = departmentRoles[0] as any;
+        currentDepartment = firstDept.departments;
+        currentDepartmentRole = firstDept.global_roles?.name || null;
+      }
     } else if (departmentRoles && departmentRoles.length > 0) {
       // User only has department-level role, get org from department role
       const primaryDeptRole = departmentRoles[0] as any;
       const orgId = primaryDeptRole.organization_id || fullUser.organization_id;
+      
+      // Set first department as current
+      currentDepartment = primaryDeptRole.departments;
+      currentDepartmentRole = primaryDeptRole.global_roles?.name || null;
       
       if (orgId) {
         const { data: orgData } = await supabase
@@ -162,7 +177,55 @@ export async function POST(req: Request) {
         role: dr.global_roles?.name
       }));
 
-    // Generate JWT token
+    // Get all departments user is part of
+    const allDepartments = (departmentRoles || []).map((dr: any) => ({
+      id: dr.department_id,
+      name: dr.departments?.name,
+      role: dr.global_roles?.name
+    }));
+
+    // Get default project: PRIORITIZE project assignment, not department
+    let defaultProject: any = null;
+    let defaultProjectRole: string = "Member";
+    
+    // First, try to get user's assigned projects (user_project table)
+    const { data: assignedProjects } = await supabase
+      .from('user_project')
+      .select(`
+        project_id,
+        projects!inner(id, name),
+        global_roles!user_project_role_id_fkey(id, name)
+      `)
+      .eq('user_id', user.id)
+      .eq('projects.organization_id', organization.id)
+      .order('created_at', { ascending: true })
+      .limit(1);
+    
+    if (assignedProjects && assignedProjects.length > 0) {
+      const firstAssignment = assignedProjects[0] as any;
+      defaultProject = firstAssignment.projects;
+      defaultProjectRole = firstAssignment.global_roles?.name || 'Member';
+    } else if (currentDepartment?.id && currentDepartmentRole === 'Admin') {
+      // Fallback: Department Admin sees first project in their department
+      const { data: deptProjects } = await supabase
+        .from('projects')
+        .select(`
+          id,
+          name,
+          project_department!inner(department_id)
+        `)
+        .eq('organization_id', organization.id)
+        .eq('project_department.department_id', currentDepartment.id)
+        .order('created_at', { ascending: true })
+        .limit(1);
+      
+      if (deptProjects && deptProjects.length > 0) {
+        defaultProject = deptProjects[0];
+        defaultProjectRole = 'Admin'; // Department admin gets admin in projects
+      }
+    }
+
+    // Generate JWT token with PROJECT ROLE as dominant
     const tokenPayload = {
       sub: user.id,
       email: user.email,
@@ -170,9 +233,16 @@ export async function POST(req: Request) {
       org_id: organization.id,
       org_name: organization.name,
       org_domain: organization.domain,
-      role: role?.name || "Member",
-      roles: allRoles,
-      department_roles: departmentAdminRoles, // Include department-level roles
+      org_role: role?.name || "Member", // Organization role (for profile only)
+      project_id: defaultProject?.id || null,
+      project_name: defaultProject?.name || null,
+      project_role: defaultProjectRole, // THIS IS THE DOMINANT ROLE
+      role: defaultProjectRole, // Alias for compatibility
+      roles: [defaultProjectRole], // Active role array
+      departments: allDepartments, // All departments user is part of
+      department_id: currentDepartment?.id || null, // Current department (can be switched)
+      department_name: currentDepartment?.name || null,
+      department_role: currentDepartmentRole, // Role in current department
       iss: process.env.JWT_ISSUER,
     };
 
@@ -189,16 +259,34 @@ export async function POST(req: Request) {
         id: user.id,
         name: user.name,
         email: user.email,
-        created_at: user.created_at
+        created_at: user.created_at,
+        profile_picture_url: fullUser.profile_picture_url,
+        about: fullUser.about,
+        phone: fullUser.phone,
+        location: fullUser.location,
+        job_title: fullUser.job_title
       },
       organization: {
         id: organization.id,
         name: organization.name,
-        domain: organization.domain
+        domain: organization.domain,
+        role: role?.name || "Member" // Org-level role for display
       },
-      role: role?.name || "Member",
-      roles: allRoles,
+      project: defaultProject ? {
+        id: defaultProject.id,
+        name: defaultProject.name,
+        role: defaultProjectRole // THIS IS THE DOMINANT ROLE
+      } : null,
+      department: currentDepartment ? {
+        id: currentDepartment.id,
+        name: currentDepartment.name,
+        role: currentDepartmentRole
+      } : null,
+      departments: allDepartments, // All departments user is part of
+      role: defaultProjectRole, // The active role (project-based)
+      roles: [defaultProjectRole],
       token,
+      hasMultipleDepartments: allDepartments.length > 1,
       organizations: (userOrganizations || []).map((uo: any) => ({
         id: uo.organizations.id,
         name: uo.organizations.name,

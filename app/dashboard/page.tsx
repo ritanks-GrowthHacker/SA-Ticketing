@@ -10,12 +10,56 @@ import { Loader2 } from 'lucide-react';
 
 const Dashboard = () => {
   const { user, role, isAuthenticated, token, currentProject, switchProject } = useAuth();
-  const authStore = useAuthStore();
+  const { currentDepartment } = useAuthStore();
   const searchParams = useSearchParams();
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [currentProjectRole, setCurrentProjectRole] = useState<string | null>(null);
   const [resolvedRoleName, setResolvedRoleName] = useState<string | null>(null);
+  const [hasHydrated, setHasHydrated] = useState(false);
 
+  // Wait for Zustand to hydrate from localStorage
+  useEffect(() => {
+    // CHECK WHAT'S IN LOCALSTORAGE IMMEDIATELY
+    const rawData = localStorage.getItem('ticketing-metrix-auth');
+    console.log('═══════════════════════════════════════════════════');
+    console.log('📦 DASHBOARD PAGE LOAD - localStorage RAW DATA:');
+    if (rawData) {
+      const parsed = JSON.parse(rawData);
+      console.log('Department:', parsed.state?.currentDepartment?.name);
+      console.log('Role:', parsed.state?.role);
+      console.log('Has Token:', !!parsed.state?.token);
+      console.log('Token prefix:', parsed.state?.token?.substring(0, 100));
+      
+      // Decode JWT
+      if (parsed.state?.token) {
+        try {
+          const decoded: any = JSON.parse(atob(parsed.state.token.split('.')[1]));
+          console.log('JWT department_id:', decoded.department_id);
+          console.log('JWT department_name:', decoded.department_name);
+          console.log('JWT department_role:', decoded.department_role);
+        } catch (e) {
+          console.error('Failed to decode JWT:', e);
+        }
+      }
+    } else {
+      console.log('NO DATA IN LOCALSTORAGE!');
+    }
+    console.log('═══════════════════════════════════════════════════');
+    
+    setHasHydrated(true);
+  }, []);
+
+  // Log token state for debugging
+  useEffect(() => {
+    if (hasHydrated) {
+      console.log('🔐 Dashboard token state:', { 
+        hasToken: !!token, 
+        tokenLength: token?.length,
+        isAuthenticated,
+        user: user?.email
+      });
+    }
+  }, [hasHydrated, token, isAuthenticated, user]);
 
   // Set project context from auth store
   useEffect(() => {
@@ -67,7 +111,19 @@ const Dashboard = () => {
     } else {
       setResolvedRoleName(roleParam);
     }
-  }, [searchParams]);
+  }, [searchParams, currentProjectId, currentProjectRole]);
+
+  // Show loading while hydrating
+  if (!hasHydrated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4 text-blue-600" />
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   const fetchRoleName = async (roleId: string) => {
     try {
@@ -141,19 +197,44 @@ const Dashboard = () => {
 
   // Role-based dashboard rendering
   const renderDashboard = () => {
-    // Prioritize current project role, then resolved role name, then fallback
-    const effectiveRole = currentProject?.role || resolvedRoleName || currentProjectRole || role;
+    // Decode token to get roles
+    let projectRole: string | null = null;
+    let departmentRole: string | null = null;
+    let orgLevelRole: string | null = null;
+    
+    if (token) {
+      try {
+        const decoded: any = JSON.parse(atob(token.split('.')[1]));
+        projectRole = decoded.project_role; // For within-project permissions (tickets, docs)
+        departmentRole = decoded.department_role; // For dashboard/feature access
+        orgLevelRole = decoded.org_role; // For dashboard/feature access
+        
+        console.log('🔍 Decoded JWT Roles:', {
+          project_role: projectRole,
+          department_role: departmentRole,
+          org_role: orgLevelRole,
+          project_id: decoded.project_id,
+          department_id: decoded.department_id
+        });
+      } catch (error) {
+        console.error('Failed to decode token:', error);
+      }
+    }
+    
+    // IMPORTANT: Dashboard selection is based on ORG/DEPT role, NOT project role
+    // This determines which features you see (Create Project, Requests, etc.)
+    const effectiveRole = departmentRole || orgLevelRole || currentDepartment?.role || role || 'Member';
     const userRole = effectiveRole?.toLowerCase() || '';
     
-    console.log('🎯 DASHBOARD: Rendering dashboard for role:', userRole, 
-      currentProject ? `(Project: ${currentProject.name})` : '(Global)');
-    console.log('🔍 DASHBOARD DEBUG VALUES:');
-    console.log('  - currentProject.role:', currentProject?.role, typeof currentProject?.role);
-    console.log('  - resolvedRoleName:', resolvedRoleName, typeof resolvedRoleName);
-    console.log('  - currentProjectRole:', currentProjectRole, typeof currentProjectRole);
-    console.log('  - global role:', role, typeof role);
-    console.log('  - effectiveRole:', effectiveRole, typeof effectiveRole);
-    console.log('  - userRole (lowercase):', userRole, typeof userRole);
+    console.log('🎯 DASHBOARD: Selecting dashboard based on ORG/DEPT role:', userRole);
+    console.log('🔍 DASHBOARD ROLE PRIORITY:');
+    console.log('  - departmentRole (from JWT) [SELECTED]:', departmentRole);
+    console.log('  - orgLevelRole (from JWT):', orgLevelRole);
+    console.log('  - currentDepartment.role:', currentDepartment?.role);
+    console.log('  - global role:', role);
+    console.log('  - effectiveRole:', effectiveRole);
+    console.log('  - userRole (lowercase):', userRole);
+    console.log('  NOTE: projectRole is for tickets/docs, not dashboard selection');
     
     try {
       switch (userRole) {

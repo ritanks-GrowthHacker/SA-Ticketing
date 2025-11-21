@@ -26,12 +26,71 @@ export async function POST(req: Request) {
 
     const { data: existingUser } = await supabase
       .from("users")
-      .select("id")
+      .select("id, email, organization_id")
       .eq("email", email)
       .maybeSingle();
 
     if (existingUser) {
-      return NextResponse.json({ error: "User already exists" }, { status: 400 });
+      // User exists - check if they're already in this department
+      const { data: existingDeptRole } = await supabase
+        .from("user_department_roles")
+        .select("id")
+        .eq("user_id", existingUser.id)
+        .eq("department_id", invitation.department_id)
+        .eq("organization_id", invitation.organization_id)
+        .maybeSingle();
+
+      if (existingDeptRole) {
+        return NextResponse.json({ 
+          error: "User already exists in this department" 
+        }, { status: 400 });
+      }
+
+      // User exists but in different department - add them to new department
+      console.log("Adding existing user to new department:", {
+        userId: existingUser.id,
+        email: email,
+        newDepartmentId: invitation.department_id
+      });
+
+      // Get Member role
+      const { data: memberRole } = await supabase
+        .from("global_roles")
+        .select("id")
+        .eq("name", "Member")
+        .single();
+
+      if (memberRole && invitation.department_id) {
+        // Add user to new department
+        const { error: deptRoleError } = await supabase
+          .from("user_department_roles")
+          .insert({
+            user_id: existingUser.id,
+            department_id: invitation.department_id,
+            organization_id: invitation.organization_id,
+            role_id: memberRole.id
+          });
+
+        if (deptRoleError) {
+          console.error("Failed to add user to department:", deptRoleError);
+          return NextResponse.json({ 
+            error: "Failed to add user to department" 
+          }, { status: 500 });
+        }
+      }
+
+      // Mark invitation as completed
+      await supabase
+        .from('invitations')
+        .update({ status: 'completed' })
+        .eq('id', invitationId);
+
+      return NextResponse.json({ 
+        success: true,
+        message: "User added to new department successfully. You can now login with your existing credentials.",
+        existingUser: true,
+        email
+      }, { status: 200 });
     }
 
     // Generate OTP and hash password - exactly like register-user API

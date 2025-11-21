@@ -4,6 +4,7 @@ import "./globals.css";
 import { HydrateStore } from "./store/HydrateStore";
 import { ThemeProvider } from "./providers/ThemeProvider";
 import { RealtimeProvider } from "./providers/RealtimeProvider";
+import { LoadingProvider } from "./providers/LoadingProvider";
 import MainLayout from "@/components/ui/MainLayout";
 import DevNavigation from "@/components/DevNavigation";
 
@@ -33,14 +34,16 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 transition-colors`}
       >
         <ThemeProvider>
-          <HydrateStore>
-            <RealtimeProvider>
-              <MainLayout>
-                {children}
-              </MainLayout>
-              <DevNavigation />
-            </RealtimeProvider>
-          </HydrateStore>
+          <LoadingProvider>
+            <HydrateStore>
+              <RealtimeProvider>
+                <MainLayout>
+                  {children}
+                </MainLayout>
+                <DevNavigation />
+              </RealtimeProvider>
+            </HydrateStore>
+          </LoadingProvider>
         </ThemeProvider>
       </body>
     </html>

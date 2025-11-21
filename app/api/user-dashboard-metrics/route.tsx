@@ -44,20 +44,26 @@ export async function GET(request: NextRequest) {
     console.log('🔧 Full JWT decoded token:', JSON.stringify(decoded, null, 2));
     
     const userId = decoded.sub; // Use 'sub' from JWT token
-    const userRole = decoded.role;
+    const userRole = decoded.role; // org-level role (may be null for dept-only users)
     const organization_id = decoded.org_id; // Use 'org_id' from JWT token
-    
-    console.log('🔧 User Dashboard Metrics - User role:', userRole);
-    console.log('🔧 User Dashboard Metrics - userId:', userId);
-    console.log('🔧 User Dashboard Metrics - organization_id:', organization_id);
+    const department_id = decoded.department_id || null; // department context from JWT
+    const department_role = decoded.department_role || null; // department role from JWT
 
-    // Allow Members and Managers to access this endpoint
-    const normalizedRole = userRole?.toLowerCase();
-    if (!normalizedRole || (normalizedRole !== 'member' && normalizedRole !== 'manager')) {
-      console.log('🔧 REJECTED: Role not allowed:', userRole, 'normalized:', normalizedRole);
+    console.log('🔧 User Dashboard Metrics - Decoded JWT values:', {
+      userId: decoded.sub,
+      orgRole: userRole,
+      orgId: decoded.org_id,
+      department_id: department_id,
+      department_role: department_role
+    });
+
+    // Allow Members, Managers and Department Admins to access this endpoint
+    const normalizedRole = (department_role || userRole || '').toLowerCase();
+    if (!normalizedRole || (normalizedRole !== 'member' && normalizedRole !== 'manager' && normalizedRole !== 'admin')) {
+      console.log('🔧 REJECTED: Role not allowed:', { orgRole: userRole, deptRole: department_role });
       return NextResponse.json({ 
         success: false, 
-        error: 'Access denied. This endpoint is only for Members and Managers.' 
+        error: 'Access denied. This endpoint is only for Members, Managers and Department Admins.' 
       }, { status: 403 });
     }
 
@@ -70,17 +76,49 @@ export async function GET(request: NextRequest) {
 
     console.log('🔧 MEMBER: Query params - page:', page, 'limit:', limit, 'project_id:', project_id);
 
-    // Get member's assigned projects
-    const { data: memberProjects, error: memberProjectsError } = await supabase
-      .from('user_project')
-      .select(`
-        project_id,
-        role_id,
-        projects!inner(id, name, description),
-        global_roles!user_project_global_role_id_fkey(id, name)
-      `)
-      .eq('user_id', userId)
-      .eq('projects.organization_id', organization_id);
+    // Determine applicable projects based on department/project context
+    let memberProjects: any[] = [];
+    let memberProjectsError: any = null;
+
+    if (department_role === 'Admin' && department_id) {
+      // Department Admin: can see all projects within this department
+      const { data: deptProjects, error: deptProjectsError } = await supabase
+        .from('projects')
+        .select(`
+          id,
+          name,
+          description,
+          project_department!inner(department_id)
+        `)
+        .eq('organization_id', organization_id)
+        .eq('project_department.department_id', department_id)
+        .order('created_at', { ascending: true });
+
+      memberProjects = (deptProjects || []).map((p: any) => ({ project_id: p.id, projects: { id: p.id, name: p.name, description: p.description }, global_roles: { name: 'Admin' } }));
+      memberProjectsError = deptProjectsError;
+    } else {
+      // Department Manager or Regular Member: Get only projects they're assigned to, but scoped to current department if present
+      const query = supabase
+        .from('user_project')
+        .select(`
+          project_id,
+          role_id,
+          projects!inner(id, name, description, project_department(department_id)),
+          global_roles!user_project_global_role_id_fkey(id, name)
+        `)
+        .eq('user_id', userId)
+        .eq('projects.organization_id', organization_id)
+        .order('projects(created_at)', { ascending: true });
+
+      // If department context exists, filter assigned projects to that department
+      if (department_id) {
+        query.filter('projects.project_department.department_id', 'eq', department_id);
+      }
+
+      const { data: assignedProjects, error: projectsError } = await query;
+      memberProjects = assignedProjects || [];
+      memberProjectsError = projectsError;
+    }
 
     if (memberProjectsError) {
       console.error('❌ MEMBER: Error fetching member projects:', memberProjectsError);

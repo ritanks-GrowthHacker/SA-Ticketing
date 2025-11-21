@@ -91,9 +91,13 @@ export default function AuthPage() {
     authLogin({
       user: data.user,
       organization: data.organization,
-      role: data.role,
+      role: data.role, // Project role (dominant)
       roles: data.roles,
-      token: data.token
+      token: data.token,
+      project: data.project || null, // Project context
+      department: data.department || null, // Department context
+      departments: data.departments || [], // All departments
+      hasMultipleDepartments: data.hasMultipleDepartments || false
     })
     
     setSuccess('OTP verified successfully! Redirecting to dashboard...')

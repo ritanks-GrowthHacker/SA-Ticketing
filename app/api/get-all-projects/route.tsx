@@ -7,8 +7,15 @@ interface JWTPayload {
   org_id: string;     // organization ID
   org_name: string;   // organization name
   org_domain: string; // organization domain
-  role: string;       // user role
+  org_role?: string;  // organization role (for profile display only)
+  project_id?: string;    // current project ID (DOMINANT)
+  project_name?: string;  // current project name
+  project_role?: string;  // current project role (DOMINANT)
+  role: string;       // active role (project role if available)
   roles: string[];    // all user roles
+  department_id?: string;   // current department ID
+  department_role?: string; // current department role
+  departments?: Array<{ id: string; name: string; role: string }>; // all user departments
   iat?: number;
   exp?: number;
 }
@@ -42,6 +49,7 @@ export async function GET(req: Request) {
     const format = url.searchParams.get("format"); // 'dropdown' for simple format
     const search = url.searchParams.get("search");
     const includeStats = url.searchParams.get("includeStats") === "true";
+    const filterDepartmentId = url.searchParams.get("department_id"); // Filter by specific department
 
     // Check if user belongs to the organization - check both org and department roles
     const { data: userOrgRoles, error: orgRoleError } = await supabase
@@ -73,9 +81,17 @@ export async function GET(req: Request) {
     }
 
     // Prioritize JWT role, then org role, then department role
-    let actualUserRole = decodedToken.role || 'Member';
+    let actualUserRole = decodedToken.project_role || decodedToken.department_role || decodedToken.org_role || decodedToken.role || 'Member';
     
-    if (!decodedToken.role) {
+    console.log('🔍 GET-ALL-PROJECTS - JWT Data:', {
+      project_id: decodedToken.project_id,
+      project_role: decodedToken.project_role,
+      department_id: decodedToken.department_id,
+      org_role: decodedToken.org_role,
+      actualUserRole
+    });
+    
+    if (!decodedToken.role && !decodedToken.project_role && !decodedToken.department_role) {
       if (userOrgRoles && userOrgRoles.length > 0) {
         actualUserRole = (userOrgRoles[0].global_roles as any)?.name || 'Member';
       } else if (userDeptRoles && userDeptRoles.length > 0) {
@@ -85,35 +101,60 @@ export async function GET(req: Request) {
 
     const userRole = actualUserRole;
 
-    // Determine if user is dept-only admin (has dept roles but not org-level Admin role)
-    const isDeptOnlyAdmin = !userOrgRoles || userOrgRoles.length === 0 || 
-      (userOrgRoles.every((r: any) => r.global_roles?.name !== 'Admin'));
-    
-    // Get user's PRIMARY department from users table (not all dept roles)
-    const { data: userData, error: userDataError } = await supabase
-      .from('users')
-      .select('department_id')
-      .eq('id', decodedToken.sub)
-      .maybeSingle();
-    
-    const userDepartmentIds = userData?.department_id ? [userData.department_id] : [];
-
-    console.log("🔍 GET PROJECTS - User check:", {
+    console.log("🔍 GET PROJECTS - User check (Project-Based System):", {
       userId: decodedToken.sub,
+      project_role: decodedToken.project_role,
+      org_role: decodedToken.org_role,
       userRole,
-      isDeptOnlyAdmin,
-      userDepartmentId: userData?.department_id,
-      userDepartmentIds,
       hasOrgRoles: userOrgRoles?.length || 0,
       hasDeptRoles: userDeptRoles?.length || 0
     });
 
-    let projectsQuery;
+    // **PROJECT-BASED SYSTEM**: Get ALL projects user is assigned to from user_project table
+    const { data: userProjects, error: userProjectsError } = await supabase
+      .from("user_project")
+      .select(`
+        project_id,
+        role_id,
+        projects!inner(
+          id,
+          name,
+          description,
+          status_id,
+          created_at,
+          updated_at,
+          organization_id,
+          created_by,
+          organizations(id, name, domain),
+          users!projects_created_by_fkey(id, name, email),
+          project_statuses(
+            id,
+            name,
+            description,
+            color_code,
+            sort_order,
+            is_active
+          )
+        ),
+        global_roles!user_project_role_id_fkey(id, name)
+      `)
+      .eq("user_id", decodedToken.sub)
+      .eq("projects.organization_id", decodedToken.org_id);
 
-    // Role-based filtering
-    if (userRole === "Admin" && !isDeptOnlyAdmin) {
-      // Org-level Admin can see all projects in the organization
-      projectsQuery = supabase
+    if (userProjectsError) {
+      console.error("User projects retrieval error:", userProjectsError);
+      return NextResponse.json(
+        { error: "Failed to retrieve projects" }, 
+        { status: 500 }
+      );
+    }
+
+    // If user has org-level Admin role, also get all org projects (not just assigned ones)
+    let orgAdminProjects: any[] = [];
+    const isOrgAdmin = userOrgRoles?.some((r: any) => r.global_roles?.name === 'Admin');
+    
+    if (isOrgAdmin) {
+      const { data: allOrgProjects, error: orgProjectsError } = await supabase
         .from("projects")
         .select(`
           id,
@@ -137,77 +178,70 @@ export async function GET(req: Request) {
         `)
         .eq("organization_id", decodedToken.org_id);
 
-    } else if (userRole === "Admin" && isDeptOnlyAdmin && userDepartmentIds.length > 0) {
-      // Department-level Admin sees:
-      // 1. Projects owned by their department (project_department)
-      // 2. Projects shared with their department (shared_projects)
-      
-      // Fetch owned projects
-      const ownedProjectsQuery = supabase
-        .from("projects")
-        .select(`
-          id,
-          name,
-          description,
-          status_id,
-          created_at,
-          updated_at,
-          organization_id,
-          created_by,
-          organizations(id, name, domain),
-          users!projects_created_by_fkey(id, name, email),
-          project_department!inner(department_id),
-          project_statuses(
-            id,
-            name,
-            description,
-            color_code,
-            sort_order,
-            is_active
-          )
-        `)
-        .eq("organization_id", decodedToken.org_id)
-        .in("project_department.department_id", userDepartmentIds);
-
-      // Fetch shared projects
-      const sharedProjectsQuery = supabase
-        .from("projects")
-        .select(`
-          id,
-          name,
-          description,
-          status_id,
-          created_at,
-          updated_at,
-          organization_id,
-          created_by,
-          organizations(id, name, domain),
-          users!projects_created_by_fkey(id, name, email),
-          shared_projects!inner(department_id),
-          project_statuses(
-            id,
-            name,
-            description,
-            color_code,
-            sort_order,
-            is_active
-          )
-        `)
-        .eq("organization_id", decodedToken.org_id)
-        .in("shared_projects.department_id", userDepartmentIds);
-
-      // Apply search filter if provided
-      if (search) {
-        ownedProjectsQuery.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
-        sharedProjectsQuery.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
+      if (!orgProjectsError && allOrgProjects) {
+        orgAdminProjects = allOrgProjects;
       }
+    }
 
-      // Execute both queries
-      const [ownedResult, sharedResult] = await Promise.all([
-        ownedProjectsQuery.order("created_at", { ascending: false }),
-        sharedProjectsQuery.order("created_at", { ascending: false })
-      ]);
+    // Combine user-assigned projects with org admin projects (if applicable)
+    let allProjects: any[] = [];
+    
+    if (isOrgAdmin && orgAdminProjects.length > 0) {
+      // Org Admin sees ALL projects
+      allProjects = orgAdminProjects.map((proj: any) => ({
+        ...proj,
+        userRole: 'Admin' // Org admins have Admin role in all projects
+      }));
+    } else {
+      // Regular users see only assigned projects with their specific roles
+      allProjects = (userProjects || []).map((up: any) => ({
+        ...up.projects,
+        userRole: up.global_roles?.name || 'Member' // User's role in this specific project
+      }));
+    }
 
+    // Apply search filter if provided
+    if (search) {
+      allProjects = allProjects.filter((proj: any) => 
+        proj.name?.toLowerCase().includes(search.toLowerCase()) ||
+        proj.description?.toLowerCase().includes(search.toLowerCase())
+      );
+    }
+
+    // Apply department filter if provided - PROPERLY filter by project_department table
+    if (filterDepartmentId) {
+      console.log(`🔍 GET-ALL-PROJECTS: Filtering projects by department ${filterDepartmentId}`);
+      
+      // Get projects that belong to this department from project_department table
+      const { data: deptProjects, error: deptProjectsError } = await supabase
+        .from('project_department')
+        .select('project_id')
+        .eq('department_id', filterDepartmentId);
+
+      if (deptProjectsError) {
+        console.error('Error fetching department projects:', deptProjectsError);
+      } else if (deptProjects) {
+        const deptProjectIds = deptProjects.map(dp => dp.project_id);
+        console.log(`   Found ${deptProjectIds.length} projects in department`);
+        
+        // Filter to only show projects that belong to this department
+        allProjects = allProjects.filter((proj: any) => deptProjectIds.includes(proj.id));
+        console.log(`   After filtering: ${allProjects.length} projects`);
+      }
+    }
+
+    // Sort by created_at
+    allProjects.sort((a: any, b: any) => 
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+
+    console.log(`✅ GET PROJECTS - Found ${allProjects.length} projects for user (project-based)`);
+
+    // For backward compatibility, create a fake result structure
+    const ownedResult = { data: allProjects, error: null };
+    const sharedResult = { data: [], error: null };
+
+    if (false) { // Skip the old logic entirely
       if (ownedResult.error) {
         console.error("Owned projects retrieval error:", ownedResult.error);
         return NextResponse.json(
@@ -238,28 +272,14 @@ export async function GET(req: Request) {
         }
       });
 
-      // Add shared projects (avoiding duplicates)
-      sharedProjects.forEach((project: any) => {
-        if (!allProjectIds.has(project.id)) {
-          allProjectIds.add(project.id);
-          combinedProjects.push({ ...project, is_shared: true });
-        }
-      });
-
-      // Sort combined results by created_at descending
-      combinedProjects.sort((a, b) => 
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-
-      const projects = combinedProjects;
-
       // Handle dropdown format
       if (format === "dropdown") {
-        const dropdownProjects = projects.map((project: any) => ({
+        const dropdownProjects = allProjects.map((project: any) => ({
           id: project.id,
           name: project.name,
           value: project.id,
-          label: project.name
+          label: project.name,
+          userRole: project.userRole // Include user's role in this project
         }));
 
         return NextResponse.json({
@@ -269,19 +289,14 @@ export async function GET(req: Request) {
         });
       }
 
-      // For dept admins with combined projects, process them directly
-      // without going through the projectsQuery flow
-      const enrichedProjects = await Promise.all(
-        projects.map(async (project: any) => {
-          return {
-            ...project,
-            is_shared: project.is_shared || false
-          };
-        })
-      );
+      // Return full project data with user roles
+      const enrichedProjects = allProjects.map((project: any) => ({
+        ...project,
+        userRole: project.userRole || 'Member'
+      }));
 
       return NextResponse.json({
-        message: "Projects retrieved successfully",
+        message: "Projects retrieved successfully (project-based)",
         projects: enrichedProjects,
         totalCount: enrichedProjects.length,
         userRole: userRole,
@@ -289,89 +304,16 @@ export async function GET(req: Request) {
           search
         }
       });
-
-    } else if (userRole === "Manager") {
-      // Manager can see only projects they are assigned to
-      projectsQuery = supabase
-        .from("projects")
-        .select(`
-          id,
-          name,
-          description,
-          status_id,
-          created_at,
-          updated_at,
-          organization_id,
-          created_by,
-          organizations(id, name, domain),
-          users!projects_created_by_fkey(id, name, email),
-          user_project!inner(user_id, role_id, global_roles!user_project_role_id_fkey(name)),
-          project_statuses(
-            id,
-            name,
-            description,
-            color_code,
-            sort_order,
-            is_active
-          )
-        `)
-        .eq("organization_id", decodedToken.org_id)
-        .eq("user_project.user_id", decodedToken.sub);
-
-    } else {
-      // Other roles (User, Team Lead) can see projects they are assigned to
-      projectsQuery = supabase
-        .from("projects")
-        .select(`
-          id,
-          name,
-          description,
-          status_id,
-          created_at,
-          updated_at,
-          organization_id,
-          created_by,
-          organizations(id, name, domain),
-          users!projects_created_by_fkey(id, name, email),
-          user_project!inner(user_id, role_id, global_roles!user_project_role_id_fkey(name)),
-          project_statuses(
-            id,
-            name,
-            description,
-            color_code,
-            sort_order,
-            is_active
-          )
-        `)
-        .eq("organization_id", decodedToken.org_id)
-        .eq("user_project.user_id", decodedToken.sub);
-    }
-
-    // Apply search filter if provided
-    if (search) {
-      projectsQuery = projectsQuery.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
-    }
-
-    // Order by created_at descending
-    projectsQuery = projectsQuery.order("created_at", { ascending: false });
-
-    const { data: projects, error: projectsError } = await projectsQuery;
-
-    if (projectsError) {
-      console.error("Projects retrieval error:", projectsError);
-      return NextResponse.json(
-        { error: "Failed to retrieve projects" }, 
-        { status: 500 }
-      );
     }
 
     // If format is dropdown, return simple format
     if (format === "dropdown") {
-      const dropdownProjects = (projects || []).map((project: any) => ({
+      const dropdownProjects = (allProjects || []).map((project: any) => ({
         id: project.id,
         name: project.name,
         value: project.id,
-        label: project.name
+        label: project.name,
+        userRole: project.userRole
       }));
 
       return NextResponse.json({
@@ -497,7 +439,7 @@ export async function GET(req: Request) {
 
     // Enhanced project data with statistics if requested
     const enrichedProjects = await Promise.all(
-      (projects || []).map(async (project: any) => {
+      (allProjects || []).map(async (project: any) => {
         let projectStats = null;
 
         if (includeStats) {
@@ -508,7 +450,7 @@ export async function GET(req: Request) {
             .eq('project_id', project.id);
 
           // Get team members count
-          const { data: teamMembers } = await supabase
+          const { data: teamMembers, error: teamMembersError } = await supabase
             .from('user_project')
             .select(`
               user_id,
@@ -516,6 +458,16 @@ export async function GET(req: Request) {
               global_roles!user_project_role_id_fkey(name)
             `, { count: 'exact' })
             .eq('project_id', project.id);
+
+          if (teamMembersError) {
+            console.error(`❌ Error fetching team members for project ${project.id}:`, teamMembersError);
+          }
+
+          console.log(`👥 Team Members for project ${project.name}:`, {
+            count: teamMembers?.length || 0,
+            members: teamMembers,
+            query: 'user_project with project_id =' + project.id
+          });
 
           const totalCount = allProjectTickets?.length || 0;
           const teamMembersCount = teamMembers?.length || 0;
@@ -607,7 +559,7 @@ export async function GET(req: Request) {
           updated_at: project.updated_at,
           created_by: project.users || null,
           organization: project.organizations || null,
-          user_role_in_project: project.user_project ? project.user_project[0]?.global_roles?.name : null,
+          user_role_in_project: project.userRole || 'Member', // From project-based system
           stats: projectStats
         };
       })

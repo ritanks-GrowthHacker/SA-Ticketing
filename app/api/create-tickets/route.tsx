@@ -109,41 +109,51 @@ export async function POST(request: NextRequest) {
     if (assigned_to) {
       console.log('🔧 Validating assignee:', assigned_to, 'in organization:', decoded.org_id);
       
-      // Check if user exists in organization (either org-level or dept-level role)
+      // First check if user exists in the organization's users table
+      const { data: userExists, error: userError } = await supabase
+        .from('users')
+        .select('id, name, email, organization_id, department_id')
+        .eq('id', assigned_to)
+        .eq('organization_id', decoded.org_id)
+        .maybeSingle();
+
+      console.log('🔧 User existence check:', { 
+        userExists: !!userExists, 
+        userError,
+        userData: userExists 
+      });
+
+      if (!userExists) {
+        return NextResponse.json(
+          { error: 'Assigned user not found in your organization' },
+          { status: 400 }
+        );
+      }
+
+      // Check if user has any role (org-level or dept-level)
       const { data: orgRole } = await supabase
         .from('user_organization_roles')
-        .select(`
-          user_id,
-          organization_id,
-          users!inner(id, name, email, department_id)
-        `)
+        .select('user_id, organization_id')
         .eq('user_id', assigned_to)
         .eq('organization_id', decoded.org_id)
         .maybeSingle();
 
       const { data: deptRole } = await supabase
         .from('user_department_roles')
-        .select(`
-          user_id,
-          organization_id,
-          department_id,
-          users!inner(id, name, email, department_id)
-        `)
+        .select('user_id, organization_id, department_id')
         .eq('user_id', assigned_to)
         .eq('organization_id', decoded.org_id)
         .maybeSingle();
 
-      const assignee = orgRole || deptRole;
-
-      console.log('🔧 Assignee validation result:', { 
+      console.log('🔧 Role validation result:', { 
         hasOrgRole: !!orgRole, 
-        hasDeptRole: !!deptRole, 
-        assignee 
+        hasDeptRole: !!deptRole
       });
 
-      if (!assignee) {
+      // User must have at least one role OR be in the organization
+      if (!orgRole && !deptRole && !userExists) {
         return NextResponse.json(
-          { error: 'Assigned user not found in your organization' },
+          { error: 'Assigned user does not have proper access in your organization' },
           { status: 400 }
         );
       }
@@ -349,9 +359,9 @@ async function checkAssignmentPermission(
   // Get creator's role and department
   const { data: creatorData } = await supabase
     .from('users')
-    .select('department_id')
+    .select('department_id, organization_id')
     .eq('id', creatorId)
-    .single();
+    .maybeSingle();
 
   const { data: creatorOrgRole } = await supabase
     .from('user_organization_roles')
@@ -382,14 +392,20 @@ async function checkAssignmentPermission(
     return true;
   }
 
-  // Get assignee's department
+  // Get assignee's organization and department
   const { data: assigneeData } = await supabase
     .from('users')
-    .select('department_id')
+    .select('department_id, organization_id')
     .eq('id', assigneeId)
-    .single();
+    .maybeSingle();
 
   console.log('🔧 Assignee department:', assigneeData?.department_id);
+
+  // If both users are in the same organization, allow assignment
+  if (creatorData?.organization_id === assigneeData?.organization_id) {
+    console.log('✅ Same organization - can assign');
+    return true;
+  }
 
   // Check if users are in the same department
   if (creatorData?.department_id && assigneeData?.department_id) {
@@ -406,7 +422,7 @@ async function checkAssignmentPermission(
       .select('project_id, department_id')
       .eq('project_id', projectId)
       .eq('department_id', assigneeData.department_id)
-      .single();
+      .maybeSingle();
 
     if (sharedProject) {
       console.log('✅ Project shared with assignee department - can assign');
@@ -420,7 +436,7 @@ async function checkAssignmentPermission(
     .select('user_id')
     .eq('user_id', assigneeId)
     .eq('project_id', projectId)
-    .single();
+    .maybeSingle();
 
   if (assigneeProjectAccess) {
     console.log('✅ Assignee has direct project access - can assign');

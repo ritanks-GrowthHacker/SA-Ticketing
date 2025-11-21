@@ -48,6 +48,12 @@ const MentionInput: React.FC<MentionInputProps> = ({
     try {
       console.log('🔍 fetchProjectMembers called with:', { query, projectId, hasToken: !!token });
       
+      if (!projectId || projectId === 'undefined' || projectId === 'null') {
+        console.error('❌ Invalid projectId:', projectId);
+        setSuggestions([]);
+        return;
+      }
+      
       // Use dev auth header if no token provided (development mode)
       const authHeader = token ? `Bearer ${token}` : getDevAuthHeader();
       
@@ -101,15 +107,32 @@ const MentionInput: React.FC<MentionInputProps> = ({
 
   // Handle textarea input
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newValue = e.target.value;
+    const displayValue = e.target.value; // This is what user sees: "@Name"
     const cursor = e.target.selectionStart;
     setCursorPosition(cursor);
 
-    // Check for @ mentions
-    const beforeCursor = newValue.slice(0, cursor);
+    // Convert existing mentions from stored format to display format to work with displayValue
+    // We need to reconstruct the actual value with IDs by replacing @Name with @[Name](id)
+    let actualValue = displayValue;
+    
+    // For existing mentions, we already have them stored
+    mentions.forEach(mention => {
+      const displayMention = `@${mention.name}`;
+      const storedMention = `@[${mention.name}](${mention.id})`;
+      actualValue = actualValue.replace(new RegExp(`@${mention.name}(?!\\])`, 'g'), storedMention);
+    });
+
+    // Check for @ mentions in display value
+    const beforeCursor = displayValue.slice(0, cursor);
     const atIndex = beforeCursor.lastIndexOf('@');
     
-    console.log('🔍 Mention detection:', { beforeCursor, atIndex, cursor });
+    console.log('🔍 Mention detection:', { 
+      displayValue,
+      actualValue,
+      beforeCursor, 
+      atIndex, 
+      cursor
+    });
     
     if (atIndex !== -1) {
       const afterAt = beforeCursor.slice(atIndex + 1);
@@ -131,21 +154,26 @@ const MentionInput: React.FC<MentionInputProps> = ({
       setShowSuggestions(false);
     }
 
-    // Extract current mentions from the text
+    const extracted = extractMentions(actualValue);
+    setMentions(extracted);
+    onChange(actualValue, extracted);
+  };
+
+  // Helper to extract mentions
+  const extractMentions = (text: string): MentionUser[] => {
     const mentionRegex = /@\[([^\]]+)\]\(([^)]+)\)/g;
     const extractedMentions: MentionUser[] = [];
     let match;
     
-    while ((match = mentionRegex.exec(newValue)) !== null) {
+    while ((match = mentionRegex.exec(text)) !== null) {
       const [, name, id] = match;
       const existingUser = mentions.find(m => m.id === id);
       if (existingUser) {
         extractedMentions.push(existingUser);
       }
     }
-
-    setMentions(extractedMentions);
-    onChange(newValue, extractedMentions);
+    
+    return extractedMentions;
   };
 
   // Handle keyboard navigation
@@ -215,15 +243,24 @@ const MentionInput: React.FC<MentionInputProps> = ({
     return text.replace(/@\[([^\]]+)\]\([^)]+\)/g, '@$1');
   };
 
-  // Calculate suggestion position
+  // Calculate suggestion position at cursor
   const getSuggestionPosition = () => {
-    if (!textareaRef.current) return { top: 0, left: 0 };
+    if (!textareaRef.current) return {};
     
-    // This is a simplified positioning - in production you might want more sophisticated positioning
-    const rect = textareaRef.current.getBoundingClientRect();
+    const textarea = textareaRef.current;
+    const textBeforeCursor = value.substring(0, cursorPosition);
+    const lines = textBeforeCursor.split('\n');
+    const currentLineNumber = lines.length;
+    const lineHeight = 24; // Approximate line height in pixels
+    const padding = 12; // Textarea padding
+    
+    // Position dropdown below current line
+    const top = (currentLineNumber * lineHeight) + padding;
+    
     return {
-      top: rect.bottom + 4,
-      left: rect.left
+      top: `${top}px`,
+      left: '12px',
+      maxWidth: 'calc(100% - 24px)',
     };
   };
 
@@ -240,11 +277,11 @@ const MentionInput: React.FC<MentionInputProps> = ({
         disabled={disabled}
       />
       
-      {/* Suggestions dropdown */}
+      {/* Suggestions dropdown - positioned absolutely within parent, does not expand it */}
       {showSuggestions && suggestions.length > 0 && (
         <div
           ref={suggestionsRef}
-          className="absolute z-50 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto"
+          className="absolute z-9999 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto min-w-[250px]"
           style={getSuggestionPosition()}
         >
           {suggestions.map((suggestion, index) => (

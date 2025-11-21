@@ -1,4 +1,3 @@
-
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { supabase } from "@/app/db/connections";
@@ -15,6 +14,7 @@ interface JWTPayload {
   org_domain: string; // organization domain
   role: string;       // user role
   roles: string[];    // all user roles
+  department_id?: string; // current department ID
   iat?: number;
   exp?: number;
 }
@@ -119,11 +119,29 @@ export async function POST(req: Request) {
       );
     }
 
-    const userRole = (userOrg as any).global_roles;
-    const userOrganization = (userOrg as any).organizations;
+    // Determine effective role - prioritize org role, then dept role
+    let effectiveRole = null;
+    let effectiveRoleId = null;
+    
+    if (userOrg && (userOrg as any).global_roles) {
+      effectiveRole = (userOrg as any).global_roles.name;
+      effectiveRoleId = (userOrg as any).global_roles.id;
+    } else if (deptRoles && deptRoles.length > 0) {
+      // Use first department role if no org role
+      effectiveRole = (deptRoles[0] as any).global_roles?.name;
+      effectiveRoleId = (deptRoles[0] as any).global_roles?.id;
+    }
+
+    console.log("🔍 CREATE PROJECT - Role check:", {
+      userId: decodedToken.sub,
+      hasOrgRole: !!userOrg,
+      hasDeptRoles: deptRoles?.length || 0,
+      effectiveRole,
+      effectiveRoleId
+    });
 
     // Check if the user has permission to create projects (Admin or Manager)
-    if (!userRole || !["Admin", "Manager"].includes(userRole.name)) {
+    if (!effectiveRole || !["Admin", "Manager"].includes(effectiveRole)) {
       return NextResponse.json(
         { error: "Insufficient permissions. Only Admins and Managers can create projects" }, 
         { status: 403 }
@@ -186,32 +204,19 @@ export async function POST(req: Request) {
       );
     }
 
-    // Associate project with user's PRIMARY department only
-    // Get user's primary department_id from users table
-    const { data: userData, error: userDataError } = await supabase
-      .from("users")
-      .select("department_id")
-      .eq("id", decodedToken.sub)
-      .maybeSingle();
-
-    console.log("🔍 CREATE PROJECT - User department check:", {
-      userId: decodedToken.sub,
-      userDepartmentId: userData?.department_id,
-      userDataError: userDataError,
-      projectId: project.id
-    });
-
-    if (!userDataError && userData?.department_id) {
+    // Associate project with CURRENT department from JWT
+    const departmentId = decodedToken.department_id;
+    if (departmentId) {
       const { error: deptAssignError } = await supabase
         .from("project_department")
         .insert({
           project_id: project.id,
-          department_id: userData.department_id
+          department_id: departmentId
         });
 
       console.log("✅ Project assigned to department:", {
         projectId: project.id,
-        departmentId: userData.department_id,
+        departmentId,
         error: deptAssignError
       });
 
@@ -222,8 +227,40 @@ export async function POST(req: Request) {
     } else {
       console.warn("⚠️ Project created WITHOUT department association:", {
         projectId: project.id,
-        reason: userDataError ? "User data error" : "No department_id on user"
+        reason: "No department_id in JWT"
       });
+    }
+
+    // CRITICAL: Assign the creator to the project as Project Admin
+    // Project creator ALWAYS gets "Admin" role in the project (not their org/dept role)
+    const { data: creatorRoleData } = await supabase
+      .from("global_roles")
+      .select("id")
+      .eq("name", "Admin")
+      .single();
+
+    if (creatorRoleData) {
+      const { error: userProjectError } = await supabase
+        .from("user_project")
+        .insert({
+          user_id: decodedToken.sub,
+          project_id: project.id,
+          role_id: creatorRoleData.id
+        });
+
+      console.log("✅ Creator assigned to project as Admin:", {
+        userId: decodedToken.sub,
+        projectId: project.id,
+        roleId: creatorRoleData.id,
+        roleName: "Admin",
+        error: userProjectError
+      });
+
+      if (userProjectError) {
+        console.error("❌ Failed to assign creator to project:", userProjectError);
+      }
+    } else {
+      console.error("❌ Could not find Admin role for creator");
     }
 
     // Fetch related data separately

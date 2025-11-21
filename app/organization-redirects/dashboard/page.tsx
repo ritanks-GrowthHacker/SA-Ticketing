@@ -28,9 +28,11 @@ interface Employee {
   location?: string;
   department_id?: string;
   department_name?: string;
+  all_departments?: string[]; // Array of all department IDs user belongs to
   created_at: string;
   current_role?: string;
   current_role_id?: string;
+  department_roles?: Record<string, { role_id: string; role_name: string }>; // Department-specific roles
 }
 
 interface GlobalRole {
@@ -69,11 +71,27 @@ export default function OrganizationDashboard() {
   // Check organization access
   useEffect(() => {
     const orgId = getCurrentOrgId();
-    if (!orgId || !currentOrg || !token) {
-      if (!token) return; // Wait for token to load
+    console.log('🔍 ORG DASHBOARD: Checking access', { orgId, currentOrg, hasToken: !!token });
+    
+    if (!orgId || !currentOrg) {
+      console.log('⚠️ ORG DASHBOARD: No org ID or currentOrg, redirecting to login');
       router.push('/org-login');
       return;
     }
+    
+    if (!token) {
+      console.log('⏳ ORG DASHBOARD: Waiting for token to load...');
+      // Give it a moment for the token to hydrate from localStorage
+      const timeout = setTimeout(() => {
+        if (!token) {
+          console.log('❌ ORG DASHBOARD: No token after timeout, redirecting to login');
+          router.push('/org-login');
+        }
+      }, 2000);
+      return () => clearTimeout(timeout);
+    }
+    
+    console.log('✅ ORG DASHBOARD: All checks passed, fetching data');
     fetchDashboardData();
     fetchGlobalRoles();
   }, [currentOrg, getCurrentOrgId, router, token]);
@@ -110,7 +128,35 @@ export default function OrganizationDashboard() {
       });
 
       if (response.ok) {
-        // Refresh employee data to show updated role
+        // Update local state immediately for better UX
+        if (departmentId) {
+          setEmployees(prev => prev.map(emp => {
+            if (emp.id === userId) {
+              return {
+                ...emp,
+                department_roles: {
+                  ...emp.department_roles,
+                  [departmentId]: { role_id: roleId, role_name: globalRoles.find(r => r.id === roleId)?.name || '' }
+                }
+              };
+            }
+            return emp;
+          }));
+        } else {
+          // Update org-level role
+          setEmployees(prev => prev.map(emp => {
+            if (emp.id === userId) {
+              return {
+                ...emp,
+                current_role_id: roleId,
+                current_role: globalRoles.find(r => r.id === roleId)?.name || ''
+              };
+            }
+            return emp;
+          }));
+        }
+        
+        // Refresh employee data to sync with server
         fetchDashboardData();
       } else {
         console.error('Failed to assign role');
@@ -161,16 +207,22 @@ export default function OrganizationDashboard() {
                          employee.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (employee.job_title && employee.job_title.toLowerCase().includes(searchTerm.toLowerCase()));
     
-    const matchesDepartment = selectedDepartment === 'all' || employee.department_id === selectedDepartment;
+    // Check if employee belongs to selected department (including all_departments array)
+    const matchesDepartment = selectedDepartment === 'all' || 
+                             employee.department_id === selectedDepartment ||
+                             employee.all_departments?.includes(selectedDepartment);
     
     return matchesSearch && matchesDepartment;
   });
 
-  // Group employees by department
+  // Group employees by department (show user in ALL departments they belong to)
   const employeesByDepartment = departments.map((dept, index) => ({
     ...dept,
     id: dept.id || dept.name || `dept-${index}`, // Ensure unique ID
-    employees: filteredEmployees.filter(emp => emp.department_id === (dept.id || dept.name))
+    employees: employees.filter(emp => 
+      emp.department_id === (dept.id || dept.name) ||
+      emp.all_departments?.includes(dept.id)
+    )
   }));
 
 
@@ -385,7 +437,7 @@ export default function OrganizationDashboard() {
                             <div className="flex items-center space-x-2">
                               <span className="text-xs text-gray-500">Role:</span>
                               <select
-                                value={employee.current_role_id || ''}
+                                value={employee.department_roles?.[department.id]?.role_id || employee.current_role_id || ''}
                                 onChange={(e) => {
                                   if (e.target.value) {
                                     assignRoleToUser(employee.id, e.target.value, department.id);

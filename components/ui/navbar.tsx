@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, LogOut, Settings, User } from 'lucide-react';
+import { ChevronDown, LogOut, Settings, User, Building2 } from 'lucide-react';
 import { useAuthStore } from '@/app/store/authStore';
 import { useRouter } from 'next/navigation';
 import { SimpleThemeToggle } from './ThemeToggle';
@@ -13,15 +13,51 @@ interface NavbarProps {
 
 const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isDepartmentDropdownOpen, setIsDepartmentDropdownOpen] = useState(false);
+  const [userDepartments, setUserDepartments] = useState<any[]>([]);
+  const [isLoadingDepartments, setIsLoadingDepartments] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const { user, logout } = useAuthStore();
+  const departmentDropdownRef = useRef<HTMLDivElement>(null);
+  const { user, logout, currentDepartment, hasMultipleDepartments, switchDepartment, switchProject, token } = useAuthStore();
   const router = useRouter();
+
+  // Fetch user departments when component mounts if user has multiple departments
+  useEffect(() => {
+    const fetchDepartments = async () => {
+      if (!hasMultipleDepartments) return;
+      
+      setIsLoadingDepartments(true);
+      try {
+        // Use token from auth store
+        const tokenToUse = token;
+        const response = await fetch('/api/get-user-departments-projects', {
+          headers: {
+            Authorization: `Bearer ${tokenToUse}`,
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          setUserDepartments(data.departments || []);
+        }
+      } catch (error) {
+        console.error('Error fetching departments:', error);
+      } finally {
+        setIsLoadingDepartments(false);
+      }
+    };
+
+    fetchDepartments();
+  }, [hasMultipleDepartments]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsDropdownOpen(false);
+      }
+      if (departmentDropdownRef.current && !departmentDropdownRef.current.contains(event.target as Node)) {
+        setIsDepartmentDropdownOpen(false);
       }
     };
 
@@ -49,6 +85,62 @@ const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
     router.push('/user-login');
   };
 
+  const handleDepartmentSwitch = async (departmentId: string) => {
+    setIsDepartmentDropdownOpen(false);
+    setIsDropdownOpen(false);
+    
+    console.log('🔄 NAVBAR: Starting department switch to:', departmentId);
+    
+    try {
+      const tokenToUse = token;
+      console.log('🔄 NAVBAR: Current token exists:', !!tokenToUse);
+      
+      const response = await fetch('/api/switch-department', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${tokenToUse}`,
+        },
+        body: JSON.stringify({ departmentId }),
+      });
+
+      console.log('🔄 NAVBAR: Switch department response status:', response.status);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log('🔄 NAVBAR: Switch department response data:', data);
+        
+        // Update auth store with new department context (store persists token)
+        switchDepartment({
+          token: data.token,
+          department: data.department,
+        });
+        console.log('✅ NAVBAR: Auth store updated with department:', data.department);
+
+        // If a default project was returned, also update project context
+        if (data.project) {
+          switchProject({
+            token: data.token,
+            project: data.project
+          });
+          console.log('✅ NAVBAR: Auth store updated with project:', data.project);
+        }
+
+        console.log('🔄 NAVBAR: Reloading page in 500ms...');
+        
+        // Small delay to ensure state is persisted
+        setTimeout(() => {
+          window.location.reload();
+        }, 500);
+      } else {
+        const errorText = await response.text();
+        console.error('❌ NAVBAR: Failed to switch department. Status:', response.status, 'Error:', errorText);
+      }
+    } catch (error) {
+      console.error('❌ NAVBAR: Error switching department:', error);
+    }
+  };
+
   const handleProfileClick = () => {
     setIsDropdownOpen(false);
     router.push('/profile');
@@ -65,8 +157,8 @@ const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
     email: 'john.doe@example.com'
   };
 
-  // Check if user has avatar URL (extend interface as needed)
-  const avatarUrl = (user as any)?.avatarUrl || (user as any)?.avatar_url;
+  // Check if user has profile picture URL
+  const avatarUrl = (user as any)?.profile_picture_url;
 
   return (
     <header className={`
@@ -161,6 +253,56 @@ const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
                   <Settings className="w-4 h-4 mr-3 text-gray-500 dark:text-gray-400" />
                   Settings
                 </button>
+
+                {/* Department Switcher - Only show if user has multiple departments */}
+                {hasMultipleDepartments && (
+                  <>
+                    <hr className="my-1 border-gray-100 dark:border-gray-700" />
+                    <div className="relative" ref={departmentDropdownRef}>
+                      <button
+                        onClick={() => setIsDepartmentDropdownOpen(!isDepartmentDropdownOpen)}
+                        className="w-full flex items-center justify-between px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        <div className="flex items-center">
+                          <Building2 className="w-4 h-4 mr-3 text-gray-500 dark:text-gray-400" />
+                          <span className="truncate">
+                            {currentDepartment?.name || 'Select Department'}
+                          </span>
+                        </div>
+                        <ChevronDown className={`w-4 h-4 text-gray-500 dark:text-gray-400 transition-transform duration-200 ${isDepartmentDropdownOpen ? 'rotate-180' : 'rotate-0'}`} />
+                      </button>
+
+                      {/* Department dropdown submenu */}
+                      {isDepartmentDropdownOpen && (
+                        <div className="absolute left-0 right-0 mt-1 mx-2 bg-white dark:bg-gray-700 rounded-md shadow-lg border border-gray-200 dark:border-gray-600 py-1 z-50 max-h-60 overflow-y-auto">
+                          {isLoadingDepartments ? (
+                            <div className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400">
+                              Loading departments...
+                            </div>
+                          ) : userDepartments.length > 0 ? (
+                            userDepartments.map((dept) => (
+                              <button
+                                key={dept.id}
+                                onClick={() => handleDepartmentSwitch(dept.id)}
+                                className={`w-full text-left px-4 py-2 text-sm transition-colors ${
+                                  currentDepartment?.id === dept.id
+                                    ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                                    : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600'
+                                }`}
+                              >
+                                {dept.name}
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-4 py-2 text-xs text-gray-500 dark:text-gray-400">
+                              No departments found
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
 
                 <hr className="my-1 border-gray-100 dark:border-gray-700" />
 

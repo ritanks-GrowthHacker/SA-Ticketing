@@ -97,46 +97,141 @@ export async function POST(request: NextRequest) {
       return map;
     }, {} as Record<string, string>);
 
-    // Check for existing users
+    // Check for existing users WITH their department associations
     const emails = validMembers.map(m => m.email.toLowerCase());
     const { data: existingUsers } = await supabase
       .from('users')
-      .select('email')
+      .select('id, email, name, department_id')
       .in('email', emails);
 
-    const existingEmails = new Set(existingUsers?.map((u: any) => u.email.toLowerCase()) || []);
+    // Create map of existing users: email -> user data
+    const existingUserMap = new Map(
+      existingUsers?.map((u: any) => [u.email.toLowerCase(), u]) || []
+    );
+
+    // Also check user_department_roles for all department associations
+    const userIds = existingUsers?.map((u: any) => u.id) || [];
+    const { data: userDeptRoles } = userIds.length > 0 ? await supabase
+      .from('user_department_roles')
+      .select('user_id, department_id')
+      .in('user_id', userIds)
+      .eq('organization_id', orgId)
+      : { data: [] };
+
+    // Create map of user departments: userId -> Set of department IDs
+    const userDepartmentsMap = new Map<string, Set<string>>();
+    userDeptRoles?.forEach((role: any) => {
+      if (!userDepartmentsMap.has(role.user_id)) {
+        userDepartmentsMap.set(role.user_id, new Set());
+      }
+      userDepartmentsMap.get(role.user_id)?.add(role.department_id);
+    });
 
     // Check for existing invitations
     const { data: existingInvitations } = await supabase
       .from('invitations')
-      .select('email')
+      .select('email, department_id')
       .eq('organization_id', orgId)
       .in('email', emails)
       .eq('status', 'pending');
 
-    const existingInvitationEmails = new Set(existingInvitations?.map((i: any) => i.email.toLowerCase()) || []);
+    // Create map of pending invitations: email -> Set of department IDs
+    const existingInvitationMap = new Map<string, Set<string>>();
+    existingInvitations?.forEach((inv: any) => {
+      const email = inv.email.toLowerCase();
+      if (!existingInvitationMap.has(email)) {
+        existingInvitationMap.set(email, new Set());
+      }
+      existingInvitationMap.get(email)?.add(inv.department_id);
+    });
     
     // Send invitations
     const results = [];
     
     for (const member of validMembers) {
       try {
-        // Skip if user already exists
-        if (existingEmails.has(member.email.toLowerCase())) {
-          results.push({
+        const memberEmail = member.email.toLowerCase();
+        const memberDeptId = member.department;
+
+        // Check if user already exists
+        const existingUser = existingUserMap.get(memberEmail);
+        if (existingUser) {
+          // User exists - check if they're already in this department
+          const userDepts = userDepartmentsMap.get(existingUser.id) || new Set();
+          
+          if (userDepts.has(memberDeptId)) {
+            // User already exists in this department
+            results.push({
+              email: member.email,
+              success: false,
+              message: 'User already exists in this department'
+            });
+            continue;
+          }
+          
+          // User exists but in different department - just send email, don't save invitation
+          const departmentName = departmentMap[memberDeptId];
+          
+          // Get Member role for adding to new department
+          const { data: memberRole } = await supabase
+            .from("global_roles")
+            .select("id")
+            .eq("name", "Member")
+            .single();
+
+          if (memberRole) {
+            // Add user to new department directly
+            const { error: deptRoleError } = await supabase
+              .from("user_department_roles")
+              .insert({
+                user_id: existingUser.id,
+                department_id: memberDeptId,
+                organization_id: orgId,
+                role_id: memberRole.id
+              });
+
+            if (deptRoleError) {
+              console.error("Failed to add existing user to department:", deptRoleError);
+              results.push({
+                email: member.email,
+                success: false,
+                message: 'Failed to add user to new department'
+              });
+              continue;
+            }
+          }
+
+          // Send email notification about new department access
+          const emailResult = await invitationService.sendExistingUserDepartmentNotification({
             email: member.email,
-            success: false,
-            message: 'User already exists in the system'
+            name: existingUser.name || member.name || 'User',
+            organizationName: organization.name,
+            departmentName: departmentName
           });
+
+          if (emailResult.success) {
+            results.push({
+              email: member.email,
+              success: true,
+              message: 'Existing user added to new department and notified'
+            });
+          } else {
+            results.push({
+              email: member.email,
+              success: false,
+              message: 'User added to department but failed to send notification email'
+            });
+          }
           continue;
         }
 
-        // Skip if already invited
-        if (existingInvitationEmails.has(member.email.toLowerCase())) {
+        // Check if already invited to this specific department
+        const invitedDepts = existingInvitationMap.get(memberEmail);
+        if (invitedDepts?.has(memberDeptId)) {
           results.push({
             email: member.email,
             success: false,
-            message: 'User already invited and pending registration'
+            message: 'User already invited to this department and pending registration'
           });
           continue;
         }

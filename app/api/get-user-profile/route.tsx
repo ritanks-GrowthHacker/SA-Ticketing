@@ -9,6 +9,8 @@ interface JWTPayload {
   org_domain: string; // organization domain
   role: string;       // user role
   roles: string[];    // all user roles
+  department_role?: string; // department role
+  department_id?: string; // department ID
   iat?: number;
   exp?: number;
 }
@@ -133,8 +135,8 @@ export async function GET(req: Request) {
       );
     }
 
-    // Get user role information
-    const { data: userRole, error: roleError } = await supabase
+    // Get user role information - check BOTH org and department roles
+    const { data: userOrgRole, error: orgRoleError } = await supabase
       .from("user_organization_roles")
       .select(`
         role_id,
@@ -142,10 +144,20 @@ export async function GET(req: Request) {
       `)
       .eq("user_id", decodedToken.sub)
       .eq("organization_id", decodedToken.org_id)
-      .single();
+      .maybeSingle();
 
-    if (roleError) {
-      console.error("User role fetch error:", roleError);
+    // Get department role from JWT (already decoded above)
+    let displayRole = null;
+    
+    // Priority: current department role > org role
+    if (decodedToken.department_role) {
+      displayRole = decodedToken.department_role;
+    } else if (userOrgRole) {
+      displayRole = (userOrgRole as any).global_roles?.name;
+    }
+
+    if (orgRoleError) {
+      console.error("User org role fetch error:", orgRoleError);
     }
 
     // Get organization info separately
@@ -177,7 +189,7 @@ export async function GET(req: Request) {
       updatedAt: userProfile.updated_at,
       profileUpdatedAt: userProfile.profile_updated_at,
       organization: organization,
-      role: userRole ? (userRole as any).global_roles?.name : null
+      role: displayRole || 'Member'
     };
 
     return NextResponse.json({

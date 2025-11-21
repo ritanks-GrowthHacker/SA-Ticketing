@@ -61,8 +61,8 @@ export async function DELETE(req: Request) {
       return NextResponse.json({ error: "user_ids array is required with at least one entry" }, { status: 400 });
     }
 
-    // Check user organization membership and role
-    const { data: userOrg, error: userOrgError } = await supabase
+    // Check user organization membership and role - check BOTH org and department roles
+    const { data: userOrgRoles, error: userOrgError } = await supabase
       .from("user_organization_roles")
       .select(`
         user_id,
@@ -70,15 +70,32 @@ export async function DELETE(req: Request) {
         global_roles!user_organization_roles_role_id_fkey(name)
       `)
       .eq("user_id", decodedToken.sub)
-      .eq("organization_id", decodedToken.org_id)
-      .maybeSingle();
+      .eq("organization_id", decodedToken.org_id);
 
-    if (userOrgError || !userOrg) {
-      console.error("User organization validation error:", userOrgError);
+    const { data: userDeptRoles, error: userDeptError } = await supabase
+      .from("user_department_roles")
+      .select(`
+        user_id,
+        organization_id,
+        department_id,
+        global_roles!user_department_roles_role_id_fkey(name)
+      `)
+      .eq("user_id", decodedToken.sub)
+      .eq("organization_id", decodedToken.org_id);
+
+    // User must have either org role or department role
+    if ((!userOrgRoles || userOrgRoles.length === 0) && (!userDeptRoles || userDeptRoles.length === 0)) {
+      console.error("User organization validation error - no roles found");
       return NextResponse.json({ error: "User not found or unauthorized" }, { status: 403 });
     }
 
-    const userRoleName = (userOrg as any).global_roles?.name;
+    // Determine user's role - prioritize org role, then department role
+    let userRoleName = 'Member';
+    if (userOrgRoles && userOrgRoles.length > 0) {
+      userRoleName = (userOrgRoles[0] as any).global_roles?.name || 'Member';
+    } else if (userDeptRoles && userDeptRoles.length > 0) {
+      userRoleName = (userDeptRoles[0] as any).global_roles?.name || 'Member';
+    }
     if (!userRoleName || !["Admin", "Manager"].includes(userRoleName)) {
       return NextResponse.json({ error: "Insufficient permissions. Only Admins and Managers can remove users from projects" }, { status: 403 });
     }
@@ -174,8 +191,8 @@ export async function POST(req: Request) {
 			return NextResponse.json({ error: "assignments array is required with at least one entry" }, { status: 400 });
 		}
 
-		// Check user organization membership and role
-		const { data: userOrg, error: userOrgError } = await supabase
+		// Check user organization membership and role - check BOTH org and department roles
+		const { data: userOrgRoles, error: userOrgError } = await supabase
 			.from("user_organization_roles")
 			.select(`
 				user_id,
@@ -183,15 +200,58 @@ export async function POST(req: Request) {
 				global_roles!user_organization_roles_role_id_fkey(name)
 			`)
 			.eq("user_id", decodedToken.sub)
-			.eq("organization_id", decodedToken.org_id)
-			.maybeSingle();
+			.eq("organization_id", decodedToken.org_id);
 
-		if (userOrgError || !userOrg) {
-			console.error("User organization validation error:", userOrgError);
+		const { data: userDeptRoles, error: userDeptError } = await supabase
+			.from("user_department_roles")
+			.select(`
+				user_id,
+				organization_id,
+				department_id,
+				global_roles!user_department_roles_role_id_fkey(name)
+			`)
+			.eq("user_id", decodedToken.sub)
+			.eq("organization_id", decodedToken.org_id);
+
+		// User must have either org role or department role
+		if ((!userOrgRoles || userOrgRoles.length === 0) && (!userDeptRoles || userDeptRoles.length === 0)) {
+			console.error("User organization validation error - no roles found");
 			return NextResponse.json({ error: "User not found or unauthorized" }, { status: 403 });
 		}
 
-    const userRoleName = (userOrg as any).global_roles?.name;
+		// Determine user's role - PRIORITY: Project role > Org role > Dept role
+		let userRoleName = 'Member';
+		
+		// First check: Does user have a PROJECT ROLE in this specific project?
+		const { data: userProjectRole } = await supabase
+			.from("user_project")
+			.select(`
+				user_id,
+				project_id,
+				global_roles!user_project_role_id_fkey(name)
+			`)
+			.eq("user_id", decodedToken.sub)
+			.eq("project_id", project_id)
+			.single();
+
+		if (userProjectRole && userProjectRole.global_roles) {
+			userRoleName = (userProjectRole.global_roles as any)?.name || 'Member';
+			console.log('✅ Using PROJECT ROLE:', userRoleName);
+		} else if (userOrgRoles && userOrgRoles.length > 0) {
+			userRoleName = (userOrgRoles[0] as any).global_roles?.name || 'Member';
+			console.log('✅ Using ORG ROLE:', userRoleName);
+		} else if (userDeptRoles && userDeptRoles.length > 0) {
+			userRoleName = (userDeptRoles[0] as any).global_roles?.name || 'Member';
+			console.log('✅ Using DEPT ROLE:', userRoleName);
+		}
+
+		console.log('🔍 CREATE-PROJECT-USER-RELATION - User Check:', {
+			userId: decodedToken.sub,
+			orgRoles: userOrgRoles?.length || 0,
+			deptRoles: userDeptRoles?.length || 0,
+			projectRole: userProjectRole ? 'Yes' : 'No',
+			finalRoleName: userRoleName
+		});
     if (!userRoleName || !["Admin", "Manager"].includes(userRoleName)) {
       return NextResponse.json({ error: "Insufficient permissions. Only Admins and Managers can assign users to projects" }, { status: 403 });
     }
@@ -231,17 +291,33 @@ export async function POST(req: Request) {
 		for (const a of assignments) {
 			if (!a.user_id || !a.role_id) continue;
 
-			// Validate user belongs to organization
-			const { data: assigneeOrg } = await supabase
+			console.log(`🔍 Validating user ${a.user_id} for assignment...`);
+
+			// Validate user belongs to organization - check BOTH org and department roles
+			const { data: assigneeOrgRoles, error: orgError } = await supabase
 				.from("user_organization_roles")
 				.select(`user_id, organizations(id, name), users(id, name, email)`)
 				.eq("user_id", a.user_id)
-				.eq("organization_id", decodedToken.org_id)
-				.maybeSingle();
+				.eq("organization_id", decodedToken.org_id);
 
-			if (!assigneeOrg) {
-				// skip assignment for users outside org
-				console.warn(`Skipping assignment for user ${a.user_id} - not in organization`);
+			console.log(`   Org roles found: ${assigneeOrgRoles?.length || 0}, error:`, orgError);
+
+			const { data: assigneeDeptRoles, error: deptError } = await supabase
+				.from("user_department_roles")
+				.select(`
+					user_id, 
+					department_id,
+					departments!inner(id, name),
+					users(id, name, email)
+				`)
+				.eq("user_id", a.user_id)
+				.eq("organization_id", decodedToken.org_id);
+
+			console.log(`   Dept roles found: ${assigneeDeptRoles?.length || 0}, error:`, deptError);
+
+			// User must have either org role or department role
+			if ((!assigneeOrgRoles || assigneeOrgRoles.length === 0) && (!assigneeDeptRoles || assigneeDeptRoles.length === 0)) {
+				console.warn(`❌ Skipping assignment for user ${a.user_id} - not in organization`);
 				continue;
 			}
 
@@ -254,12 +330,18 @@ export async function POST(req: Request) {
 
 			const roleName = roleData?.name || "Member";
 
-			// Get user info for notification
-			const { data: userInfo } = await supabase
-				.from("users")
-				.select("id, name, email")
-				.eq("id", a.user_id)
-				.maybeSingle();
+			// Get user info for notification - prioritize org roles, then dept roles
+			let userInfo: any = null;
+			if (assigneeOrgRoles && assigneeOrgRoles.length > 0) {
+				userInfo = (assigneeOrgRoles[0] as any).users;
+			} else if (assigneeDeptRoles && assigneeDeptRoles.length > 0) {
+				userInfo = (assigneeDeptRoles[0] as any).users;
+			}
+
+			if (!userInfo) {
+				console.warn(`Skipping assignment for user ${a.user_id} - user info not found`);
+				continue;
+			}
 
 			// Upsert entry
 			toUpsert.push({
@@ -277,24 +359,57 @@ export async function POST(req: Request) {
 			return NextResponse.json({ error: "No valid assignments to process" }, { status: 400 });
 		}
 
-			// Insert or update each assignment individually to avoid client typing issues
-			const processed: any[] = [];
-			for (const entry of toUpsert) {
-				try {
-					// Try update first
-					const { data: updated, error: updateErr } = await supabase
-						.from("user_project")
-						.update({ role_id: entry.role_id })
-						.eq("user_id", entry.user_id)
-						.eq("project_id", entry.project_id)
-						.select("*");
+		// Insert or update each assignment individually to avoid client typing issues
+		const processed: any[] = [];
+		for (const entry of toUpsert) {
+			try {
+				// Check if user already has an assignment (this would be an update/role change)
+				const { data: existingAssignment } = await supabase
+					.from("user_project")
+					.select("role_id, global_roles!user_project_role_id_fkey(name)")
+					.eq("user_id", entry.user_id)
+					.eq("project_id", entry.project_id)
+					.single();
 
-					if (updateErr) {
-						console.warn("Update error for user_project", updateErr);
-					}
+			// If updating an existing assignment, enforce role hierarchy
+			if (existingAssignment && userRoleName === 'Manager') {
+				const currentRoleName = (existingAssignment.global_roles as any)?.name;
+				const newRole = await supabase
+					.from("global_roles")
+					.select("name")
+					.eq("id", entry.role_id)
+					.single();
+				const newRoleName = newRole.data?.name;
 
-					if (updated && updated.length > 0) {
-						processed.push(updated[0]);
+				// Manager cannot change Admin or Manager roles
+				if (currentRoleName === 'Admin' || currentRoleName === 'Manager') {
+					console.warn(`❌ Project Manager attempted to modify ${currentRoleName} role`);
+					return NextResponse.json({ 
+						error: "User permission not allowed" 
+					}, { status: 403 });
+				}
+
+				// Manager cannot assign Admin or Manager roles
+				if (newRoleName === 'Admin' || newRoleName === 'Manager') {
+					console.warn(`❌ Project Manager attempted to assign ${newRoleName} role`);
+					return NextResponse.json({ 
+						error: "User permission not allowed" 
+					}, { status: 403 });
+				}
+			}				// Try update first
+				const { data: updated, error: updateErr } = await supabase
+					.from("user_project")
+					.update({ role_id: entry.role_id })
+					.eq("user_id", entry.user_id)
+					.eq("project_id", entry.project_id)
+					.select("*");
+
+				if (updateErr) {
+					console.warn("Update error for user_project", updateErr);
+				}
+
+				if (updated && updated.length > 0) {
+					processed.push(updated[0]);
 						continue;
 					}
 

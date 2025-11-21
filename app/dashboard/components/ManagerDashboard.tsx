@@ -12,18 +12,34 @@
 
 import React, { useState, useEffect } from 'react';
 import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, User, Target, Filter, LayoutGrid, List } from 'lucide-react';
-import { UserRoleModal, TicketModal } from '../../../components/modals';
-import { ProjectSelect } from '../../../components/ui/ProjectSelect';
+import { UserRoleModal, TicketModal, CreateProjectModal } from '../../../components/modals';
 import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
+import { DepartmentProjectFilter } from './DepartmentProjectFilter';
 import { useAuthStore } from '../../store/authStore';
-import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
+import { useDashboardStore, DashboardMetrics, MetricValue } from '../../store/dashboardStore';
 
 interface ManagerDashboardProps {
   projectId?: string | null;
 }
 
 const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
+  // Add Create Project Modal state
+  const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0);
+  
+  // Handle project creation success
+  const handleProjectCreated = async () => {
+    setIsCreateProjectModalOpen(false);
+    setProjectRefreshKey(prev => prev + 1); // Trigger refresh
+    // Refresh projects and dashboard metrics after creation
+    await fetchProjects();
+    await fetchDashboardMetrics(true);
+  };
   const { token, organization, roles, currentProject, switchProject } = useAuthStore();
+  
+  // Get project role from JWT
+  const projectRole = currentProject?.role || 'Manager';
+  
   const { 
     getCachedData, 
     setCachedData, 
@@ -37,8 +53,6 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
   } = useDashboardStore();
   
   const [selectedProject, setSelectedProject] = useState(projectId || '');
-  const [availableProjects, setAvailableProjects] = useState<Array<{ id: string; name: string; role?: string }>>([]);
-  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState<string | undefined>(undefined);
@@ -51,43 +65,53 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
   
-  // Fetch available projects first, then dashboard metrics
-  useEffect(() => {
-    if (token && organization?.id && !projectsLoaded) {
-      fetchAvailableProjects();
-    } else if (selectedProject && selectedProject.trim() !== '' && token && projectsLoaded) {
-      fetchDashboardMetrics();
-    }
-  }, [selectedProject, token, currentPage, projectsLoaded]);
-
-  // Fetch available projects for the manager
-  const fetchAvailableProjects = async () => {
+  // Pending access state
+  const [pendingAccess, setPendingAccess] = useState(false);
+  
+  // Handle project change from the filter component
+  const handleProjectChange = async (projectId: string, departmentId?: string) => {
     try {
-      const response = await fetch('/api/get-all-projects?format=dropdown', {
+      setSelectedProject(projectId);
+      
+      // Call the switch project API to rebuild JWT
+      const response = await fetch('/api/switch-project', {
+        method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ projectId })
       });
 
       if (response.ok) {
         const data = await response.json();
-        const projects = data.projects || [];
-        setAvailableProjects(projects);
-        setProjectsLoaded(true);
+        // Update the auth store with the new token and project data
+        switchProject({
+          token: data.token,
+          project: {
+            id: data.project.id,
+            name: data.project.name,
+            role: data.role
+          }
+        });
         
-        // Auto-select first project if none is selected
-        if (projects.length > 0 && (!selectedProject || selectedProject.trim() === '')) {
-          const firstProject = projects[0];
-
-          setSelectedProject(firstProject.id);
-        }
+        // Refresh dashboard metrics
+        await fetchDashboardMetrics();
+      } else {
+        throw new Error('Failed to switch project');
       }
     } catch (error) {
-      console.error('Error fetching available projects:', error);
-      setProjectsLoaded(true);
+      console.error('Failed to switch project:', error);
     }
   };
+  
+  // Fetch dashboard metrics with caching - allow fetching even without selectedProject for managers
+  useEffect(() => {
+    if (token && organization?.id) {
+      // Managers can fetch metrics even without a specific project selected
+      fetchDashboardMetrics();
+    }
+  }, [selectedProject, token, currentPage]);
 
   // Setup cross-tab synchronization
   useEffect(() => {
@@ -97,10 +121,10 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
 
   // Refresh when cross-tab updates detected
   useEffect(() => {
-    if (lastUpdateTimestamp > 0 && selectedProject && selectedProject.trim() !== '' && projectsLoaded) {
+    if (lastUpdateTimestamp > 0 && selectedProject && selectedProject.trim() !== '') {
       fetchDashboardMetrics();
     }
-  }, [lastUpdateTimestamp, selectedProject, projectsLoaded]);
+  }, [lastUpdateTimestamp, selectedProject]);
 
   // Update selected project when projectId prop changes
   useEffect(() => {
@@ -111,7 +135,7 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
 
   // Effect to handle cache loading on component mount  
   useEffect(() => {
-    if (organization?.id && token && selectedProject && selectedProject.trim() !== '' && projectsLoaded) {
+    if (organization?.id && token && selectedProject && selectedProject.trim() !== '') {
       const projectIdForCache = selectedProject;
       const cachedMetrics = getCachedData(projectIdForCache, organization.id);
       
@@ -122,7 +146,7 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
         fetchDashboardMetrics();
       }
     }
-  }, [organization?.id, token, selectedProject, projectsLoaded, currentProject?.role || null]);
+  }, [organization?.id, token, selectedProject, currentProject?.role || null]);
 
   // Fetch statuses on component mount
   useEffect(() => {
@@ -175,24 +199,45 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
     }
   };
 
+  // Add fetchProjects function for refreshing project list after creation
+  const fetchProjects = async () => {
+    if (!token || !organization?.id) return;
+    try {
+      // Fetch projects for current department only
+      const response = await fetch('/api/get-all-projects?includeStats=true', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      if (response.ok) {
+        // Optionally update local state or cache if needed
+        // You can add setProjects here if you use projects state
+        // const data = await response.json();
+        // setProjects(data.projects || []);
+      }
+    } catch (error) {
+      console.error('Error fetching projects:', error);
+    }
+  };
+
   const fetchDashboardMetrics = async (forceRefresh = false) => {
     try {
       setLoading(true);
       setDashboardLoading(true);
       
-      if (!token || !organization?.id) return;
-
-      // Ensure we have a valid project ID to prevent fetching aggregated data
-      if (!selectedProject || selectedProject.trim() === '') {
+      if (!token || !organization?.id) {
         setLoading(false);
         setDashboardLoading(false);
         return;
       }
 
-      const projectIdForApi = selectedProject;
+      // For managers, selectedProject is optional - they can view all their projects
+      const projectIdForApi = selectedProject && selectedProject.trim() !== '' ? selectedProject : null;
       
       // Check cache first (unless force refresh is requested)
-      if (!forceRefresh) {
+      if (!forceRefresh && projectIdForApi) {
         const cachedMetrics = getCachedData(projectIdForApi, organization.id);
         if (cachedMetrics) {
           setMetrics(cachedMetrics);
@@ -205,7 +250,9 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
 
       // Build URL with project filter and pagination
       const params = new URLSearchParams();
-      params.set('project_id', selectedProject);
+      if (projectIdForApi) {
+        params.set('project_id', projectIdForApi);
+      }
       params.set('page', currentPage.toString());
       params.set('limit', itemsPerPage.toString());
       // Add cache busting parameter for fresh data
@@ -222,20 +269,25 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
 
       if (response.ok) {
         const data = await response.json();
+        
+        // Check for pending access state
+        if (data.pending_access) {
+          console.log('⏳ MANAGER: User has pending access');
+          setPendingAccess(true);
+          setLoading(false);
+          setDashboardLoading(false);
+          return;
+        }
+        
         const dashboardMetrics = data.data;
         
         // Set metrics in component state
         setMetrics(dashboardMetrics);
+        setPendingAccess(false);
         
         // Cache the metrics
         const userRole = roles?.join(',') || 'manager';
         setCachedData(dashboardMetrics, projectIdForApi, userRole, organization.id);
-        
-        // Update available projects if not already set
-        if (dashboardMetrics.quickStats?.availableProjects && !projectsLoaded) {
-          setAvailableProjects(dashboardMetrics.quickStats.availableProjects);
-          setProjectsLoaded(true);
-        }
       }
     } catch (error) {
       console.error('Error fetching dashboard metrics:', error);
@@ -299,9 +351,6 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
     fetchDashboardMetrics(true);
   };
 
-  const managedProjects = metrics?.quickStats?.availableProjects || [];
-  const selectedProjectData = managedProjects.find((p: any) => p.id === selectedProject);
-
   // Prepare stats from API data
   const projectStats = metrics ? [
     {
@@ -345,6 +394,43 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
     'full metrics': metrics
   });
 
+  // Pending access state UI
+  if (pendingAccess) {
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <p className="text-gray-600 mt-1">Manage your assigned projects and team</p>
+        </div>
+
+        {/* Pending Access Message */}
+        <div className="flex items-center justify-center min-h-[500px]">
+          <div className="max-w-md w-full bg-white rounded-xl shadow-lg border border-gray-200 p-8 text-center">
+            <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-yellow-100 mb-4">
+              <Clock className="h-8 w-8 text-yellow-600" />
+            </div>
+            <h3 className="text-xl font-semibold text-gray-900 mb-2">
+              Account Pending Setup
+            </h3>
+            <p className="text-gray-600 mb-6">
+              Your manager account has been created successfully! An administrator will assign you to a project soon.
+            </p>
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <p className="text-sm text-blue-800">
+                <strong>What happens next?</strong><br/>
+                Once assigned, you'll be able to manage your team, oversee tickets, and track project progress.
+              </p>
+            </div>
+            <p className="text-sm text-gray-500">
+              You can still navigate to other pages using the sidebar. Contact your administrator if you have questions.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header with Project Selection */}
@@ -355,54 +441,32 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
         </div>
         
         <div className="flex items-center space-x-3">
-          {/* Project Filter */}
-          <ProjectSelect
-            value={selectedProject}
-            onValueChange={async (value) => {
-              setSelectedProject(value);
-              if (value && value !== 'all') {
-                try {
-                  // Call the switch project API
-                  const response = await fetch('/api/switch-project', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      'Authorization': `Bearer ${token}`
-                    },
-                    body: JSON.stringify({ projectId: value })
-                  });
-
-                  if (response.ok) {
-                    const data = await response.json();
-                    // Update the auth store with the new token and project data
-                    switchProject({
-                      token: data.token,
-                      project: {
-                        ...data.project,
-                        role: data.role  // Add the role to the project object
-                      }
-                    });
-                  } else {
-                    throw new Error('Failed to switch project');
-                  }
-                } catch (error) {
-                  console.error('Failed to switch project:', error);
-                }
-              }
-            }}
-            placeholder={availableProjects.find(p => p.id === selectedProject)?.name || "Loading projects..."}
-            includeAllOption={false}
+          {/* Department and Project Filters */}
+          <DepartmentProjectFilter
+            token={token || ''}
+            onProjectChange={handleProjectChange}
+            initialProjectId={selectedProject}
+            refreshKey={projectRefreshKey}
           />
           
-          <span className="text-sm text-gray-500 bg-blue-50 px-3 py-1 rounded-full">
-            Manager
-          </span>
+          {currentProject && (
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-500 bg-blue-50 px-3 py-1.5 rounded-full font-medium border border-blue-200">
+                <span className="text-blue-900">{projectRole}</span>
+              </span>
+              {currentProject?.name && (
+                <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded">
+                  {currentProject.name}
+                </span>
+              )}
+            </div>
+          )}
           
-          <button 
-            onClick={() => setIsUserModalOpen(true)}
-            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+          <button
+            onClick={() => setIsCreateProjectModalOpen(true)}
+            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
           >
-            Manage Team
+            Create Project
           </button>
           
           <button 
@@ -414,10 +478,17 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
         </div>
       </div>
 
+      {/* Modals */}
+      <CreateProjectModal
+        isOpen={isCreateProjectModalOpen}
+        onClose={() => setIsCreateProjectModalOpen(false)}
+        onProjectCreated={handleProjectCreated}
+      />
+
       {/* Project Stats */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">{selectedProjectData?.name || currentProject?.name} Overview</h3>
+          <h3 className="text-lg font-semibold text-gray-900">{currentProject?.name || 'Project'} Overview</h3>
           <div className="flex items-center space-x-2">
             <div className="w-3 h-3 bg-green-500 rounded-full"></div>
             <span className="text-sm text-gray-600">Project Active</span>
@@ -572,12 +643,11 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
                       >
                         ←
                       </button>
-                      
                       {/* Page Numbers */}
                       {Array.from({ length: Math.min(5, metrics.pagination.totalPages) }, (_, i) => {
                         const pageNum = Math.max(1, currentPage - 2) + i;
-                        if (pageNum > (metrics.pagination?.totalPages || 0)) return null;
-                        
+                        // Only render valid page numbers
+                        if (pageNum < 1 || pageNum > (metrics.pagination?.totalPages || 1)) return null;
                         return (
                           <button
                             key={pageNum}
@@ -592,13 +662,12 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
                           </button>
                         );
                       })}
-                      
                       {/* Next Button */}
                       <button
-                        onClick={() => setCurrentPage(Math.min(metrics.pagination?.totalPages || 1, currentPage + 1))}
-                        disabled={!metrics.pagination.hasNextPage}
+                        onClick={() => setCurrentPage(Math.min(metrics.pagination?.totalPages ?? 1, currentPage + 1))}
+                        disabled={!metrics.pagination?.hasNextPage}
                         className={`px-2 py-1 text-sm rounded ${
-                          metrics.pagination.hasNextPage
+                          metrics.pagination?.hasNextPage
                             ? 'text-blue-600 hover:bg-blue-50'
                             : 'text-gray-400 cursor-not-allowed'
                         }`}
@@ -613,83 +682,42 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
           </div>
         </div>
 
-        {/* Team & Actions */}
-        {!showDragDropView && (
-          <div className="space-y-6">
-          {/* Quick Actions */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-            <div className="p-6 border-b border-gray-100">
-              <h3 className="text-lg font-semibold text-gray-900">Quick Actions</h3>
-            </div>
-            <div className="p-6 space-y-3">
-              <button 
-                onClick={() => setIsTicketModalOpen(true)}
-                className="w-full flex items-center justify-between p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <span className="font-medium text-gray-900">Create Ticket</span>
-                <Ticket className="w-5 h-5 text-gray-400" />
-              </button>
-              <button 
-                onClick={() => setIsUserModalOpen(true)}
-                className="w-full flex items-center justify-between p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <span className="font-medium text-gray-900">Manage Team</span>
-                <Users className="w-5 h-5 text-gray-400" />
-              </button>
-              <button className="w-full flex items-center justify-between p-3 text-left border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                <span className="font-medium text-gray-900">Project Analytics</span>
-                <BarChart3 className="w-5 h-5 text-gray-400" />
-              </button>
-            </div>
+        {/* Team Activity & Stats - Hidden on small screens */}
+        <div className="hidden lg:block bg-white rounded-xl shadow-sm border border-gray-100">
+          <div className="p-6 border-b border-gray-100">
+            <h3 className="text-lg font-semibold text-gray-900">Team Members</h3>
           </div>
-
-          {/* Team Members */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-            <div className="p-6 border-b border-gray-100">
-              <h3 className="text-lg font-semibold text-gray-900">Team Members</h3>
-            </div>
-            <div className="p-6">
-              <div className="space-y-3">
+          <div className="p-6">
+            {/* Team Members from API */}
+            {teamMembers && teamMembers.length > 0 ? (
+              <div className="space-y-4">
                 {teamMembers.map((member: any, index: number) => (
-                  <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                  <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
                     <div className="flex items-center space-x-3">
                       <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
                         <User className="w-4 h-4 text-blue-600" />
                       </div>
                       <div>
-                        <p className="font-medium text-gray-900 text-sm">{member.name}</p>
-                        <p className="text-xs text-gray-600">{member.role}</p>
+                        <p className="text-sm font-medium text-gray-900">{member.name}</p>
+                        <p className="text-xs text-gray-500">{member.email}</p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-gray-900">{member.tickets}</p>
-                      <p className="text-xs text-gray-600">tickets</p>
+                    <div className="text-sm font-medium text-gray-600">
+                      {member.role}
                     </div>
                   </div>
                 ))}
               </div>
-            </div>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-gray-500">
+                  No team members assigned yet.
+                </p>
+              </div>
+            )}
           </div>
         </div>
-        )}
       </div>
-
-      {/* User Role Management Modal */}
-      <UserRoleModal 
-        isOpen={isUserModalOpen} 
-        onClose={() => setIsUserModalOpen(false)} 
-      />
-
-      {/* Ticket Edit Modal */}
-      <TicketModal
-        isOpen={isTicketModalOpen}
-        onClose={handleTicketModalClose}
-        ticketId={selectedTicketId}
-        onSuccess={() => {
-          // Refresh dashboard data when ticket is updated
-          fetchDashboardMetrics(true);
-        }}
-      />
     </div>
   );
 };

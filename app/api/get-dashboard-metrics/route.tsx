@@ -2,6 +2,27 @@ import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
 import { supabase } from "@/app/db/connections";
 
+/**
+ * DASHBOARD METRICS API - PROJECT-BASED SYSTEM
+ * 
+ * This API provides dashboard metrics based on the PROJECT-BASED role system.
+ * 
+ * Role Priority (from JWT):
+ * 1. project_role (DOMINANT) - User's role in the current project
+ * 2. department_role (Fallback) - User's role in current department
+ * 3. org_role (Profile only) - User's organization-level role
+ * 
+ * Data Filtering:
+ * - PRIORITY 1: Filter by project_id from JWT (current project)
+ * - PRIORITY 2: Filter by project_id from query params
+ * - PRIORITY 3: Fallback to department-based filtering (if no project context)
+ * 
+ * Supported Roles:
+ * - Admin: See organization-wide or project-specific data
+ * - Manager: See managed projects or current project data
+ * - Member: See assigned projects or current project data
+ */
+
 // Helper function to verify JWT token and extract user info
 async function verifyToken(authHeader: string | null) {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -129,6 +150,19 @@ export async function GET(req: Request) {
 
     const organizationId = tokenData.org_id;
     const userId = tokenData.sub; // User ID from token
+    const currentProjectId = tokenData.project_id; // CURRENT PROJECT from JWT (DOMINANT)
+    const projectRole = tokenData.project_role; // PROJECT ROLE from JWT (DOMINANT)
+    const currentDepartmentId = tokenData.department_id; // Current department from JWT (fallback)
+    const departmentRole = tokenData.department_role; // Department role from JWT (fallback)
+    const orgRole = tokenData.org_role; // Org role (for profile only)
+    
+    console.log('🔍 DASHBOARD METRICS - JWT Data:', {
+      project_id: currentProjectId,
+      project_role: projectRole,
+      department_id: currentDepartmentId,
+      department_role: departmentRole,
+      org_role: orgRole
+    });
     
     // Get user's organization role using global roles system
     const { data: userOrgRole, error: orgRoleError } = await supabase
@@ -152,22 +186,26 @@ export async function GET(req: Request) {
       .eq('user_id', userId)
       .eq('organization_id', organizationId);
 
-    // Get user's primary department
-    const { data: userData } = await supabase
-      .from('users')
-      .select('department_id')
-      .eq('id', userId)
-      .maybeSingle();
+    // Use current department from JWT if available, otherwise fallback to users table
+    let userDepartmentId = currentDepartmentId;
+    if (!userDepartmentId) {
+      const { data: userData } = await supabase
+        .from('users')
+        .select('department_id')
+        .eq('id', userId)
+        .maybeSingle();
+      userDepartmentId = userData?.department_id;
+    }
 
-    const userDepartmentId = userData?.department_id;
-
-    // Prioritize JWT role (project-specific) over global org role
-    let actualUserRole = tokenData.role || 'Member';
+    // ROLE PRIORITY: project role > department role > org role (PROJECT-BASED SYSTEM)
+    let actualUserRole = projectRole || departmentRole || orgRole || tokenData.role || 'Member';
     
-    // Only use global org role as fallback if no JWT role is provided
-    if (!tokenData.role && userOrgRole && userOrgRole.global_roles) {
+    console.log('🎯 DASHBOARD METRICS - Effective Role:', actualUserRole);
+    
+    // Only use global org role as fallback if no project or department role
+    if (!projectRole && !departmentRole && !orgRole && userOrgRole && userOrgRole.global_roles) {
       actualUserRole = (userOrgRole.global_roles as any).name;
-    } else if (!tokenData.role && !userOrgRole && userDeptRoles && userDeptRoles.length > 0) {
+    } else if (!projectRole && !departmentRole && !orgRole && !userOrgRole && userDeptRoles && userDeptRoles.length > 0) {
       actualUserRole = (userDeptRoles[0].global_roles as any)?.name || 'Member';
     }
 
@@ -178,9 +216,11 @@ export async function GET(req: Request) {
     const isManager = actualUserRole === 'Manager';
     const isMember = actualUserRole === 'Member' || actualUserRole === 'Viewer';
 
-    console.log('🔧 Dashboard metrics - JWT role:', tokenData.role);
+    console.log('🔧 Dashboard metrics - Department role (JWT):', departmentRole);
+    console.log('🔧 Dashboard metrics - Project role (JWT):', tokenData.role);
     console.log('🔧 Dashboard metrics - Global org role:', userOrgRole?.global_roles ? (userOrgRole.global_roles as any).name : 'none');
     console.log('🔧 Dashboard metrics - Final role:', actualUserRole);
+    console.log('🔧 Dashboard metrics - Current department:', currentDepartmentId);
 
     const dateRanges = getDateRanges();
 
@@ -231,9 +271,15 @@ export async function GET(req: Request) {
     };
 
     if (isAdmin) {
-      // ADMIN METRICS - Organization-wide data or project-specific if filtered
+      // ADMIN METRICS - Project-specific if JWT has project_id, else organization-wide
       
-      // Build ticket queries with optional project filter
+      console.log('📊 ADMIN METRICS - Filtering strategy:', {
+        hasProjectId: !!currentProjectId,
+        projectId: currentProjectId,
+        projectRole: projectRole
+      });
+      
+      // Build ticket queries with project filter (PROJECT-BASED SYSTEM)
       let currentTicketsQuery = supabase
         .from('tickets')
         .select('id, created_at, status_id, priority_id, projects!inner(organization_id)')
@@ -247,24 +293,56 @@ export async function GET(req: Request) {
         .gte('created_at', dateRanges.previousMonthStart)
         .lt('created_at', dateRanges.currentMonthStart);
 
-      // Apply project filter if specified
-      if (projectId) {
+      // PRIORITY 1: Filter by current project from JWT (if available)
+      if (currentProjectId) {
+        console.log('✅ Filtering by current project from JWT:', currentProjectId);
+        currentTicketsQuery = currentTicketsQuery.eq('project_id', currentProjectId);
+        previousTicketsQuery = previousTicketsQuery.eq('project_id', currentProjectId);
+      }
+      // PRIORITY 2: Filter by project query parameter (if provided and no JWT project)
+      else if (projectId) {
+        console.log('✅ Filtering by project from query param:', projectId);
         currentTicketsQuery = currentTicketsQuery.eq('project_id', projectId);
         previousTicketsQuery = previousTicketsQuery.eq('project_id', projectId);
+      }
+      // PRIORITY 3: Department fallback (only if no project context)
+      else if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
+        console.log('✅ Fallback: Filtering by department:', userDepartmentId);
+        const { data: deptProjectIds } = await supabase
+          .from('project_department')
+          .select('project_id')
+          .eq('department_id', userDepartmentId);
+        
+        const projectIds = deptProjectIds?.map(p => p.project_id) || [];
+        
+        if (projectIds.length > 0) {
+          currentTicketsQuery = currentTicketsQuery.in('project_id', projectIds);
+          previousTicketsQuery = previousTicketsQuery.in('project_id', projectIds);
+        } else {
+          // No projects, no tickets
+          currentTicketsQuery = currentTicketsQuery.eq('project_id', '00000000-0000-0000-0000-000000000000');
+          previousTicketsQuery = previousTicketsQuery.eq('project_id', '00000000-0000-0000-0000-000000000000');
+        }
       }
 
       const { data: currentTickets } = await currentTicketsQuery;
       const { data: previousTickets } = await previousTicketsQuery;
 
-      // Active Projects
+      // Active Projects - PROJECT-BASED SYSTEM
       let activeProjectsQuery = supabase
         .from('projects')
         .select('id, name, created_at')
         .eq('organization_id', organizationId);
       
-      // Department-level admin: filter by department
-      if (isDeptOnlyAdmin && userDepartmentId) {
-        // Get projects owned by department OR shared with department
+      // If user has specific project in JWT, show only that project
+      if (currentProjectId) {
+        console.log('✅ Active Projects: Filtering by current project from JWT');
+        activeProjectsQuery = activeProjectsQuery.eq('id', currentProjectId);
+      }
+      // Department-level admin: filter by department (fallback only)
+      else if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
+        console.log('✅ Active Projects: Filtering by department (fallback)');
+        // Get projects owned by current department OR shared with current department
         const { data: ownedProjectIds } = await supabase
           .from('project_department')
           .select('project_id')
@@ -298,6 +376,12 @@ export async function GET(req: Request) {
       // Team Members
       let currentMembersQuery, previousMembersQuery;
       
+      console.log('👥 TEAM MEMBERS QUERY - Parameters:', {
+        hasProjectFilter: !!projectId,
+        projectId,
+        organizationId
+      });
+      
       if (projectId) {
         // If project filter is applied, get only members of that project
         currentMembersQuery = supabase
@@ -311,21 +395,53 @@ export async function GET(req: Request) {
           .eq('project_id', projectId)
           .lt('users.created_at', dateRanges.currentMonthStart);
       } else {
-        // Organization-wide members
-        currentMembersQuery = supabase
-          .from('user_organization_roles')
-          .select('user_id, users!inner(id, name, email, created_at)')
+        // Organization-wide members - get ALL users from ALL projects in organization
+        // First get all projects in the organization
+        const { data: orgProjects } = await supabase
+          .from('projects')
+          .select('id')
           .eq('organization_id', organizationId);
+        
+        const orgProjectIds = orgProjects?.map(p => p.id) || [];
+        
+        if (orgProjectIds.length > 0) {
+          currentMembersQuery = supabase
+            .from('user_project')
+            .select('user_id, users!inner(id, name, email, created_at)')
+            .in('project_id', orgProjectIds);
 
-        previousMembersQuery = supabase
-          .from('user_organization_roles')
-          .select('user_id, users!inner(created_at)')
-          .eq('organization_id', organizationId)
-          .lt('users.created_at', dateRanges.currentMonthStart);
+          previousMembersQuery = supabase
+            .from('user_project')
+            .select('user_id, users!inner(created_at)')
+            .in('project_id', orgProjectIds)
+            .lt('users.created_at', dateRanges.currentMonthStart);
+        } else {
+          // No projects, return empty
+          currentMembersQuery = Promise.resolve({ data: [], error: null });
+          previousMembersQuery = Promise.resolve({ data: [], error: null });
+        }
       }
 
-      const { data: currentMembers } = await currentMembersQuery;
+      const { data: currentMembers, error: currentMembersError } = await currentMembersQuery;
       const { data: previousMembers } = await previousMembersQuery;
+
+      // Deduplicate members by user_id (in case user is in multiple projects)
+      const uniqueCurrentMembers = currentMembers ? 
+        Array.from(new Map(currentMembers.map(m => [m.user_id, m])).values()) : [];
+      const uniquePreviousMembers = previousMembers ?
+        Array.from(new Map(previousMembers.map(m => [m.user_id, m])).values()) : [];
+
+      if (currentMembersError) {
+        console.error('❌ Error fetching current members:', currentMembersError);
+      }
+      
+      console.log('👥 TEAM MEMBERS RESULT:', {
+        rawCount: currentMembers?.length || 0,
+        uniqueCount: uniqueCurrentMembers.length,
+        currentMembers,
+        uniqueCurrentMembers,
+        error: currentMembersError
+      });
 
       // Average Resolution Time (simplified calculation)
       let resolvedTicketsQuery = supabase
@@ -334,6 +450,19 @@ export async function GET(req: Request) {
         .eq('projects.organization_id', organizationId)
         .gte('created_at', dateRanges.currentMonthStart)
         .not('updated_at', 'is', null);
+      
+      // Filter by department if department admin
+      if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
+        const { data: deptProjectIds } = await supabase
+          .from('project_department')
+          .select('project_id')
+          .eq('department_id', userDepartmentId);
+        
+        const projectIds = deptProjectIds?.map(p => p.project_id) || [];
+        if (projectIds.length > 0) {
+          resolvedTicketsQuery = resolvedTicketsQuery.in('project_id', projectIds);
+        }
+      }
       
       // Apply project filter if specified
       if (projectId) {
@@ -359,6 +488,19 @@ export async function GET(req: Request) {
         .select('*, projects!inner(*)', { count: 'exact', head: true })
         .eq('projects.organization_id', organizationId);
       
+      // Filter by department if department admin
+      if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
+        const { data: deptProjectIds } = await supabase
+          .from('project_department')
+          .select('project_id')
+          .eq('department_id', userDepartmentId);
+        
+        const projectIds = deptProjectIds?.map(p => p.project_id) || [];
+        if (projectIds.length > 0) {
+          countQuery = countQuery.in('project_id', projectIds);
+        }
+      }
+      
       if (projectId) {
         countQuery = countQuery.eq('project_id', projectId);
       }
@@ -370,7 +512,7 @@ export async function GET(req: Request) {
       }
       
       const { count: totalTickets } = await countQuery;
-      console.log('🔢 COUNT DEBUG:', { totalTickets, page, limit, offset, organizationId });
+      console.log('🔢 COUNT DEBUG:', { totalTickets, page, limit, offset, organizationId, userDepartmentId });
       
       // Then get paginated results
       let recentTicketsQuery = supabase
@@ -386,6 +528,19 @@ export async function GET(req: Request) {
         .eq('projects.organization_id', organizationId)
         .order('created_at', { ascending: false })
         .range(offset, offset + limit - 1);
+      
+      // Filter by department if department admin
+      if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
+        const { data: deptProjectIds } = await supabase
+          .from('project_department')
+          .select('project_id')
+          .eq('department_id', userDepartmentId);
+        
+        const projectIds = deptProjectIds?.map(p => p.project_id) || [];
+        if (projectIds.length > 0) {
+          recentTicketsQuery = recentTicketsQuery.in('project_id', projectIds);
+        }
+      }
       
       // Apply filters if specified
       if (projectId) {
@@ -426,12 +581,12 @@ export async function GET(req: Request) {
           changeType: 'positive'
         },
         teamMembers: {
-          value: currentMembers?.length || 0,
+          value: uniqueCurrentMembers.length,
           change: calculatePercentageChange(
-            currentMembers?.length || 0,
-            previousMembers?.length || 0
+            uniqueCurrentMembers.length,
+            uniquePreviousMembers.length
           ),
-          changeType: (currentMembers?.length || 0) >= (previousMembers?.length || 0) ? 'positive' : 'negative'
+          changeType: uniqueCurrentMembers.length >= uniquePreviousMembers.length ? 'positive' : 'negative'
         },
         avgResolutionTime: {
           value: `${avgResolutionHours.toFixed(1)}h`,
@@ -481,27 +636,53 @@ export async function GET(req: Request) {
       })) || [];
 
     } else if (isManager) {
-      // MANAGER METRICS - Project-specific data or aggregated across all managed projects
+      // MANAGER METRICS - PROJECT-BASED SYSTEM
+      // Prioritize current project from JWT, fallback to all managed projects
+      
+      console.log('📊 MANAGER METRICS - Filtering strategy:', {
+        hasProjectId: !!currentProjectId,
+        projectId: currentProjectId,
+        projectRole: projectRole,
+        queryProjectId: projectId
+      });
       
       // Get projects managed by this user
-      const { data: managedProjects, error: managedProjectsError } = await supabase
+      let managedProjectsQuery = supabase
         .from('user_project')
         .select(`
           project_id, role_id,
-          projects!inner(id, name, organization_id),
+          projects!inner(id, name, organization_id, project_department(department_id)),
           global_roles!user_project_role_id_fkey(name)
         `)
         .eq('user_id', tokenData.sub)
-        .eq('projects.organization_id', organizationId);
+        .eq('projects.organization_id', organizationId)
+        .order('projects(created_at)', { ascending: true });
+
+      // PRIORITY 1: If JWT has current project, show only that project
+      if (currentProjectId) {
+        console.log('✅ Manager: Filtering by current project from JWT');
+        managedProjectsQuery = managedProjectsQuery.eq('project_id', currentProjectId);
+      }
+      // PRIORITY 2: Department filter (fallback only if no project in JWT)
+      else if (currentDepartmentId) {
+        console.log('✅ Manager: Filtering by department (fallback)');
+        // Limit manager's project list to projects within the current department
+        managedProjectsQuery = managedProjectsQuery.filter('projects.project_department.department_id', 'eq', currentDepartmentId);
+      }
+
+      const { data: managedProjects, error: managedProjectsError } = await managedProjectsQuery;
 
       console.log('🔧 MANAGER PROJECTS QUERY:', { managedProjects, managedProjectsError, userId: tokenData.sub, organizationId });
 
       const projectIds = managedProjects?.map(mp => mp.project_id) || [];
       console.log('🔧 MANAGER DEBUG: Managed projects:', projectIds, 'Selected project:', projectId);
 
-      if (projectId && projectId !== 'all') {
+      // Determine target project: JWT project > query param > first managed project
+      const targetProjectId = currentProjectId || projectId || (projectIds.length > 0 ? projectIds[0] : null);
+      
+      if (targetProjectId && targetProjectId !== 'all') {
+        console.log('✅ Manager: Using project ID:', targetProjectId);
         // SPECIFIC PROJECT METRICS
-        const targetProjectId = projectId;
         // Project Tickets - Get all tickets for the project (not filtered by date for total count)
         const { data: projectTickets } = await supabase
           .from('tickets')
@@ -523,7 +704,7 @@ export async function GET(req: Request) {
           .lt('created_at', dateRanges.currentMonthStart);
 
         // Team Members in Project
-        const { data: projectTeamMembers } = await supabase
+        const { data: projectTeamMembers, error: teamMembersError } = await supabase
           .from('user_project')
           .select(`
             user_id, role_id,
@@ -531,6 +712,17 @@ export async function GET(req: Request) {
             global_roles!user_project_role_id_fkey(name)
           `)
           .eq('project_id', targetProjectId);
+
+        if (teamMembersError) {
+          console.error('❌ Error fetching project team members:', teamMembersError);
+        }
+        
+        console.log('👥 DASHBOARD METRICS - Team Members Query Result:', {
+          projectId: targetProjectId,
+          count: projectTeamMembers?.length || 0,
+          members: projectTeamMembers,
+          error: teamMembersError
+        });
 
         // Completion Rate (tickets with 'completed' status) - for all project tickets
         const { data: completedTickets } = await supabase
@@ -672,7 +864,7 @@ export async function GET(req: Request) {
           .lt('created_at', dateRanges.currentMonthStart);
 
         // Get all team members across managed projects
-        const { data: allProjectTeamMembers } = await supabase
+        const { data: allProjectTeamMembers, error: allTeamMembersError } = await supabase
           .from('user_project')
           .select(`
             user_id, role_id, project_id,
@@ -681,6 +873,17 @@ export async function GET(req: Request) {
             global_roles!user_project_role_id_fkey(name)
           `)
           .in('project_id', projectIds);
+
+        if (allTeamMembersError) {
+          console.error('❌ Error fetching all team members:', allTeamMembersError);
+        }
+        
+        console.log('👥 DASHBOARD METRICS (Admin) - All Team Members Query Result:', {
+          projectIds,
+          count: allProjectTeamMembers?.length || 0,
+          members: allProjectTeamMembers,
+          error: allTeamMembersError
+        });
 
         // Get completed tickets across all projects (all time)
         const { data: allCompletedTickets } = await supabase
@@ -825,28 +1028,51 @@ export async function GET(req: Request) {
         };
       }
     } else if (isMember) {
-      // MEMBER METRICS - Only show data from projects where member is assigned
+      // MEMBER METRICS - PROJECT-BASED SYSTEM
+      // Show data from current project in JWT, or all assigned projects
+      
+      console.log('📊 MEMBER METRICS - Filtering strategy:', {
+        hasProjectId: !!currentProjectId,
+        projectId: currentProjectId,
+        projectRole: projectRole
+      });
       
       // Get projects where user is assigned as member
-      const { data: memberProjects, error: memberProjectsError } = await supabase
+      let memberProjectsQuery = supabase
         .from('user_project')
         .select(`
           project_id, role_id,
-          projects!inner(id, name, organization_id),
+          projects!inner(id, name, organization_id, project_department(department_id)),
           global_roles!user_project_role_id_fkey(name)
         `)
         .eq('user_id', userId)
-        .eq('projects.organization_id', organizationId);
+        .eq('projects.organization_id', organizationId)
+        .order('projects(created_at)', { ascending: true });
+
+      // PRIORITY 1: If JWT has current project, show only that project
+      if (currentProjectId) {
+        console.log('✅ Member: Filtering by current project from JWT');
+        memberProjectsQuery = memberProjectsQuery.eq('project_id', currentProjectId);
+      }
+      // PRIORITY 2: Department filter (fallback only if no project in JWT)
+      else if (userDepartmentId) {
+        console.log('✅ Member: Filtering by department (fallback)');
+        memberProjectsQuery = memberProjectsQuery.filter('projects.project_department.department_id', 'eq', userDepartmentId);
+      }
+
+      const { data: memberProjects, error: memberProjectsError } = await memberProjectsQuery;
 
       console.log('🔧 MEMBER PROJECTS QUERY:', { memberProjects, memberProjectsError, userId, organizationId });
 
       const projectIds = memberProjects?.map(mp => mp.project_id) || [];
       console.log('🔧 MEMBER DEBUG: Assigned projects:', projectIds, 'Selected project:', projectId);
 
-      // Apply project filtering if specific project selected
-      const filteredProjectIds = projectId && projectId !== 'all' 
-        ? projectIds.filter(id => id === projectId)
-        : projectIds;
+      // Determine project IDs to show: JWT project > query param > all assigned
+      const filteredProjectIds = currentProjectId 
+        ? [currentProjectId]
+        : (projectId && projectId !== 'all' 
+          ? projectIds.filter(id => id === projectId)
+          : projectIds);
 
       console.log('🔧 MEMBER DEBUG: Filtered project IDs:', filteredProjectIds);
 

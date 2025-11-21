@@ -196,7 +196,14 @@ export async function PUT(req: Request) {
     // Managers cannot modify other Managers' roles
     if (currentUserIsManager && !currentUserIsAdmin && targetUserCurrentRole === 'Manager') {
       return NextResponse.json({ 
-        error: "Managers cannot modify other Managers' roles" 
+        error: "User permission not allowed" 
+      }, { status: 403 });
+    }
+
+    // Managers cannot modify Admin roles
+    if (currentUserIsManager && !currentUserIsAdmin && targetUserCurrentRole === 'Admin') {
+      return NextResponse.json({ 
+        error: "User permission not allowed" 
       }, { status: 403 });
     }
 

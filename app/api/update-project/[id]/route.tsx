@@ -35,10 +35,10 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
       );
     }
 
-    // Only admins can edit project details
-    if (decodedToken.role !== 'Admin') {
+    // Only admins and managers can edit project details
+    if (decodedToken.role !== 'Admin' && decodedToken.role !== 'Manager') {
       return NextResponse.json(
-        { error: "Access denied. Only admins can edit project details." }, 
+        { error: "Access denied. Only admins and managers can edit project details." }, 
         { status: 403 }
       );
     }

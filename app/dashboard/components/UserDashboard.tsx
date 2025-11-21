@@ -6,6 +6,7 @@ import { TicketModal } from '../../../components/modals';
 import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
 import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
+import { DepartmentProjectFilter } from './DepartmentProjectFilter';
 
 interface ProjectInfo {
   id: string;
@@ -20,6 +21,9 @@ interface UserDashboardProps {
 const UserDashboard = ({ projectId }: UserDashboardProps) => {
   console.log('🎯 USER: UserDashboard component rendered with projectId:', projectId);
   const { token, organization, user, roles, currentProject, switchProject } = useAuthStore();
+  
+  // Extract project role for display
+  const projectRole = currentProject?.role || 'Member';
   
   // Debug auth data availability
   console.log('🚨 MEMBER: Component render - Auth Data Check:');
@@ -358,26 +362,32 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
 
   return (
     <div className="space-y-6">
-      {/* Header with Project Filter */}
+      {/* Header with Department & Project Filter */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
+            {currentProject && (
+              <span className="px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-sm font-medium rounded-full border border-blue-200 dark:border-blue-700">
+                {projectRole}
+              </span>
+            )}
+          </div>
           <p className="text-gray-600 mt-1">
-            Welcome back, {user?.name || 'Member'}
+            {currentProject ? `${currentProject.name} - Welcome back, ${user?.name || 'Member'}` : `Welcome back, ${user?.name || 'Member'}`}
           </p>
         </div>
         
         <div className="flex items-center space-x-3">
-          {/* Project Filter */}
-          {availableProjects.length > 0 && (
-            <select
-              value={selectedProject}
-              onChange={async (e) => {
-                const value = e.target.value;
-                setSelectedProject(value);
-                if (value && token) {
+          {/* Department & Project Filter */}
+          {token && (
+            <DepartmentProjectFilter
+              token={token}
+              onProjectChange={async (projectId, departmentId) => {
+                setSelectedProject(projectId);
+                if (projectId && token) {
                   try {
-                    console.log('🔄 Switching to project:', value);
+                    console.log('🔄 Switching to project:', projectId, 'in department:', departmentId);
                     // Call the switch project API
                     const response = await fetch('/api/switch-project', {
                       method: 'POST',
@@ -385,7 +395,7 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
                         'Content-Type': 'application/json',
                         'Authorization': `Bearer ${token}`
                       },
-                      body: JSON.stringify({ projectId: value })
+                      body: JSON.stringify({ projectId })
                     });
 
                     if (response.ok) {
@@ -400,25 +410,19 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
                           role: data.role
                         }
                       });
+                      
+                      // Refresh dashboard metrics
+                      fetchDashboardMetrics();
                     } else {
                       console.error('❌ Failed to switch project');
-                      throw new Error('Failed to switch project');
                     }
                   } catch (error) {
                     console.error('❌ Error switching project:', error);
-                    // Revert selection on error
-                    setSelectedProject(currentProject?.id || '');
                   }
                 }
               }}
-              className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
-            >
-              {availableProjects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
+              initialProjectId={selectedProject}
+            />
           )}
           
           <button 

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { browserNotifications } from '@/lib/browserNotifications';
+import { useAuthStore } from '@/app/store/authStore';
 
 interface Notification {
   id: string;
@@ -29,16 +30,18 @@ interface UseRealtimeOptions {
 
 export function useRealtime(options: UseRealtimeOptions = {}) {
   const { 
-    enabled = true, 
+    enabled = true,
     projectId,
     onNotification,
-    onTicketUpdate 
+    onTicketUpdate
   } = options;
 
   const [isConnected, setIsConnected] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>('default');
   const notificationSourceRef = useRef<EventSource | null>(null);
   const ticketSourceRef = useRef<EventSource | null>(null);
+
+  const token = useAuthStore(state => state.token);
 
   // Request browser notification permission
   const requestNotificationPermission = useCallback(async () => {
@@ -51,7 +54,6 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
   useEffect(() => {
     if (!enabled) return;
 
-    const token = localStorage.getItem('token');
     if (!token) return;
 
     const url = `/api/notifications/stream?token=${encodeURIComponent(token)}`;
@@ -65,7 +67,7 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        
+
         if (data.type === 'connected') {
           console.log('📡 SSE:', data.message);
           return;
@@ -108,13 +110,11 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
       notificationSourceRef.current = null;
       setIsConnected(false);
     };
-  }, [enabled, onNotification]);
+  }, [enabled, onNotification, token]);
 
   // Connect to ticket updates stream
   useEffect(() => {
     if (!enabled) return;
-
-    const token = localStorage.getItem('token');
     if (!token) return;
 
     const url = `/api/tickets/stream?token=${encodeURIComponent(token)}${projectId ? `&project_id=${projectId}` : ''}`;
@@ -127,7 +127,7 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        
+
         if (data.type === 'connected') {
           console.log('📡 Ticket SSE:', data.message);
           return;
@@ -153,14 +153,14 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
       eventSource.close();
       ticketSourceRef.current = null;
     };
-  }, [enabled, projectId, onTicketUpdate]);
+  }, [enabled, onTicketUpdate, token, projectId]);
 
   // Auto-request notification permission on mount if supported
   useEffect(() => {
     if (browserNotifications.isSupported()) {
       const currentPermission = browserNotifications.getPermission();
       setNotificationPermission(currentPermission);
-      
+
       // Auto-request if default (not yet asked)
       if (currentPermission === 'default') {
         requestNotificationPermission();

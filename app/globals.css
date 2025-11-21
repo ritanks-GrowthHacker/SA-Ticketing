@@ -119,3 +119,28 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Custom thin scrollbar */
+.scrollbar-hide::-webkit-scrollbar {
+  height: 2px; /* Bahut patla scrollbar */
+  width: 2px;
+}
+
+.scrollbar-hide::-webkit-scrollbar-track {
+  background: transparent; /* Track invisible */
+}
+
+.scrollbar-hide::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1); /* Bahut halka grey, almost invisible */
+  border-radius: 10px;
+}
+
+.scrollbar-hide::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2); /* Hover pe thoda dark */
+}
+
+/* Firefox ke liye */
+.scrollbar-hide {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.1) transparent;
+}

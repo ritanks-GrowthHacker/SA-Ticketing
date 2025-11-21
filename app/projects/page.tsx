@@ -10,7 +10,7 @@ import { CreateProjectModal } from '../../components/modals';
 
 const Projects = () => {
   const router = useRouter();
-  const { token, organization, roles } = useAuthStore();
+  const { token, organization, roles, currentProject, currentDepartment } = useAuthStore();
   const { 
     getCachedData, 
     setCachedData, 
@@ -91,6 +91,17 @@ const Projects = () => {
     }
   }, [organization?.id, token]);
 
+  // Re-fetch when department or project filter changes from dashboard
+  useEffect(() => {
+    if (organization?.id && token) {
+      console.log('🔄 Filter changed, refreshing projects:', {
+        department: currentDepartment?.name,
+        project: currentProject?.name
+      });
+      fetchProjects();
+    }
+  }, [currentDepartment?.id, currentProject?.id]);
+
   const fetchProjects = async (forceRefresh = false) => {
     if (!token || !organization?.id) return;
     
@@ -98,9 +109,22 @@ const Projects = () => {
       setLoading(true);
       setLocalLoading(true);
       
-      console.log('📡 Fetching projects from API...');
+      console.log('📡 Fetching projects from API with filters:', { 
+        department: currentDepartment?.name,
+        project: currentProject?.name 
+      });
       
-      const response = await fetch('/api/get-all-projects?includeStats=true', {
+      // Build URL with department and project filters
+      const params = new URLSearchParams();
+      params.set('includeStats', 'true');
+      if (currentDepartment?.id) {
+        params.set('department_id', currentDepartment.id);
+      }
+      if (currentProject?.id) {
+        params.set('project_id', currentProject.id);
+      }
+      
+      const response = await fetch(`/api/get-all-projects?${params.toString()}`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,

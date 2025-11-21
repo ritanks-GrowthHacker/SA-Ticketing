@@ -225,8 +225,8 @@ export async function PUT(request: NextRequest) {
     if (assigned_to) {
       console.log('🔍 Validating assignee:', assigned_to, 'for project:', existingTicket.project_id);
       
-      // First, check if user exists in the organization using user_organization_roles junction table
-      const { data: userInOrg, error: orgError } = await supabase
+      // Check if user exists in organization - try BOTH org and department roles
+      const { data: userOrgRole } = await supabase
         .from('user_organization_roles')
         .select(`
           user_id,
@@ -237,11 +237,24 @@ export async function PUT(request: NextRequest) {
         .eq('organization_id', decoded.org_id)
         .single();
 
-      if (orgError || !userInOrg) {
-        console.error('User not in organization:', orgError);
-        console.log('Organization validation params:', {
+      const { data: userDeptRole } = await supabase
+        .from('user_department_roles')
+        .select(`
+          user_id,
+          organization_id,
+          users!inner(id, name, email, department_id)
+        `)
+        .eq('user_id', assigned_to)
+        .eq('organization_id', decoded.org_id)
+        .single();
+
+      // User must have EITHER org role OR department role
+      if (!userOrgRole && !userDeptRole) {
+        console.error('User not in organization:', {
           user_id: assigned_to,
-          organization_id: decoded.org_id
+          organization_id: decoded.org_id,
+          orgRole: !!userOrgRole,
+          deptRole: !!userDeptRole
         });
         return NextResponse.json(
           { error: 'Invalid assignee - User not found in organization' },
@@ -282,7 +295,12 @@ export async function PUT(request: NextRequest) {
     }
 
     if (priority_id !== undefined) {
-      updateData.priority_id = priority_id;
+      // Handle empty string - don't update if empty
+      if (priority_id === '' || priority_id === null) {
+        updateData.priority_id = null;
+      } else {
+        updateData.priority_id = priority_id;
+      }
     }
 
     if (assigned_to !== undefined) {

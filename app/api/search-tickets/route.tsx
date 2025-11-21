@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
 
     const userId = tokenData.sub; // Use 'sub' from JWT token
     const organizationId = tokenData.org_id; // Use 'org_id' from JWT token
+    const departmentId = tokenData.department_id; // Get department from JWT
     
     // Get user's organization role using global roles system
     const { data: userOrgRole, error: orgRoleError } = await supabase
@@ -74,7 +75,8 @@ export async function GET(request: NextRequest) {
         projects!inner(name, organization_id),
         creator:users!tickets_created_by_fkey(name, email),
         assignee:users!tickets_assigned_to_fkey(name, email),
-        statuses!tickets_status_id_fkey(name, color_code)
+        statuses!tickets_status_id_fkey(name, color_code),
+        priorities!tickets_priority_id_fkey(name, color_code)
       `)
       .eq('projects.organization_id', organizationId);
 
@@ -269,10 +271,21 @@ export async function GET(request: NextRequest) {
         `)
         .eq('user_id', userId);
 
-      const availableProjects = userProjectsForFilter?.map(up => ({
+      let availableProjects = userProjectsForFilter?.map(up => ({
         id: up.project_id,
         name: (up.projects as any)?.name || 'Unknown Project'
       })) || [];
+
+      // Filter by department if selected
+      if (departmentId && availableProjects.length > 0) {
+        const { data: deptProjects } = await supabase
+          .from('project_department')
+          .select('project_id')
+          .eq('department_id', departmentId);
+
+        const deptProjectIds = deptProjects?.map(dp => dp.project_id) || [];
+        availableProjects = availableProjects.filter(p => deptProjectIds.includes(p.id));
+      }
 
       // Get available roles for this user
       availableRoles = [...new Set(userProjectsForFilter?.map(p => (p.global_roles as any)?.name).filter(Boolean) || [])];
@@ -297,7 +310,20 @@ export async function GET(request: NextRequest) {
         }
       });
     } else {
-      // Admin can see all projects
+      // Admin can see all projects - BUT filter by department if selected
+      if (departmentId) {
+        // Get projects from this department
+        const { data: deptProjects } = await supabase
+          .from('project_department')
+          .select('project_id')
+          .eq('department_id', departmentId);
+
+        const deptProjectIds = deptProjects?.map(dp => dp.project_id) || [];
+        
+        // Filter available projects by department
+        availableProjectsQuery = availableProjectsQuery.in('id', deptProjectIds);
+      }
+      
       const { data: availableProjects } = await availableProjectsQuery;
 
       return NextResponse.json({

@@ -89,9 +89,12 @@ export async function GET(request: NextRequest) {
       console.error('Error fetching departments:', deptError);
     }
 
-    // Get employees for this organization with their role information
-    // Use left join to include employees with only department roles
-    let employeesQuery = supabase
+    // Get ALL users who have either:
+    // 1. organization_id matching (user_organization_roles)
+    // 2. department roles in this org (user_department_roles)
+    
+    // First get users with org roles
+    const { data: usersWithOrgRoles, error: orgUsersError } = await supabase
       .from('users')
       .select(`
         id,
@@ -103,83 +106,172 @@ export async function GET(request: NextRequest) {
         department,
         department_id,
         organization_id,
-        created_at,
-        user_organization_roles(
-          role_id,
-          organization_id,
-          global_roles(
-            id,
-            name
-          )
-        ),
-        user_department_roles(
-          role_id,
-          department_id,
-          global_roles(
-            id,
-            name
-          )
-        )
+        created_at
       `)
       .eq('organization_id', orgId);
+
+    // Then get users with department roles (might not have org role)
+    const departmentIds = allDepartments?.map(d => d.id) || [];
+    let usersWithDeptRoles: any[] = [];
     
-    // If user is department admin, filter employees to only their departments
+    if (departmentIds.length > 0) {
+      const { data: deptRoleUsers } = await supabase
+        .from('user_department_roles')
+        .select(`
+          user_id,
+          department_id,
+          role_id,
+          users!inner(
+            id,
+            name,
+            email,
+            job_title,
+            phone,
+            location,
+            department,
+            department_id,
+            organization_id,
+            created_at
+          ),
+          global_roles(id, name)
+        `)
+        .in('department_id', departmentIds)
+        .eq('organization_id', orgId);
+      
+      usersWithDeptRoles = deptRoleUsers || [];
+    }
+
+    // Merge and deduplicate users
+    const userMap = new Map();
+    
+    // Add users with org roles
+    (usersWithOrgRoles || []).forEach((user: any) => {
+      userMap.set(user.id, { ...user, departmentRoles: [] });
+    });
+    
+    // Add/update users with dept roles
+    usersWithDeptRoles.forEach((deptRole: any) => {
+      const user = deptRole.users;
+      if (!userMap.has(user.id)) {
+        userMap.set(user.id, { ...user, departmentRoles: [] });
+      }
+      userMap.get(user.id).departmentRoles.push({
+        department_id: deptRole.department_id,
+        role_id: deptRole.role_id,
+        role_name: deptRole.global_roles?.name
+      });
+    });
+
+    const allUsers = Array.from(userMap.values());
+
+    // Now get org and dept role details for all users
+    const userIds = allUsers.map((u: any) => u.id);
+    
+    const { data: orgRoles } = userIds.length > 0 ? await supabase
+      .from('user_organization_roles')
+      .select(`
+        user_id,
+        role_id,
+        organization_id,
+        global_roles(id, name)
+      `)
+      .in('user_id', userIds)
+      .eq('organization_id', orgId)
+      : { data: [] };
+
+    // Create org role map
+    const orgRoleMap = new Map();
+    (orgRoles || []).forEach((role: any) => {
+      orgRoleMap.set(role.user_id, role);
+    });
+
+    // Filter employees based on department admin permissions
+    let filteredUsers = allUsers;
     if (!isOrgAdmin && userDepartments.length > 0) {
-      employeesQuery = employeesQuery.in('department_id', userDepartments);
+      filteredUsers = allUsers.filter((user: any) => {
+        // Include if user's primary department matches
+        if (user.department_id && userDepartments.includes(user.department_id)) {
+          return true;
+        }
+        // Include if user has any role in admin's departments
+        if (user.departmentRoles?.some((dr: any) => userDepartments.includes(dr.department_id))) {
+          return true;
+        }
+        return false;
+      });
     }
 
-    const { data: employees, error: employeeError } = await employeesQuery.order('name');
-
-    if (employeeError) {
-      console.error('Error fetching employees:', employeeError);
-      return NextResponse.json(
-        { error: 'Failed to fetch employees' },
-        { status: 500 }
-      );
-    }
-
-    // Map employees with their role information
-    const employeesWithDepartments = (employees || []).map((employee: any) => {
+    // Map employees with their role information and ALL their departments
+    const employeesWithDepartments = filteredUsers.map((employee: any) => {
       // Extract role information - prioritize org role, fallback to department role
       let roleInfo = null;
       let roleType = null;
       
-      if (employee.user_organization_roles && employee.user_organization_roles.length > 0) {
-        const orgRole = employee.user_organization_roles.find((r: any) => r.organization_id === orgId);
-        if (orgRole?.global_roles) {
-          roleInfo = orgRole.global_roles;
-          roleType = 'organization';
-        }
+      const orgRole = orgRoleMap.get(employee.id);
+      if (orgRole?.global_roles) {
+        roleInfo = orgRole.global_roles;
+        roleType = 'organization';
       }
       
-      if (!roleInfo && employee.user_department_roles && employee.user_department_roles.length > 0) {
-        const deptRole = employee.user_department_roles.find((r: any) => r.department_id === employee.department_id);
-        if (deptRole?.global_roles) {
-          roleInfo = deptRole.global_roles;
-          roleType = 'department';
-        }
+      if (!roleInfo && employee.departmentRoles && employee.departmentRoles.length > 0) {
+        // Use first department role
+        roleInfo = {
+          id: employee.departmentRoles[0].role_id,
+          name: employee.departmentRoles[0].role_name
+        };
+        roleType = 'department';
       }
       
-      // Find matching department by ID or name
-      const deptId = employee.department_id;
-      const matchingDept = allDepartments?.find(d => d.id === deptId);
+      // Get all departments user belongs to
+      const userDepts = new Set<string>();
+      
+      // Add primary department
+      if (employee.department_id) {
+        userDepts.add(employee.department_id);
+      }
+      
+      // Add all departments from department roles
+      employee.departmentRoles?.forEach((dr: any) => {
+        userDepts.add(dr.department_id);
+      });
+      
+      // Find primary department info
+      const primaryDeptId = employee.department_id || (employee.departmentRoles?.[0]?.department_id);
+      const matchingDept = allDepartments?.find(d => d.id === primaryDeptId);
+      
+      // Create department-specific role map
+      const departmentRoleMap: Record<string, { role_id: string; role_name: string }> = {};
+      employee.departmentRoles?.forEach((dr: any) => {
+        departmentRoleMap[dr.department_id] = {
+          role_id: dr.role_id,
+          role_name: dr.role_name
+        };
+      });
       
       return {
-        ...employee,
-        department_id: deptId || employee.department,
+        id: employee.id,
+        name: employee.name,
+        email: employee.email,
+        job_title: employee.job_title,
+        phone: employee.phone,
+        location: employee.location,
+        department: employee.department,
+        department_id: primaryDeptId,
         department_name: matchingDept?.name || employee.department || 'Unassigned',
+        all_departments: Array.from(userDepts), // All department IDs user belongs to
+        organization_id: employee.organization_id,
+        created_at: employee.created_at,
         current_role: roleInfo?.name || null,
         current_role_id: roleInfo?.id || null,
         role_type: roleType,
-        user_organization_roles: undefined, // Remove nested data from response
-        user_department_roles: undefined
+        department_roles: departmentRoleMap // Map of department_id -> role info
       };
     });
 
-    // Create department list with employee counts
+    // Create department list with employee counts (count users in ANY department role)
     const departmentsWithCounts = (allDepartments || []).map(dept => {
       const employeeCount = employeesWithDepartments.filter(
-        emp => emp.department_id === dept.id || emp.department === dept.name
+        emp => emp.all_departments?.includes(dept.id) || emp.department_id === dept.id || emp.department === dept.name
       ).length;
       
       return {

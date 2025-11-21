@@ -190,4 +190,107 @@ export class InvitationEmailService {
       </html>
     `;
   }
+
+  async sendExistingUserDepartmentNotification(data: { 
+    email: string; 
+    name: string; 
+    organizationName: string; 
+    departmentName: string;
+  }): Promise<{ success: boolean; message: string }> {
+    try {
+      const emailSubject = `🎉 You've been added to ${data.departmentName}!`;
+      const emailHtml = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>New Department Access</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc;">
+          <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+            
+            <div style="text-align: center; margin-bottom: 30px;">
+              <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 12px 12px 0 0; color: white;">
+                <h1 style="margin: 0; font-size: 28px; font-weight: 700;">🎉 New Department Access!</h1>
+                <p style="margin: 10px 0 0 0; font-size: 16px; opacity: 0.9;">You've been added to ${data.departmentName}</p>
+              </div>
+            </div>
+
+            <div style="background-color: white; padding: 40px; border-radius: 0 0 12px 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+              
+              <div style="margin-bottom: 30px;">
+                <h2 style="color: #1a202c; margin-bottom: 15px; font-size: 20px;">Hi ${data.name}! 👋</h2>
+                <p style="color: #4a5568; font-size: 16px; line-height: 1.6; margin: 0 0 20px 0;">
+                  Great news! You have been added to a new department in <strong>${data.organizationName}</strong>.
+                </p>
+                <div style="background-color: #f7fafc; border-left: 4px solid #667eea; padding: 20px; border-radius: 4px; margin: 20px 0;">
+                  <p style="color: #2d3748; margin: 0; font-size: 16px;">
+                    <strong>Department:</strong> ${data.departmentName}
+                  </p>
+                </div>
+                <p style="color: #4a5568; font-size: 16px; line-height: 1.6; margin: 20px 0 0 0;">
+                  You can now access projects and resources for this department. Simply login with your existing credentials to get started!
+                </p>
+              </div>
+
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/user-login" 
+                   style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);">
+                  Login Now
+                </a>
+              </div>
+
+              <div style="background-color: #ebf8ff; border: 1px solid #bee3f8; border-radius: 8px; padding: 20px; margin-top: 30px;">
+                <p style="color: #2c5282; margin: 0; font-size: 14px; line-height: 1.6;">
+                  <strong>💡 Tip:</strong> Use the department switcher in the navbar to switch between your departments after logging in.
+                </p>
+              </div>
+
+              <div style="text-align: center; padding-top: 25px; border-top: 1px solid #e2e8f0; margin-top: 30px;">
+                <p style="color: #718096; font-size: 14px; margin: 0; line-height: 1.6;">
+                  Need help? Contact your organization administrator or reply to this email.
+                </p>
+              </div>
+
+            </div>
+
+            <div style="text-align: center; margin-top: 30px; padding: 20px;">
+              <p style="color: #a0aec0; font-size: 12px; margin: 0;">
+                This notification was sent by ${data.organizationName}. 
+              </p>
+            </div>
+
+          </div>
+        </body>
+        </html>
+      `;
+
+      const result = await emailService.sendEmail({
+        to: data.email,
+        subject: emailSubject,
+        html: emailHtml
+      });
+
+      if (result.success) {
+        return {
+          success: true,
+          message: 'Department notification email sent successfully'
+        };
+      } else {
+        console.error('Email sending failed:', result.error);
+        return {
+          success: false,
+          message: result.error || 'Failed to send notification email'
+        };
+      }
+
+    } catch (error) {
+      console.error('Error sending department notification email:', error);
+      return {
+        success: false,
+        message: 'Failed to send notification email'
+      };
+    }
+  }
 }

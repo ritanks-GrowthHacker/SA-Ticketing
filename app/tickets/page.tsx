@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Plus, Search, Filter, MoreVertical, MessageSquare, Clock, AlertCircle, ChevronDown, X, FolderOpen } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { useTicketUpdates } from '../hooks/useTicketUpdates';
+import TicketModal from '../../components/modals/TicketModal';
 
 interface Ticket {
   id: string;
@@ -49,7 +50,7 @@ interface TicketsResponse {
 }
 
 const Tickets = () => {
-  const { token, organization, currentProject } = useAuthStore();
+  const { token, organization, currentProject, currentDepartment } = useAuthStore();
   const router = useRouter();
   const searchParams = useSearchParams();
   
@@ -58,7 +59,8 @@ const Tickets = () => {
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '');
   const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || 'all');
   const [priorityFilter, setPriorityFilter] = useState(searchParams.get('priority') || 'all');
-  const [projectFilter, setProjectFilter] = useState(searchParams.get('project') || 'all');
+  // Use currentProject from useAuthStore instead of local state
+  const [projectFilter, setProjectFilter] = useState(currentProject?.id || searchParams.get('project') || 'all');
   const [roleFilter, setRoleFilter] = useState(searchParams.get('role') || 'all');
   const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1'));
   
@@ -76,6 +78,7 @@ const Tickets = () => {
   const [statuses, setStatuses] = useState<any[]>([]);
   const [priorities, setPriorities] = useState<any[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+  const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
 
   // Real-time ticket updates
   useTicketUpdates({
@@ -85,10 +88,11 @@ const Tickets = () => {
       setTickets(prev => {
         const exists = prev.some(t => t.id === updatedTicket.id);
         if (exists) {
-          // Update existing ticket
+          // Update existing ticket - map API response to local state format
           return prev.map(t => t.id === updatedTicket.id ? {
             ...t,
             ...updatedTicket,
+            // API returns singular 'status' and 'priority', but state uses plural 'statuses' and 'priorities'
             statuses: updatedTicket.status || t.statuses,
             priorities: updatedTicket.priority || t.priorities,
           } : t);
@@ -290,6 +294,21 @@ const Tickets = () => {
   };
 
   // Effects
+  
+  // Sync projectFilter with dashboard's currentProject selection
+  useEffect(() => {
+    const newProjectFilter = currentProject?.id || 'all';
+    if (projectFilter !== newProjectFilter) {
+      console.log('🔄 Syncing project filter with dashboard:', {
+        old: projectFilter,
+        new: newProjectFilter,
+        projectName: currentProject?.name
+      });
+      setProjectFilter(newProjectFilter);
+      setCurrentPage(1);
+    }
+  }, [currentProject?.id]);
+  
   useEffect(() => {
     if (token && organization?.id) {
       console.log('🔄 Tickets: Refreshing due to auth/project change:', {
@@ -352,7 +371,10 @@ const Tickets = () => {
               : `Manage tickets for your assigned projects (${userAccess?.role || 'user'})`}
           </p>
         </div>
-        <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center space-x-2">
+        <button 
+          onClick={() => setIsTicketModalOpen(true)}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center space-x-2"
+        >
           <Plus className="w-4 h-4" />
           <span>Create Ticket</span>
         </button>
@@ -646,6 +668,18 @@ const Tickets = () => {
           </div>
         )}
       </div>
+
+      {/* Ticket Modal */}
+      {isTicketModalOpen && (
+        <TicketModal
+          isOpen={isTicketModalOpen}
+          onClose={() => setIsTicketModalOpen(false)}
+          onSuccess={() => {
+            setIsTicketModalOpen(false);
+            fetchTickets(); // Refresh tickets list
+          }}
+        />
+      )}
     </div>
   );
 };

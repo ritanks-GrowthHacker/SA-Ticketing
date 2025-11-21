@@ -126,6 +126,54 @@ export async function PUT(req: Request) {
       return NextResponse.json({ error: "User is not assigned to this project" }, { status: 404 });
     }
 
+    // Get the target user's CURRENT project role to enforce hierarchy
+    const { data: currentRoleData } = await supabase
+      .from("roles")
+      .select("name")
+      .eq("id", existingAssignment.role_id)
+      .single();
+
+    const currentRoleName = currentRoleData?.name;
+    const newRoleName = role.name;
+
+    // Get CURRENT USER's PROJECT ROLE (not org/dept role)
+    const { data: currentUserProjectRole } = await supabase
+      .from("user_project")
+      .select(`
+        user_id,
+        project_id,
+        global_roles!user_project_role_id_fkey(name)
+      `)
+      .eq("user_id", tokenData.sub)
+      .eq("project_id", project_id)
+      .single();
+
+    const currentUserRoleName = currentUserProjectRole?.global_roles ? 
+      (currentUserProjectRole.global_roles as any)?.name : null;
+
+    console.log('🔧 Current user PROJECT ROLE:', currentUserRoleName);
+
+    // Role hierarchy enforcement: PROJECT MANAGERS cannot modify Admin or Manager roles
+    const isCurrentUserProjectManager = currentUserRoleName === 'Manager';
+    
+    if (isCurrentUserProjectManager) {
+      // Project Managers cannot change Admin or Manager project roles
+      if (currentRoleName === 'Admin' || currentRoleName === 'Manager') {
+        console.log('🔧 Project Manager attempted to modify Admin/Manager role');
+        return NextResponse.json({ 
+          error: "User permission not allowed" 
+        }, { status: 403 });
+      }
+      
+      // Project Managers cannot assign Admin or Manager roles
+      if (newRoleName === 'Admin' || newRoleName === 'Manager') {
+        console.log('🔧 Project Manager attempted to assign Admin/Manager role');
+        return NextResponse.json({ 
+          error: "User permission not allowed" 
+        }, { status: 403 });
+      }
+    }
+
     // Update user role in the project
     const { error: updateError } = await supabase
       .from("user_project")

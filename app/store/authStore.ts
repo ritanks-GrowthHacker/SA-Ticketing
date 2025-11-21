@@ -48,15 +48,24 @@ export interface AuthState {
   isAuthenticated: boolean
   token: string | null
   user: User | null
-  organization: Organization | null
-  role: string | null
+  organization: Organization & { role?: string } | null // Added role for org-level role display
+  role: string | null // Active role (project role if available, else org role)
   roles: string[]
   
-  // Project Context (for project switching)
-  currentProject: {
+  // Department Context (for department switching)
+  currentDepartment: {
     id: string
     name: string
     role: string
+  } | null
+  hasMultipleDepartments: boolean
+  allDepartments: Array<{ id: string; name: string; role: string }> // All departments user is part of
+  
+  // Project Context (for project switching) - DOMINANT
+  currentProject: {
+    id: string
+    name: string
+    role: string // THIS IS THE DOMINANT ROLE
   } | null
   
   // Organization Data
@@ -71,12 +80,32 @@ export interface AuthState {
   // Actions
   login: (loginData: {
     user: User
-    organization: Organization
-    role: string
+    organization: Organization & { role?: string }
+    role: string // The active role (project role)
     roles: string[]
     token: string
+    department?: {
+      id: string
+      name: string
+      role: string
+    } | null
+    project?: {
+      id: string
+      name: string
+      role: string
+    } | null
+    departments?: Array<{ id: string; name: string; role: string }>
+    hasMultipleDepartments?: boolean
   }) => void
   logout: () => void
+  switchDepartment: (departmentData: {
+    token: string
+    department: {
+      id: string
+      name: string
+      role: string
+    }
+  }) => void
   switchProject: (projectData: {
     token: string
     project: {
@@ -136,6 +165,9 @@ export const useAuthStore = create<AuthState>()(
       organization: isDevelopmentBypass ? getDefaultDevOrganization() : null,
       role: isDevelopmentBypass ? 'Admin' : null,
       roles: isDevelopmentBypass ? ['Admin'] : [],
+      currentDepartment: null,
+      hasMultipleDepartments: false,
+      allDepartments: [],
       currentProject: null,
       statuses: [],
       roles_list: [],
@@ -150,8 +182,12 @@ export const useAuthStore = create<AuthState>()(
           token: loginData.token,
           user: loginData.user,
           organization: loginData.organization,
-          role: loginData.role,
+          role: loginData.role, // This is now project role (dominant)
           roles: loginData.roles,
+          currentDepartment: loginData.department || null,
+          currentProject: loginData.project || null, // Project context
+          allDepartments: loginData.departments || [],
+          hasMultipleDepartments: loginData.hasMultipleDepartments || false,
         })
       },
 
@@ -172,11 +208,43 @@ export const useAuthStore = create<AuthState>()(
           organization: null,
           role: null,
           roles: [],
+          currentDepartment: null,
+          hasMultipleDepartments: false,
+          allDepartments: [],
           currentProject: null,
           statuses: [],
           roles_list: [],
           departments: [],
         })
+      },
+
+      switchDepartment: (departmentData) => {
+        const currentState = get();
+        
+        console.log('🔄 Switching department in store:', {
+          from: currentState.currentDepartment?.name || 'none',
+          to: departmentData.department.name,
+          newRole: departmentData.department.role
+        });
+
+        // Clear dashboard cache when switching departments
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem('dashboard-storage');
+            console.log('🗑️ Cleared dashboard cache for department switch');
+          } catch (error) {
+            console.warn('Failed to clear dashboard cache:', error);
+          }
+        }
+        
+        // Update state with new department context and token
+        set({
+          token: departmentData.token,
+          currentDepartment: departmentData.department,
+          currentProject: null, // Clear project when switching department
+        });
+
+        console.log('✅ Department switched successfully in store');
       },
 
       switchProject: (projectData) => {
@@ -265,6 +333,8 @@ export const useAuthStore = create<AuthState>()(
         organization: state.organization,
         role: state.role,
         roles: state.roles,
+        currentDepartment: state.currentDepartment,
+        hasMultipleDepartments: state.hasMultipleDepartments,
         currentProject: state.currentProject,
         statuses: state.statuses,
         roles_list: state.roles_list,

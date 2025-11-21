@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { 
@@ -24,73 +24,86 @@ interface NavItem {
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   adminOnly?: boolean;
+  managerOnly?: boolean;
+  adminOrManager?: boolean;
 }
 
 interface TicketItem {
   id: string;
   title: string;
-  status: 'open' | 'in-progress' | 'closed';
-  priority: 'low' | 'medium' | 'high';
-  createdAt: string;
+  status_id: string;
+  priority_id: string;
+  created_at: string;
+  statuses?: { name: string; color_code: string };
+  priorities?: { name: string; color_code: string };
 }
 
 const navItems: NavItem[] = [
   { name: 'Dashboard', href: '/dashboard', icon: Home },
   { name: 'Projects', href: '/projects', icon: FolderOpen },
-  { name: 'Requests', href: '/requests', icon: Inbox, adminOnly: true },
-  { name: 'Manage Access', href: '/manage-access', icon: Users, adminOnly: true },
+  { name: 'Requests', href: '/requests', icon: Inbox, adminOrManager: true },
+  { name: 'Manage Access', href: '/manage-access', icon: Users, adminOrManager: true },
   { name: 'Profile', href: '/profile', icon: User },
   { name: 'Tickets', href: '/tickets', icon: Ticket },
 ];
 
-// Mock ticket data - replace with actual data from your API
-const mockTickets: TicketItem[] = [
-  {
-    id: '1',
-    title: 'Login issue with SSO',
-    status: 'open',
-    priority: 'high',
-    createdAt: '2024-01-15'
-  },
-  {
-    id: '2',
-    title: 'Database connection timeout',
-    status: 'in-progress',
-    priority: 'medium',
-    createdAt: '2024-01-14'
-  },
-  {
-    id: '3',
-    title: 'UI component styling',
-    status: 'closed',
-    priority: 'low',
-    createdAt: '2024-01-13'
-  },
-  {
-    id: '4',
-    title: 'API rate limiting',
-    status: 'open',
-    priority: 'high',
-    createdAt: '2024-01-12'
-  },
-  {
-    id: '5',
-    title: 'Mobile responsiveness',
-    status: 'in-progress',
-    priority: 'medium',
-    createdAt: '2024-01-11'
-  }
-];
-
 const Sidebar = () => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [tickets, setTickets] = useState<TicketItem[]>([]);
+  const [isLoadingTickets, setIsLoadingTickets] = useState(false);
   const pathname = usePathname();
-  const { user, role } = useAuthStore();
+  const { user, roles, currentProject, currentDepartment, role, token } = useAuthStore();
+
+  // IMPORTANT: Sidebar visibility is based on ORG/DEPARTMENT role, NOT project role
+  // Manage Access and Requests tabs are organization/department level features
+  const effectiveRole = currentDepartment?.role || role || roles?.[0] || 'Member';
+
+  console.log('🔍 Sidebar - Role Check (Org/Dept Based):', {
+    departmentRole: currentDepartment?.role,
+    globalRole: role,
+    rolesArray: roles,
+    effectiveRole,
+    note: 'Sidebar uses ORG/DEPT role, not project role'
+  });
+
+  // Fetch recent tickets based on user role
+  useEffect(() => {
+    const fetchRecentTickets = async () => {
+      if (!token || !isExpanded) return; // Only fetch when sidebar is expanded
+      
+      setIsLoadingTickets(true);
+      try {
+        const response = await fetch('/api/search-tickets?limit=5', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setTickets(data.tickets || []);
+        }
+      } catch (error) {
+        console.error('Error fetching tickets:', error);
+      } finally {
+        setIsLoadingTickets(false);
+      }
+    };
+
+    fetchRecentTickets();
+  }, [token, isExpanded]);
 
   // Filter navigation items based on user role
   const filteredNavItems = navItems.filter(item => {
     if (item.adminOnly) {
-      return role === 'Admin';
+      return effectiveRole === 'Admin';
+    }
+    if (item.managerOnly) {
+      return effectiveRole === 'Manager';
+    }
+    if (item.adminOrManager) {
+      return effectiveRole === 'Admin' || effectiveRole === 'Manager';
     }
     return true;
   });
@@ -207,33 +220,49 @@ const Sidebar = () => {
               </div>
               
               <div className="space-y-2 max-h-96 overflow-y-auto">
-                {mockTickets.map((ticket) => (
-                  <Link
-                    key={ticket.id}
-                    href={`/tickets/${ticket.id}`}
-                    className="block p-3 rounded-lg hover:bg-gray-50 transition-colors border border-transparent hover:border-gray-200"
-                  >
-                    <div className="flex items-start justify-between mb-2">
-                      <h4 className="text-sm font-medium text-gray-900 leading-tight">
-                        {truncateTitle(ticket.title)}
-                      </h4>
-                      {getPriorityIcon(ticket.priority)}
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <span className={`
-                        inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
-                        ${getStatusColor(ticket.status)}
-                      `}>
-                        {ticket.status}
-                      </span>
+                {isLoadingTickets ? (
+                  <div className="flex items-center justify-center py-8">
+                    <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                  </div>
+                ) : tickets.length > 0 ? (
+                  tickets.map((ticket) => (
+                    <Link
+                      key={ticket.id}
+                      href={`/tickets`}
+                      className="block p-3 rounded-lg hover:bg-gray-50 transition-colors border border-transparent hover:border-gray-200"
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <h4 className="text-sm font-medium text-gray-900 leading-tight">
+                          {truncateTitle(ticket.title)}
+                        </h4>
+                        <div className={`w-2 h-2 rounded-full shrink-0 ml-2 mt-1`} 
+                          style={{ backgroundColor: ticket.priorities?.color_code || '#6B7280' }}>
+                        </div>
+                      </div>
                       
-                      <span className="text-xs text-gray-500">
-                        {new Date(ticket.createdAt).toLocaleDateString()}
-                      </span>
-                    </div>
-                  </Link>
-                ))}
+                      <div className="flex items-center justify-between">
+                        <span className={`
+                          inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
+                        `}
+                          style={{ 
+                            backgroundColor: ticket.statuses?.color_code ? `${ticket.statuses.color_code}20` : '#E5E7EB',
+                            color: ticket.statuses?.color_code || '#6B7280'
+                          }}
+                        >
+                          {ticket.statuses?.name || 'Unknown'}
+                        </span>
+                        
+                        <span className="text-xs text-gray-500">
+                          {new Date(ticket.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                    </Link>
+                  ))
+                ) : (
+                  <div className="text-center py-8 text-sm text-gray-500">
+                    No recent tickets
+                  </div>
+                )}
               </div>
               
               <Link

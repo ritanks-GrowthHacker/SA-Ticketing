@@ -124,8 +124,25 @@ export async function PUT(request: NextRequest) {
 
     console.log('✅ User has access to update documents in project');
 
-    // Check edit permissions
-    const canEdit = existingDoc.author_id === user_id || userRole === 'Admin';
+    // Get author's role to enforce hierarchy
+    let authorRole = 'Member'; // Default role
+    
+    const { data: authorOrgRole } = await supabase
+      .from('user_organization_roles')
+      .select(`
+        role_id,
+        global_roles!user_organization_roles_role_id_fkey(name)
+      `)
+      .eq('user_id', existingDoc.author_id)
+      .eq('organization_id', decodedToken.org_id)
+      .single();
+
+    if (authorOrgRole && authorOrgRole.global_roles) {
+      authorRole = (authorOrgRole.global_roles as any).name;
+    }
+
+    // Check edit permissions based on role hierarchy
+    const canEdit = getUpdatePermission(existingDoc.author_id, user_id, userRole, authorRole);
     
     if (!canEdit) {
       return NextResponse.json(
@@ -181,4 +198,52 @@ export async function PUT(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+// Helper function to determine update permissions based on RBAC rules
+function getUpdatePermission(
+  authorId: string, 
+  currentUserId: string, 
+  currentUserRole: string, 
+  authorRole: string
+): boolean {
+  
+  console.log('🔍 UPDATE PERMISSION CHECK:', {
+    authorId,
+    currentUserId,
+    currentUserRole,
+    authorRole
+  });
+  
+  // Rule 1: Admin can edit anyone's documents
+  if (currentUserRole === 'Admin') {
+    console.log('✅ RULE 1: Admin can edit any document');
+    return true;
+  }
+  
+  // Rule 2: User can edit their own documents
+  if (authorId === currentUserId) {
+    console.log('✅ RULE 2: User editing their own document');
+    return true;
+  }
+  
+  // Rule 3: Documents created by Admin cannot be edited by anyone else
+  if (authorRole === 'Admin' && currentUserId !== authorId) {
+    console.log('❌ RULE 3: Document created by Admin - cannot be edited by non-Admin');
+    return false;
+  }
+  
+  // Rule 4: Manager can edit documents of normal users (Member, Viewer)
+  if (currentUserRole === 'Manager') {
+    const normalUserRoles = ['Member', 'Viewer'];
+    if (normalUserRoles.includes(authorRole)) {
+      console.log('✅ RULE 4: Manager editing document from Member/Viewer');
+      return true;
+    } else {
+      console.log('❌ RULE 4: Manager cannot edit document from role:', authorRole);
+    }
+  }
+  
+  console.log('❌ NO RULES MATCHED - PERMISSION DENIED');
+  return false;
 }

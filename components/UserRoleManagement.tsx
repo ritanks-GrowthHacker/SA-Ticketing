@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAuth } from '../app/store/authStore';
+import { isRoleDisabled } from '@/lib/roleHierarchy';
 
 interface User {
   userId: string;
@@ -57,6 +58,13 @@ export default function UserRoleManagement() {
       
       return true;
     });
+  };
+
+  // Get current user's effective role for role hierarchy checks
+  const getCurrentUserRole = () => {
+    if (hasRole('Admin')) return 'Admin';
+    if (hasRole('Manager')) return 'Manager';
+    return 'Member';
   };
 
   useEffect(() => {
@@ -240,11 +248,19 @@ export default function UserRoleManagement() {
             required
           >
             <option value="">Select Role</option>
-            {getAvailableRolesForUser().map((role) => (
-              <option key={role.id} value={role.id}>
-                {role.name}
-              </option>
-            ))}
+            {availableRoles.map((role) => {
+              const disabled = isRoleDisabled(getCurrentUserRole(), role.name);
+              return (
+                <option 
+                  key={role.id} 
+                  value={role.id}
+                  disabled={disabled}
+                  style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                >
+                  {role.name}{disabled ? ' (Permission required)' : ''}
+                </option>
+              );
+            })}
           </select>
           <button
             type="submit"
@@ -310,11 +326,19 @@ export default function UserRoleManagement() {
                         className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
                       >
                         <option value="">No Role</option>
-                        {getAvailableRolesForUser(user).map((role) => (
-                          <option key={role.id} value={role.id}>
-                            {role.name}
-                          </option>
-                        ))}
+                        {availableRoles.map((role) => {
+                          const disabled = isRoleDisabled(getCurrentUserRole(), role.name);
+                          return (
+                            <option 
+                              key={role.id} 
+                              value={role.id}
+                              disabled={disabled}
+                              style={disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                            >
+                              {role.name}{disabled ? ' (Permission required)' : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                     ) : (
                       <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 border border-gray-300 rounded">

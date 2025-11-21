@@ -37,7 +37,7 @@ export const ProjectSelect: React.FC<ProjectSelectProps> = ({
   disabled = false,
   className = ""
 }) => {
-  const { token, isAuthenticated } = useAuthStore();
+  const { token, isAuthenticated, currentDepartment } = useAuthStore();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,10 +56,9 @@ export const ProjectSelect: React.FC<ProjectSelectProps> = ({
       if (isAuthenticated && token) {
         fetchProjects();
       } else {
-        // Try fallback to localStorage as backup
-        const fallbackToken = localStorage.getItem('authToken');
-        if (fallbackToken) {
-          fetchProjectsWithToken(fallbackToken);
+        // As a fallback, try token from auth store
+        if (token) {
+          fetchProjectsWithToken(token);
         } else {
           setLoading(false);
           setError('Authentication required');
@@ -68,14 +67,22 @@ export const ProjectSelect: React.FC<ProjectSelectProps> = ({
     }, 100);
 
     return () => clearTimeout(timer);
-  }, [token, isAuthenticated, mounted]);
+  }, [token, isAuthenticated, mounted, currentDepartment?.id]);
 
   const fetchProjectsWithToken = async (authToken: string) => {
     try {
       setLoading(true);
       setError(null);
 
-      const response = await fetch('/api/get-all-projects?format=dropdown', {
+      // Build URL with department filter if available
+      const url = new URL('/api/get-all-projects', window.location.origin);
+      url.searchParams.append('format', 'dropdown');
+      if (currentDepartment?.id) {
+        url.searchParams.append('department_id', currentDepartment.id);
+        console.log(`🔍 PROJECT SELECT: Filtering by department ${currentDepartment.name} (${currentDepartment.id})`);
+      }
+
+      const response = await fetch(url.toString(), {
         headers: {
           'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'application/json'
@@ -131,9 +138,8 @@ export const ProjectSelect: React.FC<ProjectSelectProps> = ({
               if (token) {
                 fetchProjects();
               } else {
-                const fallbackToken = localStorage.getItem('authToken');
-                if (fallbackToken) {
-                  fetchProjectsWithToken(fallbackToken);
+                if (token) {
+                  fetchProjectsWithToken(token);
                 }
               }
             }}
