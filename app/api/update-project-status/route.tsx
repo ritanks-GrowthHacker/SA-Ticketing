@@ -171,6 +171,33 @@ export async function PUT(req: NextRequest) {
 
     const statusName = status?.name || 'new status';
     
+    // Send notifications to all project members about status change
+    try {
+      const { data: projectMembers } = await supabase
+        .from('user_project')
+        .select('user_id')
+        .eq('project_id', project_id)
+        .neq('user_id', decodedToken.sub); // Exclude the user who made the change
+
+      if (projectMembers && projectMembers.length > 0) {
+        const notifications = projectMembers.map(member => ({
+          user_id: member.user_id,
+          entity_type: 'project',
+          entity_id: project_id,
+          type: 'info',
+          title: 'Project Status Updated',
+          message: `Project "${updatedProject.name}" status changed to ${statusName}`,
+          is_read: false
+        }));
+
+        await supabase.from('notifications').insert(notifications);
+        console.log(`✅ Sent ${notifications.length} project status change notifications`);
+      }
+    } catch (notifError) {
+      console.error('Failed to send project status notifications:', notifError);
+      // Don't fail the status update if notifications fail
+    }
+    
     return NextResponse.json({
       success: true,
       message: `Project status updated to ${statusName}`,

@@ -596,11 +596,14 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
                         </div>
                       </div>
                       <div className="flex items-center space-x-2">
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          ticket.priority === 'High' ? 'bg-red-100 text-red-800' :
-                          ticket.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-green-100 text-green-800'
-                        }`}>
+                        <span 
+                          className="px-3 py-1 rounded-full text-xs font-medium"
+                          style={{
+                            backgroundColor: `${ticket.priorityColor}20`,
+                            color: ticket.priorityColor,
+                            border: `1px solid ${ticket.priorityColor}40`
+                          }}
+                        >
                           {ticket.priority}
                         </span>
                         <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">

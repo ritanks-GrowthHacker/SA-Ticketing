@@ -523,7 +523,8 @@ export async function GET(req: Request) {
           projects!inner(name, organization_id),
           creator:users!tickets_created_by_fkey(name),
           assignee:users!tickets_assigned_to_fkey(name),
-          statuses!tickets_status_id_fkey(name, color_code)
+          statuses!tickets_status_id_fkey(name, color_code),
+          priorities!tickets_priority_id_fkey(name, color_code)
         `)
         .eq('projects.organization_id', organizationId)
         .order('created_at', { ascending: false })
@@ -628,7 +629,8 @@ export async function GET(req: Request) {
         status: (ticket as any).statuses?.name || 'Unknown',
         time: formatTimeAgo(ticket.created_at),
         project: (ticket as any).projects?.name || 'Unknown Project',
-        priority: ticket.priority_id ? 'High' : 'Normal', // Simplified
+        priority: (ticket as any).priorities?.name || 'Medium',
+        priorityColor: (ticket as any).priorities?.color_code || '#6B7280',
         assignedTo: (ticket as any).assignee?.name || 'Unassigned',
         createdBy: (ticket as any).creator?.name || 'Unknown',
         assigned_to: (ticket as any).assignee?.name || 'Unassigned', // Alternative field name
@@ -750,7 +752,8 @@ export async function GET(req: Request) {
             created_by, assigned_to,
             creator:users!tickets_created_by_fkey(name),
             assignee:users!tickets_assigned_to_fkey(name),
-            statuses!tickets_status_id_fkey(name, color_code)
+            statuses!tickets_status_id_fkey(name, color_code),
+            priorities!tickets_priority_id_fkey(name, color_code)
           `)
           .eq('project_id', targetProjectId)
           .order('created_at', { ascending: false })
@@ -802,7 +805,8 @@ export async function GET(req: Request) {
           createdBy: (ticket as any).creator?.name || 'Unknown',
           assigned_to: (ticket as any).assignee?.name || 'Unassigned', // Alternative field name
           created_by: (ticket as any).creator?.name || 'Unknown', // Alternative field name
-          priority: 'Normal' // Simplified
+          priority: (ticket as any).priorities?.name || 'Medium',
+          priorityColor: (ticket as any).priorities?.color_code || '#6B7280'
         })) || [];
 
         // Add project-specific data
@@ -1128,7 +1132,8 @@ export async function GET(req: Request) {
             projects(name),
             creator:users!tickets_created_by_fkey(name, email),
             assignee:users!tickets_assigned_to_fkey(name, email),
-            statuses!tickets_status_id_fkey(name, color_code)
+            statuses!tickets_status_id_fkey(name, color_code),
+            priorities!tickets_priority_id_fkey(name, color_code)
           `)
           .in('project_id', filteredProjectIds)
           .order('created_at', { ascending: false })
@@ -1181,7 +1186,8 @@ export async function GET(req: Request) {
           createdBy: (ticket as any).creator?.name || 'Unknown',
           assigned_to: (ticket as any).assignee?.name || 'Unassigned',
           created_by: (ticket as any).creator?.name || 'Unknown',
-          priority: 'Normal' // Simplified
+          priority: (ticket as any).priorities?.name || 'Medium',
+          priorityColor: (ticket as any).priorities?.color_code || '#6B7280'
         })) || [];
 
         console.log('🎯 MEMBER: Formatted recentActivity:', metrics.recentActivity);

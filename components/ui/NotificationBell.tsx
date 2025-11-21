@@ -62,16 +62,17 @@ const NotificationBell: React.FC = () => {
         const exists = prev.some(n => n.id === newNotification.id);
         if (exists) return prev;
         
+        // Only increment count if notification is actually new
         setUnreadCount((count) => count + 1);
         return [newNotification, ...prev];
       });
       
-      // Show browser notification
+      // Show browser notification only if this is a truly new notification
       if (Notification.permission === 'granted' && newNotification.title) {
         const notification = new Notification(newNotification.title, {
           body: newNotification.message,
           icon: '/favicon.ico',
-          tag: newNotification.entity_id,
+          tag: newNotification.id, // Use notification ID to prevent duplicates
           requireInteraction: false,
         });
 

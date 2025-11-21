@@ -155,7 +155,7 @@ export default function InviteFamilyPage() {
             <Heart className="w-10 h-10 text-white" />
           </div>
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            Let's Create Your Family! 👨‍👩‍👧‍👦
+            Invite Your Team! �
           </h1>
           <p className="text-lg text-gray-600">
             Invite your team members to join your organization
@@ -275,7 +275,7 @@ export default function InviteFamilyPage() {
         <div className="mt-8 bg-white rounded-2xl shadow-xl p-8 text-center">
           <div className="mb-6">
             <h3 className="text-xl font-semibold text-gray-900 mb-2">
-              Ready to Invite Your Family?
+              Ready to Invite Your Team?
             </h3>
             <p className="text-gray-600">
               We'll send beautiful invitation emails to all your team members with instructions to join your organization.
@@ -301,7 +301,7 @@ export default function InviteFamilyPage() {
             ) : (
               <>
                 <Send className="w-5 h-5 mr-2" />
-                Invite My Family! 💌
+                Invite My Team! 💌
               </>
             )}
           </button>

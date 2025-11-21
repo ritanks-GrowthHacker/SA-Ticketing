@@ -58,7 +58,11 @@ const ManageAccessPage = () => {
   const { token, role, isAuthenticated, user, currentDepartment, currentProject, roles } = useAuthStore();
   const { apiCall } = useApiCall();
   
-  // Get effective role - PRIORITY: project role > department role > global role (PROJECT ROLE IS DOMINANT)
+  // IMPORTANT: Page access based on ORG/DEPT role (sidebar visibility)
+  // But assignment permissions based on PROJECT role (action restrictions)
+  const orgDeptRole = currentDepartment?.role || role || roles?.[0] || 'User';
+  
+  // Get effective role - PRIORITY: project role > department role > global role (PROJECT ROLE IS DOMINANT for actions)
   const effectiveRole = currentProject?.role || currentDepartment?.role || role || roles?.[0] || 'User';
   
   const [users, setUsers] = useState<User[]>([]);
@@ -71,6 +75,15 @@ const ManageAccessPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   // IMPORTANT: Default to current project from JWT (project-based system)
   const [selectedProject, setSelectedProject] = useState(currentProject?.id || 'all');
+  
+  // Helper function: Check if user can manage assignments
+  // If "All Projects" selected: use org/dept role
+  // If specific project selected: use PROJECT role for that project
+  const canManageAssignments = (projectFilter: string) => {
+    return projectFilter === 'all' 
+      ? (orgDeptRole === 'Admin' || orgDeptRole === 'Manager')
+      : (effectiveRole === 'Admin' || effectiveRole === 'Manager');
+  };
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [assignmentLoading, setAssignmentLoading] = useState(false);
@@ -112,12 +125,13 @@ const ManageAccessPage = () => {
     }, 3000);
   };
 
-  // Redirect if not admin or manager
+  // Redirect if not admin or manager (based on ORG/DEPT role, not project role)
+  // This allows Department Admins to access the page even if they're Members in a project
   useEffect(() => {
-    if (isAuthenticated && effectiveRole !== 'Admin' && effectiveRole !== 'Manager') {
+    if (isAuthenticated && orgDeptRole !== 'Admin' && orgDeptRole !== 'Manager') {
       window.location.href = '/dashboard';
     }
-  }, [isAuthenticated, effectiveRole]);
+  }, [isAuthenticated, orgDeptRole]);
 
   // Fetch initial data
   useEffect(() => {
@@ -917,7 +931,7 @@ const ManageAccessPage = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Projects
                 </th>
-                {(selectedProject !== 'all' || (selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager'))) && (
+                {(selectedProject !== 'all' || canManageAssignments(selectedProject)) && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[300px]">
                     Actions
                   </th>
@@ -931,7 +945,7 @@ const ManageAccessPage = () => {
                 
                 return (
                   <tr key={user.id} className={isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}>
-                    {(selectedProject !== 'all' || (selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager') && userAssignments.length === 0)) && (
+                    {(selectedProject !== 'all' || canManageAssignments(selectedProject)) && (
                       <td className="px-6 py-4 whitespace-nowrap">
                         {selectedProject !== 'all' && (
                           <input
@@ -947,7 +961,7 @@ const ManageAccessPage = () => {
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                           />
                         )}
-                        {selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager') && userAssignments.length === 0 && (
+                        {selectedProject === 'all' && canManageAssignments(selectedProject) && (
                           <div className="w-4 h-4"></div>
                         )}
                       </td>
@@ -1007,37 +1021,63 @@ const ManageAccessPage = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                       {new Date(user.created_at).toLocaleDateString()}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex flex-wrap gap-1">
-                        {userAssignments.slice(0, 2).map((assignment) => (
-                          <button
-                            key={`${assignment.project_id}-${assignment.role_id}`}
-                            onClick={() => handleShowUserDetails(user)}
-                            className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 hover:bg-green-200 transition-colors cursor-pointer"
-                          >
-                            {assignment.project_name} ({assignment.role_name})
-                          </button>
-                        ))}
+                    <td className="px-6 py-4">
+                      <div className="flex flex-wrap gap-1 items-center">
+                        {userAssignments.slice(0, 2).map((assignment) => {
+                          const displayText = `${assignment.project_name} (${assignment.role_name})`;
+                          const truncatedText = displayText.length > 20 
+                            ? `${displayText.substring(0, 20)}...` 
+                            : displayText;
+                          
+                          return (
+                            <button
+                              key={`${assignment.project_id}-${assignment.role_id}`}
+                              onClick={() => handleShowUserDetails(user)}
+                              className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 hover:bg-green-200 transition-colors cursor-pointer max-w-[180px]"
+                              title={displayText}
+                            >
+                              <span className="truncate">{truncatedText}</span>
+                            </button>
+                          );
+                        })}
+                        
                         {userAssignments.length > 2 && (
-                          <button
-                            onClick={() => handleShowUserDetails(user)}
-                            className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
-                          >
-                            +{userAssignments.length - 2} more
-                          </button>
+                          <div className="relative group">
+                            <button
+                              onClick={() => handleShowUserDetails(user)}
+                              className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
+                            >
+                              +{userAssignments.length - 2} more
+                            </button>
+                            
+                            {/* Tooltip on hover */}
+                            <div className="absolute left-0 top-full mt-1 hidden group-hover:block z-50 w-max max-w-xs">
+                              <div className="bg-gray-900 text-white text-xs rounded-lg p-2 shadow-lg">
+                                <div className="space-y-1">
+                                  {userAssignments.slice(2).map((assignment, idx) => (
+                                    <div key={idx} className="whitespace-nowrap">
+                                      • {assignment.project_name} ({assignment.role_name})
+                                    </div>
+                                  ))}
+                                </div>
+                                <div className="absolute -top-1 left-4 w-2 h-2 bg-gray-900 transform rotate-45"></div>
+                              </div>
+                            </div>
+                          </div>
                         )}
+                        
                         {userAssignments.length === 0 && (
                           <span className="text-xs text-gray-500">No assignments</span>
                         )}
                       </div>
                     </td>
                     
-                    {/* Show assignment controls for unassigned users in "All Projects" view (Admin/Manager only) */}
-                    {selectedProject === 'all' && (effectiveRole === 'Admin' || effectiveRole === 'Manager') && userAssignments.length === 0 && (
+                    {/* Show assignment controls based on canManageAssignments permission */}
+                    {selectedProject === 'all' && canManageAssignments(selectedProject) && (
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <div className="flex items-center justify-between gap-4 w-full">
                           
-                          {/* Project and Role Selection for unassigned users */}
+                          {/* Project and Role Selection for all users */}
                           <div className="flex items-center gap-3 flex-wrap max-w-[70%]">
                             <div className="min-w-[140px]">
                               <ProjectSelect
@@ -1060,23 +1100,32 @@ const ManageAccessPage = () => {
                                 <SelectContent>
                                   <SelectGroup>
                                     <SelectLabel>Roles</SelectLabel>
-                                    {rolesData.map((r) => (
-                                      <SelectItem key={r.id} value={r.id}>
-                                        {r.name}
-                                      </SelectItem>
-                                    ))}
+                                    {rolesData.map((r) => {
+                                      const disabled = isRoleDisabled(effectiveRole, r.name);
+                                      return (
+                                        <SelectItem 
+                                          key={r.id} 
+                                          value={r.id}
+                                          disabled={disabled}
+                                          className={disabled ? "opacity-50 cursor-not-allowed" : ""}
+                                          title={disabled ? getDisabledRoleMessage(r.name) : undefined}
+                                        >
+                                          {r.name}
+                                        </SelectItem>
+                                      );
+                                    })}
                                   </SelectGroup>
                                 </SelectContent>
                               </Select>
                             </div>
                           </div>
 
-                          {/* Assign Button for unassigned users */}
+                          {/* Assign and Remove Buttons */}
                           <div className="flex items-center gap-2 shrink-0">
                             <button
                               onClick={() => handlePerUserAssignment(user.id)}
                               disabled={!perUserProject[user.id] || !perUserRole[user.id]}
-                              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                              className={`px-3 py-1 rounded text-xs font-medium transition-colors flex items-center ${
                                 perUserProject[user.id] && perUserRole[user.id]
                                   ? "bg-blue-600 text-white hover:bg-blue-700"
                                   : "bg-gray-300 text-gray-500 cursor-not-allowed"
@@ -1086,6 +1135,16 @@ const ManageAccessPage = () => {
                               <Plus className="w-4 h-4 mr-1" />
                               Assign
                             </button>
+                            
+                            {userAssignments.length > 0 && (
+                              <button
+                                onClick={() => handleRemoveAllUserAssignments(user.id)}
+                                className="p-1 text-red-600 hover:text-red-900 hover:bg-red-50 rounded transition-colors"
+                                title="Remove from all projects"
+                              >
+                                <UserX className="w-4 h-4" />
+                              </button>
+                            )}
                           </div>
 
                         </div>

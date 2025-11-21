@@ -15,6 +15,7 @@ export interface ActivityItem {
   time: string;
   project?: string;
   priority: string;
+  priorityColor?: string;
   assignedTo: string;
   creator?: {
     id: string;

@@ -35,6 +35,7 @@ interface TicketItem {
   status: string;
   status_id?: string;
   priority: string;
+  priorityColor?: string;
   priority_id?: string;
   assignedTo?: string;
   createdBy?: string;
@@ -509,11 +510,14 @@ const DragDropTicketBoard: React.FC<DragDropTicketBoardProps> = ({
           <div className="flex items-center space-x-2">
             <GripVertical className="w-4 h-4 text-gray-400" />
             {ticket.priority && (
-              <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                ticket.priority === 'High' ? 'bg-red-100 text-red-800' :
-                ticket.priority === 'Medium' ? 'bg-yellow-100 text-yellow-800' :
-                'bg-green-100 text-green-800'
-              }`}>
+              <span 
+                className="text-xs px-2 py-1 rounded-full font-medium"
+                style={{
+                  backgroundColor: `${ticket.priorityColor || '#6B7280'}20`,
+                  color: ticket.priorityColor || '#6B7280',
+                  border: `1px solid ${ticket.priorityColor || '#6B7280'}40`
+                }}
+              >
                 {ticket.priority}
               </span>
             )}

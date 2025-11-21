@@ -149,27 +149,27 @@ export async function POST(req: NextRequest) {
     
     console.log(`✅ Sent ${successCount}/${mentionedUserIds.length} mention notification emails`);
 
-    // Store notification records in database (optional - for notification history)
+    // Store notification records in database
     try {
       const notifications = mentionedUsers.map(user => ({
         user_id: user.id,
-        type: 'mention',
+        entity_type: 'ticket',
+        entity_id: ticketId,
+        type: 'info',
         title: `You were mentioned in a comment`,
         message: `${commenter.name} mentioned you in a comment on "${ticket.title}"`,
-        related_ticket_id: ticketId,
-        related_comment_id: commentId,
-        created_at: new Date().toISOString(),
-        read: false
+        is_read: false
       }));
 
-      // Note: You might need to create a notifications table for this
-      // const { error: notificationError } = await supabase
-      //   .from('notifications')
-      //   .insert(notifications);
+      const { error: notificationError } = await supabase
+        .from('notifications')
+        .insert(notifications);
       
-      // if (notificationError) {
-      //   console.error('Error storing notifications:', notificationError);
-      // }
+      if (notificationError) {
+        console.error('Error storing notifications:', notificationError);
+      } else {
+        console.log(`✅ Created ${notifications.length} in-app notifications for mentions`);
+      }
     } catch (notificationError) {
       console.error('Error storing notification records:', notificationError);
       // Non-critical error, don't fail the request

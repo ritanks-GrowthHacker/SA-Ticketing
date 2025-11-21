@@ -431,18 +431,44 @@ export async function POST(req: Request) {
 				}
 			}
 
-			// Optionally send notification emails (best-effort)
-			if (notifyList.length > 0) {
-				for (const n of notifyList) {
-					try {
-						await sendTeamAssignmentEmail(n.email, project.name, n.roleName, n.name);
-					} catch (emailErr) {
-						console.warn("Failed to send assignment email to", n.email, emailErr);
-					}
-				}
+		// Optionally send notification emails and create in-app notifications (best-effort)
+		if (notifyList.length > 0) {
+			// Create in-app notifications for all assigned users
+			const inAppNotifications = notifyList.map(n => {
+				// Find the corresponding assignment to get user_id
+				const assignment = toUpsert.find(entry => {
+					// Match by checking if this user's info matches the notifyList entry
+					// We need to find the user_id that corresponds to this email
+					return true; // We'll use a different approach
+				});
+
+				return {
+					user_id: toUpsert[notifyList.indexOf(n)]?.user_id, // Match by index since they were added in same order
+					entity_type: 'project',
+					entity_id: project.id,
+					type: 'info',
+					title: 'Added to Project',
+					message: `You have been added to project "${project.name}" as ${n.roleName}`,
+					is_read: false
+				};
+			}).filter(notif => notif.user_id); // Filter out any without user_id
+
+			try {
+				await supabase.from('notifications').insert(inAppNotifications);
+				console.log(`✅ Created ${inAppNotifications.length} in-app notifications for project assignments`);
+			} catch (notifErr) {
+				console.warn('Failed to create in-app notifications:', notifErr);
 			}
 
-			return NextResponse.json({ message: "Assignments processed successfully", assignments: processed }, { status: 200 });
+			// Send email notifications
+			for (const n of notifyList) {
+				try {
+					await sendTeamAssignmentEmail(n.email, project.name, n.roleName, n.name);
+				} catch (emailErr) {
+					console.warn("Failed to send assignment email to", n.email, emailErr);
+				}
+			}
+		}			return NextResponse.json({ message: "Assignments processed successfully", assignments: processed }, { status: 200 });
 
 	} catch (error) {
 		console.error("create-project-user-relation error:", error);
