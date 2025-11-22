@@ -38,9 +38,26 @@ export async function PUT(request: NextRequest) {
     const user_id = decodedToken.sub || decodedToken.userId; // Get user ID from token
     
     const body = await request.json();
-    const { doc_id, title, content, visibility, is_public } = body;
+    const { 
+      doc_id, 
+      title, 
+      content, 
+      visibility, 
+      is_public,
+      file_url,
+      file_name,
+      file_type,
+      file_size
+    } = body;
 
-    console.log('📝 Request data:', { doc_id, user_id, title, visibility, is_public });
+    console.log('📝 Request data:', { 
+      doc_id, 
+      user_id, 
+      title, 
+      visibility, 
+      is_public,
+      has_file: !!file_url 
+    });
 
     // Validate required fields
     if (!doc_id) {
@@ -69,76 +86,65 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // Check user's organization role first
+    // Check user's project role
+    console.log('🔍 Checking current user project role');
     let userRole = 'Member'; // Default role
     
-    const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization_roles')
+    const { data: userProjectRole, error: userProjectError } = await supabase
+      .from('user_project')
       .select(`
+        user_id,
+        project_id,
         role_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
+        global_roles!inner(id, name)
       `)
       .eq('user_id', user_id)
-      .eq('organization_id', decodedToken.org_id)
+      .eq('project_id', existingDoc.project_id)
       .single();
 
-    if (userOrgRole && userOrgRole.global_roles) {
-      userRole = (userOrgRole.global_roles as any).name;
-      console.log('✅ User organization role:', userRole);
-    }
+    console.log('🔍 User project role query:', { userProjectRole, userProjectError });
 
-    // Check access: Admin (org-level) OR Project team member
-    let hasAccess = false;
-    
-    if (userRole === 'Admin') {
-      console.log('✅ Admin user - can update any document');
-      hasAccess = true;
+    if (userProjectRole?.global_roles) {
+      userRole = (userProjectRole.global_roles as any)?.name || 'Member';
+      console.log('✅ User project role:', userRole);
     } else {
-      // For non-admin users, check project team membership
-      const { data: userProject, error: userProjectError } = await supabase
-        .from('user_project')
-        .select(`
-          user_id,
-          project_id,
-          role_id,
-          global_roles!user_project_role_id_fkey(id, name)
-        `)
-        .eq('user_id', user_id)
-        .eq('project_id', existingDoc.project_id)
-        .single();
-
-      if (!userProjectError && userProject) {
-        hasAccess = true;
-        console.log('✅ User is project team member - can update documents');
+      // User not in user_project table - check if they're the document author
+      if (existingDoc.author_id === user_id) {
+        console.log('⚠️ User not in user_project but is document author - allowing access');
+        userRole = 'Member'; // Treat as member, can edit own doc
       } else {
-        console.log('❌ User not assigned to project and not Admin:', userProjectError);
+        console.log('❌ User not assigned to project and not document author');
+        return NextResponse.json(
+          { error: 'User does not have access to this project' },
+          { status: 403 }
+        );
       }
     }
 
-    if (!hasAccess) {
-      return NextResponse.json(
-        { error: 'Access denied. Only project team members and organization admins can update documents.' },
-        { status: 403 }
-      );
-    }
+    console.log('✅ User has access to project');
 
-    console.log('✅ User has access to update documents in project');
 
-    // Get author's role to enforce hierarchy
+    // Get author's project role to enforce hierarchy
+    console.log('🔍 Checking document author project role');
     let authorRole = 'Member'; // Default role
     
-    const { data: authorOrgRole } = await supabase
-      .from('user_organization_roles')
+    const { data: authorProjectRole } = await supabase
+      .from('user_project')
       .select(`
+        user_id,
+        project_id,
         role_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
+        global_roles!inner(id, name)
       `)
       .eq('user_id', existingDoc.author_id)
-      .eq('organization_id', decodedToken.org_id)
+      .eq('project_id', existingDoc.project_id)
       .single();
 
-    if (authorOrgRole && authorOrgRole.global_roles) {
-      authorRole = (authorOrgRole.global_roles as any).name;
+    if (authorProjectRole?.global_roles) {
+      authorRole = (authorProjectRole.global_roles as any)?.name || 'Member';
+      console.log('✅ Author project role:', authorRole);
+    } else {
+      console.log('⚠️ Author role not found, using default Member');
     }
 
     // Check edit permissions based on role hierarchy
@@ -161,6 +167,13 @@ export async function PUT(request: NextRequest) {
     if (content !== undefined) updateData.content = content;
     if (visibility !== undefined) updateData.visibility = visibility;
     if (is_public !== undefined) updateData.is_public = is_public;
+    if (file_url !== undefined) {
+      updateData.file_url = file_url;
+      updateData.file_name = file_name;
+      updateData.file_type = file_type;
+      updateData.file_size = file_size;
+      updateData.has_file = !!file_url;
+    }
 
     // Update the document
     const { data: updatedDoc, error: updateError } = await supabase
@@ -201,6 +214,9 @@ export async function PUT(request: NextRequest) {
 }
 
 // Helper function to determine update permissions based on RBAC rules
+// Project Admin can delete/edit anyone's documents in their project
+// Project Manager can delete/edit anyone's documents EXCEPT other Managers in their project
+// Member can only delete/edit their own documents
 function getUpdatePermission(
   authorId: string, 
   currentUserId: string, 
@@ -215,9 +231,9 @@ function getUpdatePermission(
     authorRole
   });
   
-  // Rule 1: Admin can edit anyone's documents
+  // Rule 1: Project Admin can edit anyone's documents in the project
   if (currentUserRole === 'Admin') {
-    console.log('✅ RULE 1: Admin can edit any document');
+    console.log('✅ RULE 1: Project Admin can edit any document');
     return true;
   }
   
@@ -227,21 +243,18 @@ function getUpdatePermission(
     return true;
   }
   
-  // Rule 3: Documents created by Admin cannot be edited by anyone else
-  if (authorRole === 'Admin' && currentUserId !== authorId) {
-    console.log('❌ RULE 3: Document created by Admin - cannot be edited by non-Admin');
-    return false;
-  }
-  
-  // Rule 4: Manager can edit documents of normal users (Member, Viewer)
+  // Rule 3: Project Manager can edit documents of Members/Viewers, but NOT other Managers
   if (currentUserRole === 'Manager') {
-    const normalUserRoles = ['Member', 'Viewer'];
-    if (normalUserRoles.includes(authorRole)) {
-      console.log('✅ RULE 4: Manager editing document from Member/Viewer');
-      return true;
-    } else {
-      console.log('❌ RULE 4: Manager cannot edit document from role:', authorRole);
+    if (authorRole === 'Manager') {
+      console.log('❌ RULE 3: Manager cannot edit another Manager\'s document');
+      return false;
     }
+    if (authorRole === 'Admin') {
+      console.log('❌ RULE 3: Manager cannot edit Admin\'s document');
+      return false;
+    }
+    console.log('✅ RULE 3: Manager editing document from Member/Viewer');
+    return true;
   }
   
   console.log('❌ NO RULES MATCHED - PERMISSION DENIED');

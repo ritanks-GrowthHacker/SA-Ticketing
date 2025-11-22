@@ -44,14 +44,38 @@ export async function POST(request: NextRequest) {
     console.log('🔧 Author ID extracted:', author_id);
     
     const body = await request.json();
-    const { project_id, title, content, visibility = 'project', is_public = false } = body;
+    const { 
+      project_id, 
+      title, 
+      content, 
+      visibility = 'project', 
+      is_public = false,
+      file_url,
+      file_name,
+      file_type,
+      file_size
+    } = body;
 
-    console.log('📝 Request data:', { project_id, author_id, title, visibility, is_public });
+    console.log('📝 Request data:', { 
+      project_id, 
+      author_id, 
+      title, 
+      visibility, 
+      is_public, 
+      has_file: !!file_url 
+    });
 
-    // Validate required fields
-    if (!project_id || !title || !content) {
+    // Validate required fields - either content or file must be provided
+    if (!project_id || !title) {
       return NextResponse.json(
-        { error: 'Missing required fields: project_id, title, content' },
+        { error: 'Missing required fields: project_id, title' },
+        { status: 400 }
+      );
+    }
+
+    if (!content && !file_url) {
+      return NextResponse.json(
+        { error: 'Either content or file must be provided' },
         { status: 400 }
       );
     }
@@ -148,6 +172,11 @@ export async function POST(request: NextRequest) {
         content,
         visibility,
         is_public,
+        file_url,
+        file_name,
+        file_type,
+        file_size,
+        has_file: !!file_url,
         updated_by: author_id
       })
       .select(`

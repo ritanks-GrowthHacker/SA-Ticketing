@@ -77,10 +77,18 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get('project_id');
+    const departmentId = searchParams.get('department_id'); // Get department from URL
     const statusId = searchParams.get('status_id');
     const priorityId = searchParams.get('priority_id');
     const metricType = searchParams.get('type') || 'overview'; // overview, project, team
     const testMode = searchParams.get('test') === 'true'; // Test mode bypass
+    
+    console.log('📊 ADMIN API: Received parameters:', { 
+      projectId, 
+      departmentId, 
+      statusId, 
+      priorityId 
+    });
     
     // Pagination parameters
     const page = parseInt(searchParams.get('page') || '1');
@@ -186,8 +194,8 @@ export async function GET(req: Request) {
       .eq('user_id', userId)
       .eq('organization_id', organizationId);
 
-    // Use current department from JWT if available, otherwise fallback to users table
-    let userDepartmentId = currentDepartmentId;
+    // Use current department from JWT if available, then URL parameter, then fallback to users table
+    let userDepartmentId = departmentId || currentDepartmentId; // Prioritize URL parameter
     if (!userDepartmentId) {
       const { data: userData } = await supabase
         .from('users')
@@ -196,6 +204,12 @@ export async function GET(req: Request) {
         .maybeSingle();
       userDepartmentId = userData?.department_id;
     }
+    
+    console.log('🔍 ADMIN API: Department resolution:', {
+      fromURL: departmentId,
+      fromJWT: currentDepartmentId,
+      final: userDepartmentId
+    });
 
     // ROLE PRIORITY: project role > department role > org role (PROJECT-BASED SYSTEM)
     let actualUserRole = projectRole || departmentRole || orgRole || tokenData.role || 'Member';

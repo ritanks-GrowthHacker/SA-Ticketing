@@ -213,18 +213,19 @@ export interface ProjectDocument {
   title: string;
   content?: string;
   file_url?: string;
+  file_name?: string;
   file_type?: string;
   file_size?: number;
-  version: number;
-  is_active: boolean;
-  created_by: string;
+  has_file?: boolean;
+  visibility?: string;
+  is_public?: boolean;
+  author_id: string;
   updated_by?: string;
-  organization_id: string;
   created_at: string;
   updated_at: string;
   // Joined data
   project?: Project;
-  creator?: User; // created_by user
+  author?: User; // author_id user
   updater?: User; // updated_by user
 }
 

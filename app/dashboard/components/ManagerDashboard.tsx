@@ -35,7 +35,7 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
     await fetchProjects();
     await fetchDashboardMetrics(true);
   };
-  const { token, organization, roles, currentProject, switchProject } = useAuthStore();
+  const { token, organization, roles, currentProject, currentDepartment, switchProject } = useAuthStore();
   
   // Get project role from JWT
   const projectRole = currentProject?.role || 'Manager';
@@ -53,6 +53,7 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
   } = useDashboardStore();
   
   const [selectedProject, setSelectedProject] = useState(projectId || '');
+  const [selectedDepartment, setSelectedDepartment] = useState<string>(currentDepartment?.id || '');
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState<string | undefined>(undefined);
@@ -68,10 +69,21 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
   // Pending access state
   const [pendingAccess, setPendingAccess] = useState(false);
   
+  // Update selectedDepartment when currentDepartment changes
+  useEffect(() => {
+    if (currentDepartment?.id) {
+      setSelectedDepartment(currentDepartment.id);
+      console.log('🏢 ManagerDashboard: Department initialized/changed to', currentDepartment.name, currentDepartment.id);
+    }
+  }, [currentDepartment?.id]);
+  
   // Handle project change from the filter component
   const handleProjectChange = async (projectId: string, departmentId?: string) => {
     try {
       setSelectedProject(projectId);
+      if (departmentId) {
+        setSelectedDepartment(departmentId);
+      }
       
       // Call the switch project API to rebuild JWT
       const response = await fetch('/api/switch-project', {
@@ -721,6 +733,15 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
           </div>
         </div>
       </div>
+      
+      {/* Ticket Modal */}
+      <TicketModal
+        isOpen={isTicketModalOpen}
+        onClose={handleTicketModalClose}
+        ticketId={selectedTicketId}
+        onSuccess={() => fetchDashboardMetrics(true)}
+        departmentId={selectedDepartment}
+      />
     </div>
   );
 };

@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
       requested_by: decoded.sub,
       requested_user_id: req.user_id,
       user_department_id: req.department_id,
+      requested_role_id: req.role_id || null, // Add role_id field
       message: req.message || null,
       status: 'pending'
     }));

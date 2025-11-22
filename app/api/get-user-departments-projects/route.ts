@@ -77,22 +77,20 @@ export async function GET(request: NextRequest) {
       }
 
       // Format as admin with full access
-      userProjects = (allDeptProjects || []).map((project: any) => {
-        const projectDept = project.project_department?.[0];
-        return {
-          projects: {
-            id: project.id,
-            name: project.name,
-            organization_id: project.organization_id,
-            created_at: project.created_at,
-            project_department: project.project_department
-          },
-          global_roles: { name: 'Admin', id: null }
-        };
-      });
+      userProjects = (allDeptProjects || []).map((project: any) => ({
+        projects: {
+          id: project.id,
+          name: project.name,
+          organization_id: project.organization_id,
+          created_at: project.created_at,
+          project_department: project.project_department
+        },
+        global_roles: { name: 'Admin', id: null }
+      }));
 
     } else {
       // Department Manager or Regular User: Get only projects they're assigned to
+      // DON'T filter by currentDepartmentId - user can be in multiple departments via user_department_roles
       const { data: assignedProjects, error: projectsError } = await supabase
         .from('user_project')
         .select(`
@@ -102,7 +100,7 @@ export async function GET(request: NextRequest) {
             name,
             organization_id,
             created_at,
-            project_department(
+            project_department!inner(
               department_id,
               departments(id, name)
             )

@@ -97,9 +97,10 @@ interface TicketModalProps {
   onClose: () => void;
   ticketId?: string;
   onSuccess?: () => void;
+  departmentId?: string; // Filter projects by department
 }
 
-const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, onSuccess }) => {
+const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, onSuccess, departmentId }) => {
   const { token, role, isAuthenticated, user } = useAuthStore();
   const isEditMode = !!ticketId;
   
@@ -214,7 +215,14 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
 
   const fetchProjects = async () => {
     try {
-      const response = await fetch('/api/get-all-projects', {
+      // Build URL with department filter if provided
+      const url = departmentId 
+        ? `/api/get-all-projects?department_id=${departmentId}`
+        : '/api/get-all-projects';
+      
+      console.log('🎫 TicketModal: Fetching projects with department filter:', departmentId);
+      
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -224,6 +232,7 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
       if (response.ok) {
         const data = await response.json();
         setProjects(data.projects || []);
+        console.log('✅ TicketModal: Projects loaded:', data.projects?.length);
       }
     } catch (error) {
       console.error('Error fetching projects:', error);

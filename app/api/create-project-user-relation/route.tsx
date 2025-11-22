@@ -425,6 +425,123 @@ export async function POST(req: Request) {
 
 					if (inserted && inserted.length > 0) {
 						processed.push(inserted[0]);
+						
+						// 🎯 AUTO-ADD USER TO PROJECT'S DEPARTMENT
+						// Get project's department
+						const { data: projectDept } = await supabase
+							.from("project_department")
+							.select("department_id")
+							.eq("project_id", entry.project_id)
+							.single();
+						
+						if (projectDept?.department_id) {
+							// Check if user already has department role
+							const { data: existingDeptRole } = await supabase
+								.from("user_department_roles")
+								.select("user_id")
+								.eq("user_id", entry.user_id)
+								.eq("department_id", projectDept.department_id)
+								.maybeSingle();
+							
+							if (!existingDeptRole) {
+								// Add user to department with Member role (default for cross-dept assignments)
+								const { data: memberRole } = await supabase
+									.from("global_roles")
+									.select("id")
+									.eq("name", "Member")
+									.single();
+								
+								if (memberRole) {
+									const { error: deptInsertError } = await supabase.from("user_department_roles").insert({
+										user_id: entry.user_id,
+										department_id: projectDept.department_id,
+										organization_id: decodedToken.org_id,
+										role_id: memberRole.id
+									});
+									
+									if (!deptInsertError) {
+										console.log(`✅ Auto-added user ${entry.user_id} to department ${projectDept.department_id}`);
+										
+										// 🔥 REBUILD JWT FOR THIS USER with new department access
+										try {
+											// Get user's all departments now (including newly added)
+											const { data: userDepts } = await supabase
+												.from("user_department_roles")
+												.select(`
+													department_id,
+													role_id,
+													departments!inner(id, name),
+													global_roles!user_department_roles_role_id_fkey(id, name)
+												`)
+												.eq("user_id", entry.user_id)
+												.eq("organization_id", decodedToken.org_id);
+											
+											// Get user info
+											const { data: userData } = await supabase
+												.from("users")
+												.select("id, email, name")
+												.eq("id", entry.user_id)
+												.single();
+											
+											// Get org info
+											const { data: orgData } = await supabase
+												.from("organizations")
+												.select("id, name, domain")
+												.eq("id", decodedToken.org_id)
+												.single();
+											
+											if (userData && orgData && userDepts && userDepts.length > 0) {
+												// Build departments array for JWT
+												const departments = userDepts.map((ud: any) => ({
+													id: ud.departments.id,
+													name: ud.departments.name,
+													role: ud.global_roles?.name || 'Member'
+												}));
+												
+												// Use the newly added department as current department
+												const currentDept = departments.find((d: any) => d.id === projectDept.department_id);
+												
+												// Build new JWT
+												const newToken = jwt.sign(
+													{
+														sub: userData.id,
+														email: userData.email,
+														name: userData.name,
+														org_id: orgData.id,
+														org_name: orgData.name,
+														org_domain: orgData.domain,
+														department_id: currentDept?.id,
+														department_name: currentDept?.name,
+														department_role: currentDept?.role,
+														departments: departments,
+														role: currentDept?.role || 'Member',
+														roles: departments.map((d: any) => d.role)
+													},
+													process.env.JWT_SECRET!,
+													{ expiresIn: '7d' }
+												);
+												
+												// Store new token for this user (they'll get it on next login or we can push via notification)
+												console.log(`✅ Rebuilt JWT for user ${entry.user_id} with new department access`);
+												
+												// Send in-app notification with refresh instruction
+												await supabase.from("notifications").insert({
+													user_id: entry.user_id,
+													type: "department_added",
+													title: "New Department Access",
+													message: `You now have access to ${currentDept?.name} department. Please refresh the page to see updated projects.`,
+													entity_type: "department",
+													entity_id: projectDept.department_id,
+													created_at: new Date().toISOString()
+												});
+											}
+										} catch (jwtError) {
+											console.error("Error rebuilding JWT:", jwtError);
+										}
+									}
+								}
+							}
+						}
 					}
 				} catch (e) {
 					console.error("Error processing assignment entry", e);

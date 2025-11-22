@@ -149,11 +149,27 @@ export async function GET(req: Request) {
       );
     }
 
-    // If user has org-level Admin role, also get all org projects (not just assigned ones)
-    let orgAdminProjects: any[] = [];
+    console.log(`✅ Found ${userProjects?.length || 0} directly assigned projects from user_project table`);
+    console.log(`📋 Assigned projects:`, userProjects?.map((up: any) => ({
+      id: up.project_id,
+      name: up.projects?.name,
+      role: up.global_roles?.name
+    })));
+
+    // Get additional projects based on role
+    let additionalProjects: any[] = [];
     const isOrgAdmin = userOrgRoles?.some((r: any) => r.global_roles?.name === 'Admin');
+    const isDeptAdmin = userDeptRoles?.some((r: any) => r.global_roles?.name === 'Admin');
+    const isDeptManager = userDeptRoles?.some((r: any) => r.global_roles?.name === 'Manager');
+    
+    console.log(`🎭 Role Flags:`, { isOrgAdmin, isDeptAdmin, isDeptManager });
+    console.log(`📊 User Dept Roles:`, userDeptRoles?.map((dr: any) => ({
+      dept_id: dr.department_id,
+      role: dr.global_roles?.name
+    })));
     
     if (isOrgAdmin) {
+      // Org Admin: Get ALL organization projects
       const { data: allOrgProjects, error: orgProjectsError } = await supabase
         .from("projects")
         .select(`
@@ -179,26 +195,89 @@ export async function GET(req: Request) {
         .eq("organization_id", decodedToken.org_id);
 
       if (!orgProjectsError && allOrgProjects) {
-        orgAdminProjects = allOrgProjects;
+        additionalProjects = allOrgProjects;
+        console.log(`✅ Org Admin: Added ${allOrgProjects.length} org projects`);
+      }
+    } else if (isDeptAdmin || isDeptManager) {
+      // Department Admin/Manager: Get all projects from their departments
+      const deptIds = userDeptRoles?.map((r: any) => r.department_id) || [];
+      
+      if (deptIds.length > 0) {
+        const { data: deptProjectLinks, error: deptProjError } = await supabase
+          .from("project_department")
+          .select("project_id")
+          .in("department_id", deptIds);
+
+        if (!deptProjError && deptProjectLinks) {
+          const deptProjectIds = deptProjectLinks.map(dp => dp.project_id);
+          
+          if (deptProjectIds.length > 0) {
+            const { data: deptProjects, error: fetchError } = await supabase
+              .from("projects")
+              .select(`
+                id,
+                name,
+                description,
+                status_id,
+                created_at,
+                updated_at,
+                organization_id,
+                created_by,
+                organizations(id, name, domain),
+                users!projects_created_by_fkey(id, name, email),
+                project_statuses(
+                  id,
+                  name,
+                  description,
+                  color_code,
+                  sort_order,
+                  is_active
+                )
+              `)
+              .in("id", deptProjectIds)
+              .eq("organization_id", decodedToken.org_id);
+
+            if (!fetchError && deptProjects) {
+              additionalProjects = deptProjects;
+              console.log(`✅ Dept Admin/Manager: Added ${deptProjects.length} department projects`);
+            }
+          }
+        }
       }
     }
 
-    // Combine user-assigned projects with org admin projects (if applicable)
-    let allProjects: any[] = [];
+    // MERGE: Assigned projects + Department/Org projects (deduplicate by project ID)
+    const projectMap = new Map();
     
-    if (isOrgAdmin && orgAdminProjects.length > 0) {
-      // Org Admin sees ALL projects
-      allProjects = orgAdminProjects.map((proj: any) => ({
-        ...proj,
-        userRole: 'Admin' // Org admins have Admin role in all projects
-      }));
-    } else {
-      // Regular users see only assigned projects with their specific roles
-      allProjects = (userProjects || []).map((up: any) => ({
+    // First add user-assigned projects with their ACTUAL roles
+    (userProjects || []).forEach((up: any) => {
+      projectMap.set(up.project_id, {
         ...up.projects,
-        userRole: up.global_roles?.name || 'Member' // User's role in this specific project
-      }));
-    }
+        userRole: up.global_roles?.name || 'Member',
+        isDirectlyAssigned: true
+      });
+    });
+    
+    // Then add additional projects (department/org projects) with default role if not already present
+    additionalProjects.forEach((proj: any) => {
+      if (!projectMap.has(proj.id)) {
+        projectMap.set(proj.id, {
+          ...proj,
+          userRole: isDeptAdmin || isOrgAdmin ? 'Admin' : 'Manager',
+          isDirectlyAssigned: false
+        });
+      }
+    });
+    
+    let allProjects = Array.from(projectMap.values());
+    console.log(`✅ TOTAL MERGED PROJECTS: ${allProjects.length} (${userProjects?.length || 0} assigned + ${additionalProjects.length} from dept/org)`);
+    console.log(`📦 Final merged projects:`, allProjects.map((p: any) => ({
+      id: p.id,
+      name: p.name,
+      userRole: p.userRole,
+      isDirectlyAssigned: p.isDirectlyAssigned
+    })));
+
 
     // Apply search filter if provided
     if (search) {
@@ -227,6 +306,58 @@ export async function GET(req: Request) {
         // Filter to only show projects that belong to this department
         allProjects = allProjects.filter((proj: any) => deptProjectIds.includes(proj.id));
         console.log(`   After filtering: ${allProjects.length} projects`);
+      }
+    } else {
+      // When no department filter is applied (e.g., "All Projects" view)
+      // Include shared projects from shared_projects table
+      console.log(`🔍 GET-ALL-PROJECTS: Including shared projects for user's departments`);
+      
+      // Get all departments user belongs to
+      const userDepartmentIds = userDeptRoles?.map((dr: any) => dr.department_id) || [];
+      
+      if (userDepartmentIds.length > 0) {
+        const { data: sharedProjects, error: sharedError } = await supabase
+          .from('shared_projects')
+          .select(`
+            project_id,
+            department_id,
+            projects!inner(
+              id,
+              name,
+              description,
+              status_id,
+              created_at,
+              updated_at,
+              organization_id,
+              created_by,
+              organizations(id, name, domain),
+              users!projects_created_by_fkey(id, name, email),
+              project_statuses(
+                id,
+                name,
+                description,
+                color_code,
+                sort_order,
+                is_active
+              )
+            )
+          `)
+          .in('department_id', userDepartmentIds);
+
+        if (!sharedError && sharedProjects) {
+          // Add shared projects that aren't already in the list
+          const existingProjectIds = new Set(allProjects.map((p: any) => p.id));
+          const newSharedProjects = sharedProjects
+            .filter((sp: any) => !existingProjectIds.has(sp.project_id))
+            .map((sp: any) => ({
+              ...sp.projects,
+              userRole: 'Viewer', // Shared projects default to Viewer role
+              is_shared: true
+            }));
+          
+          allProjects = [...allProjects, ...newSharedProjects];
+          console.log(`   Added ${newSharedProjects.length} shared projects`);
+        }
       }
     }
 

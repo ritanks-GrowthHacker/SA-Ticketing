@@ -1,17 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabase } from '@/app/db/connections';
+import jwt from 'jsonwebtoken';
 
 export async function GET(request: NextRequest) {
   try {
+    // Verify authentication
+    const authHeader = request.headers.get('authorization');
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.error('❌ GET-RESOURCE-REQUESTS: No auth header');
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const token = authHeader.substring(7);
+    try {
+      jwt.verify(token, process.env.JWT_SECRET!);
+    } catch (error) {
+      console.error('❌ GET-RESOURCE-REQUESTS: Invalid token');
+      return NextResponse.json(
+        { error: 'Invalid token' },
+        { status: 401 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const projectId = searchParams.get('projectId');
 
     if (!projectId) {
+      console.error('❌ GET-RESOURCE-REQUESTS: No project ID');
       return NextResponse.json(
         { error: 'Project ID is required' },
         { status: 400 }
       );
     }
+
+    console.log('🔍 GET-RESOURCE-REQUESTS: Fetching for project:', projectId);
 
     // Get all resource requests for this project
     const { data: requests, error } = await supabase
@@ -35,12 +60,14 @@ export async function GET(request: NextRequest) {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Error fetching resource requests:', error);
+      console.error('❌ GET-RESOURCE-REQUESTS: Supabase error:', error);
       return NextResponse.json(
-        { error: 'Failed to fetch resource requests' },
+        { error: 'Failed to fetch resource requests', details: error.message },
         { status: 500 }
       );
     }
+
+    console.log(`✅ GET-RESOURCE-REQUESTS: Found ${requests?.length || 0} requests`);
 
     // Format the response
     const formattedRequests = (requests || []).map((req: any) => ({

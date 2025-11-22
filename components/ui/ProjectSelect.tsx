@@ -74,30 +74,37 @@ export const ProjectSelect: React.FC<ProjectSelectProps> = ({
       setLoading(true);
       setError(null);
 
-      // Build URL with department filter if available
+      // Don't filter by department - API returns all projects user is assigned to
+      // This allows users to see projects from other departments they've been added to
       const url = new URL('/api/get-all-projects', window.location.origin);
       url.searchParams.append('format', 'dropdown');
-      if (currentDepartment?.id) {
-        url.searchParams.append('department_id', currentDepartment.id);
-        console.log(`🔍 PROJECT SELECT: Filtering by department ${currentDepartment.name} (${currentDepartment.id})`);
-      }
+      
+      console.log(`🔍 PROJECT SELECT: Fetching all assigned projects for user`);
+      console.log(`🔍 PROJECT SELECT: URL = ${url.toString()}`);
+      console.log(`🔍 PROJECT SELECT: Has Token = ${!!authToken}`);
 
       const response = await fetch(url.toString(), {
         headers: {
           'Authorization': `Bearer ${authToken}`,
           'Content-Type': 'application/json'
-        }
+        },
+        cache: 'no-store' // Force fresh data, don't use cache
       });
+
+      console.log(`🔍 PROJECT SELECT: Response status = ${response.status}`);
 
       if (response.ok) {
         const data = await response.json();
+        console.log(`✅ PROJECT SELECT: API Response =`, data);
         setProjects(data.projects || []);
+        console.log(`✅ PROJECT SELECT: Loaded ${data.projects?.length || 0} projects`);
       } else {
         const errorData = await response.json();
+        console.error(`❌ PROJECT SELECT: Error =`, errorData);
         setError(errorData.error || 'Failed to fetch projects');
       }
     } catch (error) {
-      console.error('Error fetching projects:', error);
+      console.error('❌ PROJECT SELECT: Network error:', error);
       setError('Network error occurred');
     } finally {
       setLoading(false);

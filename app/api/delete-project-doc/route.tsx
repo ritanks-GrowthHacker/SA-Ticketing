@@ -91,140 +91,76 @@ export async function DELETE(request: NextRequest) {
     // Check user's organization role first
     console.log('🔍 STEP 2: Checking CURRENT USER role');
     let userRole = 'Member'; // Default role
+    let isProjectAdmin = false;
+    let isProjectManager = false;
     
-    const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization_roles')
+    // First check if user is Project Admin or Project Manager
+    const { data: userProjectRole, error: userProjectError } = await supabase
+      .from('user_project')
       .select(`
+        user_id,
+        project_id,
         role_id,
-        global_roles!inner(name)
+        global_roles!inner(id, name)
       `)
       .eq('user_id', user_id)
-      .eq('organization_id', decodedToken.org_id)
+      .eq('project_id', existingDoc.project_id)
       .single();
 
-    if (userOrgRole && userOrgRole.global_roles) {
-      userRole = (userOrgRole.global_roles as any).name;
-      console.log('✅ CURRENT USER ORGANIZATION ROLE:', userRole);
-    } else {
-      console.log('❌ CURRENT USER: No organization role found, keeping default:', userRole);
-    }
+    console.log('🔍 User project role query:', { userProjectRole, userProjectError });
 
-    // Check project access based on role hierarchy
-    if (userRole !== 'Admin') {
-      // Managers have organization-wide access, Members/Viewers need project assignment
-      if (userRole === 'Manager') {
-        console.log('✅ MANAGER USER: Has organization-wide access to projects');
-        // Manager keeps their organization role for permission checks
+    if (userProjectRole?.global_roles) {
+      const projectRole = (userProjectRole.global_roles as any)?.name || 'Member';
+      console.log('✅ User project role:', projectRole);
+      
+      if (projectRole === 'Admin') {
+        isProjectAdmin = true;
+        userRole = 'Admin'; // Project Admin
+      } else if (projectRole === 'Manager') {
+        isProjectManager = true;
+        userRole = 'Manager'; // Project Manager
       } else {
-        // For Members/Viewers, check if they're assigned to this specific project
-        const { data: userProject, error: userProjectError } = await supabase
-          .from('user_project')
-          .select(`
-            user_id,
-            project_id,
-            role_id,
-            global_roles!inner(id, name)
-          `)
-          .eq('user_id', user_id)
-          .eq('project_id', existingDoc.project_id)
-          .single();
-
-        if (userProjectError || !userProject) {
-          console.log('❌ Member/Viewer not assigned to project:', userProjectError);
-          return NextResponse.json(
-            { error: 'User does not have access to this project' },
-            { status: 403 }
-          );
-        }
-
-        // Use project-specific role if available
-        userRole = (userProject.global_roles as any)?.name || 'Member';
-        console.log('✅ User project role:', userRole);
+        userRole = projectRole;
+      }
+    } else {
+      // User not in user_project table - check if they're the document author
+      if (existingDoc.author_id === user_id) {
+        console.log('⚠️ User not in user_project but is document author - allowing access');
+        userRole = 'Member'; // Treat as member, can delete own doc
+      } else {
+        console.log('❌ User not assigned to project and not document author');
+        return NextResponse.json(
+          { error: 'User does not have access to this project' },
+          { status: 403 }
+        );
       }
     }
+    
+    console.log('✅ User role determined:', { userRole, isProjectAdmin, isProjectManager });
 
-    // Get author's organization role first - check multiple sources
+    // Get author's project role
     console.log('🔍 STEP 3: Checking DOCUMENT AUTHOR role');
     let authorRole = 'Member'; // Default role
     
-    console.log('🔍 AUTHOR DETAILS: Checking role for user:', existingDoc.author_id, 'in org:', decodedToken.org_id);
-    
-    // Method 1: Check user_organization_roles table
-    const { data: authorOrgRole, error: authorOrgRoleError } = await supabase
-      .from('user_organization_roles')
+    const { data: authorProjectRole, error: authorProjectError } = await supabase
+      .from('user_project')
       .select(`
+        user_id,
+        project_id,
         role_id,
-        global_roles!inner(name)
+        global_roles!inner(id, name)
       `)
       .eq('user_id', existingDoc.author_id)
-      .eq('organization_id', decodedToken.org_id)
+      .eq('project_id', existingDoc.project_id)
       .single();
 
-    console.log('🔍 AUTHOR ORG ROLE QUERY RESULT:', { 
-      authorOrgRole, 
-      authorOrgRoleError,
-      hasRoles: !!(authorOrgRole && authorOrgRole.global_roles)
-    });
-
-    if (authorOrgRole && authorOrgRole.global_roles) {
-      authorRole = (authorOrgRole.global_roles as any).name;
-      console.log('✅ AUTHOR ORGANIZATION ROLE FROM TABLE:', authorRole);
+    if (authorProjectRole?.global_roles) {
+      authorRole = (authorProjectRole.global_roles as any)?.name || 'Member';
+      console.log('✅ Author project role:', authorRole);
     } else {
-      console.log('❌ NO ORGANIZATION ROLE FOUND IN TABLE FOR AUTHOR');
-      
-      // Method 2: Check if author is the same person making the request (to get their JWT role)
-      console.log('🔍 CHECKING IF AUTHOR IS CURRENT USER:', {
-        author_id: existingDoc.author_id,
-        token_sub: decodedToken.sub,
-        token_userId: decodedToken.userId,
-        are_same: existingDoc.author_id === decodedToken.sub || existingDoc.author_id === decodedToken.userId
-      });
-      
-      if (existingDoc.author_id === decodedToken.sub || existingDoc.author_id === decodedToken.userId) {
-        authorRole = decodedToken.role || 'Member';
-        console.log('✅ AUTHOR ROLE FROM JWT TOKEN (SAME USER):', authorRole);
-      } else {
-        // Method 3: Check users table for role information
-        const { data: authorUser, error: authorUserError } = await supabase
-          .from('users')
-          .select('role')
-          .eq('id', existingDoc.author_id)
-          .single();
-        
-        console.log('🔍 USER TABLE QUERY RESULT:', { authorUser, authorUserError });
-        
-        if (authorUser && authorUser.role) {
-          authorRole = authorUser.role;
-          console.log('✅ AUTHOR ROLE FROM USERS TABLE:', authorRole);
-        } else {
-          console.log('❌ NO ROLE FOUND IN USERS TABLE, KEEPING DEFAULT MEMBER');
-        }
-      }
+      console.log('⚠️ Author role not found, using default Member');
     }
-
-    // If author is not Admin at org level, check project-specific role
-    if (authorRole !== 'Admin') {
-      const { data: authorProject, error: authorProjectError } = await supabase
-        .from('user_project')
-        .select(`
-          user_id,
-          project_id,
-          role_id,
-          global_roles!inner(id, name)
-        `)
-        .eq('user_id', existingDoc.author_id)
-        .eq('project_id', existingDoc.project_id)
-        .single();
-
-      if (!authorProjectError && authorProject?.global_roles) {
-        const projectRole = (authorProject.global_roles as any)?.name || 'Member';
-        console.log('✅ Author project role (fallback check):', projectRole);
-        // Only override if we haven't found a role yet
-        if (authorRole === 'Member') {
-          authorRole = projectRole;
-        }
-      }
-    }
+    
     console.log('✅ FINAL AUTHOR ROLE DETERMINED:', authorRole);
 
     // Check delete permissions based on RBAC rules
@@ -285,6 +221,9 @@ export async function DELETE(request: NextRequest) {
 }
 
 // Helper function to determine delete permissions based on RBAC rules
+// Project Admin can delete/edit anyone's documents in their project
+// Project Manager can delete/edit anyone's documents EXCEPT other Managers in their project
+// Member can only delete/edit their own documents
 function getDeletePermission(
   authorId: string, 
   currentUserId: string, 
@@ -299,9 +238,9 @@ function getDeletePermission(
     authorRole
   });
   
-  // Rule 1: Admin can delete anyone's documents
+  // Rule 1: Project Admin can delete anyone's documents in the project
   if (currentUserRole === 'Admin') {
-    console.log('✅ RULE 1 APPLIED: Current user is Admin - PERMISSION GRANTED');
+    console.log('✅ RULE 1 APPLIED: Current user is Project Admin - PERMISSION GRANTED');
     return true;
   }
   
@@ -311,21 +250,18 @@ function getDeletePermission(
     return true;
   }
   
-  // Rule 3: Documents created by Admin cannot be deleted by anyone else
-  if (authorRole === 'Admin' && currentUserId !== authorId) {
-    console.log('❌ RULE 3 APPLIED: Document created by Admin, current user is not Admin - PERMISSION DENIED');
-    return false;
-  }
-  
-  // Rule 4: Manager can delete documents of normal users (Member, Viewer)
+  // Rule 3: Project Manager can delete documents of Members/Viewers, but NOT other Managers
   if (currentUserRole === 'Manager') {
-    const normalUserRoles = ['Member', 'Viewer'];
-    if (normalUserRoles.includes(authorRole)) {
-      console.log('✅ RULE 4 APPLIED: Manager deleting document from Member/Viewer - PERMISSION GRANTED');
-      return true;
-    } else {
-      console.log('❌ RULE 4 FAILED: Manager cannot delete document from role:', authorRole);
+    if (authorRole === 'Manager') {
+      console.log('❌ RULE 3 APPLIED: Manager cannot delete another Manager\'s document - PERMISSION DENIED');
+      return false;
     }
+    if (authorRole === 'Admin') {
+      console.log('❌ RULE 3 APPLIED: Manager cannot delete Admin\'s document - PERMISSION DENIED');
+      return false;
+    }
+    console.log('✅ RULE 3 APPLIED: Manager deleting document from Member/Viewer - PERMISSION GRANTED');
+    return true;
   }
   
   console.log('❌ NO RULES MATCHED - PERMISSION DENIED');

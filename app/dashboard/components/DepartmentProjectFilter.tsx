@@ -221,6 +221,7 @@ export const DepartmentProjectFilter: React.FC<DepartmentProjectFilterProps> = (
     onProjectChange(projectId, selectedDepartment);
   };
 
+  // Filter projects by selected department
   const filteredProjects = selectedDepartment 
     ? (projectsByDept[selectedDepartment] || [])
     : projects;

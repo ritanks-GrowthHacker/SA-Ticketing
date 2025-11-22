@@ -15,7 +15,10 @@ import {
   User,
   Calendar,
   Globe,
-  Lock
+  Lock,
+  Upload,
+  File,
+  Paperclip
 } from 'lucide-react';
 
 interface ProjectDoc {
@@ -24,6 +27,11 @@ interface ProjectDoc {
   content: string;
   visibility: string;
   is_public: boolean;
+  file_url?: string;
+  file_name?: string;
+  file_type?: string;
+  file_size?: number;
+  has_file?: boolean;
   created_at: string;
   updated_at: string;
   author: {
@@ -89,6 +97,9 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingDoc, setEditingDoc] = useState<EditDocForm | null>(null);
   const [viewingDoc, setViewingDoc] = useState<ProjectDoc | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
   const [notification, setNotification] = useState<Notification>({ 
     show: false, 
     message: '', 
@@ -192,8 +203,13 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
   };
 
   const handleCreateDocument = async () => {
-    if (!newDocForm.title.trim() || !newDocForm.content.trim()) {
-      showNotification('Please fill in all required fields', 'error');
+    if (!newDocForm.title.trim()) {
+      showNotification('Please enter a title', 'error');
+      return;
+    }
+
+    if (!newDocForm.content.trim() && !selectedFile) {
+      showNotification('Please provide content or attach a file', 'error');
       return;
     }
 
@@ -203,6 +219,33 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
       if (!authToken) {
         showNotification('Authentication required', 'error');
         return;
+      }
+
+      let fileData = null;
+
+      // Upload file first if selected
+      if (selectedFile) {
+        setUploadingFile(true);
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        formData.append('project_id', projectId);
+
+        const uploadResponse = await fetch('/api/upload-project-doc-file', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${authToken}`
+          },
+          body: formData
+        });
+
+        if (!uploadResponse.ok) {
+          const error = await uploadResponse.json();
+          throw new Error(error.error || 'File upload failed');
+        }
+
+        const uploadData = await uploadResponse.json();
+        fileData = uploadData.file;
+        setUploadingFile(false);
       }
 
       const response = await fetch('/api/create-project-doc', {
@@ -213,7 +256,11 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
         },
         body: JSON.stringify({
           project_id: projectId,
-          ...newDocForm
+          ...newDocForm,
+          file_url: fileData?.url,
+          file_name: fileData?.name,
+          file_type: fileData?.type,
+          file_size: fileData?.size
         })
       });
 
@@ -221,6 +268,7 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
         showNotification('Document created successfully', 'success');
         setShowCreateForm(false);
         setNewDocForm({ title: '', content: '', visibility: 'project', is_public: false });
+        setSelectedFile(null);
         fetchProjectDocuments();
       } else {
         const error = await response.json();
@@ -228,22 +276,56 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
       }
     } catch (error) {
       console.error('Error creating document:', error);
-      showNotification('Failed to create document', 'error');
+      showNotification(error instanceof Error ? error.message : 'Failed to create document', 'error');
+    } finally {
+      setUploadingFile(false);
     }
   };
 
   const handleUpdateDocument = async () => {
-    if (!editingDoc || !editingDoc.title.trim() || !editingDoc.content.trim()) {
-      showNotification('Please fill in all required fields', 'error');
+    if (!editingDoc || !editingDoc.title.trim()) {
+      showNotification('Please provide a document title', 'error');
+      return;
+    }
+
+    // Either content or file must be provided
+    if (!editingDoc.content.trim() && !selectedFile) {
+      showNotification('Please provide document content or attach a file', 'error');
       return;
     }
 
     try {
+      setUploadingFile(true);
       const authToken = getAuthToken();
       
       if (!authToken) {
         showNotification('Authentication required', 'error');
         return;
+      }
+
+      let fileData = null;
+
+      // Upload file if selected
+      if (selectedFile) {
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        formData.append('project_id', projectId);
+
+        const uploadResponse = await fetch('/api/upload-project-doc-file', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${authToken}`
+          },
+          body: formData
+        });
+
+        if (!uploadResponse.ok) {
+          const error = await uploadResponse.json();
+          throw new Error(error.error || 'Failed to upload file');
+        }
+
+        const uploadResult = await uploadResponse.json();
+        fileData = uploadResult.file;
       }
 
       const response = await fetch('/api/update-project-doc', {
@@ -257,13 +339,18 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
           title: editingDoc.title,
           content: editingDoc.content,
           visibility: editingDoc.visibility,
-          is_public: editingDoc.is_public
+          is_public: editingDoc.is_public,
+          file_url: fileData?.url,
+          file_name: fileData?.name,
+          file_type: fileData?.type,
+          file_size: fileData?.size
         })
       });
 
       if (response.ok) {
         showNotification('Document updated successfully', 'success');
         setEditingDoc(null);
+        setSelectedFile(null);
         fetchProjectDocuments();
       } else {
         const error = await response.json();
@@ -271,14 +358,18 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
       }
     } catch (error) {
       console.error('Error updating document:', error);
-      showNotification('Failed to update document', 'error');
+      showNotification(error instanceof Error ? error.message : 'Failed to update document', 'error');
+    } finally {
+      setUploadingFile(false);
     }
   };
 
   const handleDeleteDocument = async (docId: string) => {
-    if (!confirm('Are you sure you want to delete this document? This action cannot be undone.')) {
-      return;
-    }
+    setDeletingDocId(docId);
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingDocId) return;
 
     try {
       const authToken = getAuthToken();
@@ -295,12 +386,13 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          doc_id: docId
+          doc_id: deletingDocId
         })
       });
 
       if (response.ok) {
         showNotification('Document deleted successfully', 'success');
+        setDeletingDocId(null);
         fetchProjectDocuments();
       } else {
         const error = await response.json();
@@ -423,8 +515,28 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
                 </div>
                 
                 <p className="text-gray-600 text-sm mb-4 line-clamp-3">
-                  {doc.content.substring(0, 150)}...
+                  {doc.content ? doc.content.substring(0, 150) + (doc.content.length > 150 ? '...' : '') : 'No content'}
                 </p>
+
+                {/* File attachment display */}
+                {doc.has_file && doc.file_url && (
+                  <div className="mb-4">
+                    <a
+                      href={doc.file_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center space-x-2 px-3 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition-colors text-sm"
+                    >
+                      <File className="w-4 h-4" />
+                      <span>{doc.file_name || 'Download Attachment'}</span>
+                      {doc.file_size && (
+                        <span className="text-xs text-blue-600">
+                          ({(doc.file_size / 1024).toFixed(2)} KB)
+                        </span>
+                      )}
+                    </a>
+                  </div>
+                )}
                 
                 <div className="flex items-center justify-between text-xs text-gray-500">
                   <div className="flex items-center space-x-1">
@@ -499,15 +611,65 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Content *
+                  Content
                 </label>
                 <textarea
                   value={newDocForm.content}
                   onChange={(e) => setNewDocForm({ ...newDocForm, content: e.target.value })}
                   rows={10}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Enter document content..."
+                  placeholder="Enter document content... (optional if file is attached)"
                 />
+              </div>
+
+              {/* File Upload Section */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Attach File (Optional)
+                </label>
+                <div className="flex items-center space-x-3">
+                  <label className="flex-1 cursor-pointer">
+                    <div className="border-2 border-dashed border-gray-300 rounded-lg px-4 py-6 hover:border-blue-500 transition-colors">
+                      <div className="flex flex-col items-center">
+                        <Upload className="w-8 h-8 text-gray-400 mb-2" />
+                        <p className="text-sm text-gray-600 text-center">
+                          {selectedFile ? (
+                            <span className="text-blue-600 font-medium">{selectedFile.name}</span>
+                          ) : (
+                            <>
+                              <span className="text-blue-600 font-medium">Click to upload</span>
+                              {' '}or drag and drop
+                            </>
+                          )}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          PDF, Word, or Images (Max 10MB)
+                        </p>
+                      </div>
+                      <input
+                        type="file"
+                        onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.webp"
+                        className="hidden"
+                      />
+                    </div>
+                  </label>
+                  {selectedFile && (
+                    <button
+                      onClick={() => setSelectedFile(null)}
+                      className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                      title="Remove file"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
+                {selectedFile && (
+                  <div className="mt-2 flex items-center text-sm text-gray-600">
+                    <Paperclip className="w-4 h-4 mr-1" />
+                    <span>{(selectedFile.size / 1024).toFixed(2)} KB</span>
+                  </div>
+                )}
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -541,16 +703,31 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
             
             <div className="p-6 border-t border-gray-200 flex justify-end space-x-3">
               <button
-                onClick={() => setShowCreateForm(false)}
+                onClick={() => {
+                  setShowCreateForm(false);
+                  setSelectedFile(null);
+                }}
                 className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                disabled={uploadingFile}
               >
                 Cancel
               </button>
               <button
                 onClick={handleCreateDocument}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                disabled={uploadingFile}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
               >
-                Create Document
+                {uploadingFile ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Uploading...
+                  </>
+                ) : (
+                  'Create Document'
+                )}
               </button>
             </div>
           </div>
@@ -596,15 +773,73 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Content *
+                  Content
                 </label>
                 <textarea
                   value={editingDoc.content}
                   onChange={(e) => setEditingDoc({ ...editingDoc, content: e.target.value })}
                   rows={10}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Enter document content..."
+                  placeholder="Enter document content or attach a file below..."
                 />
+              </div>
+
+              {/* File Upload Section */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Attach File (Optional)
+                </label>
+                <div
+                  className={`border-2 border-dashed rounded-lg p-6 text-center ${
+                    selectedFile ? 'border-green-500 bg-green-50' : 'border-gray-300 hover:border-blue-400'
+                  }`}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const file = e.dataTransfer.files[0];
+                    if (file) setSelectedFile(file);
+                  }}
+                >
+                  {selectedFile ? (
+                    <div className="flex items-center justify-center space-x-3">
+                      <File className="w-8 h-8 text-green-600" />
+                      <div className="text-left">
+                        <p className="text-sm font-medium text-gray-900">{selectedFile.name}</p>
+                        <p className="text-xs text-gray-500">
+                          {(selectedFile.size / 1024).toFixed(2)} KB
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setSelectedFile(null)}
+                        className="p-1 text-red-500 hover:text-red-700"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
+                      <p className="text-sm text-gray-600 mb-1">
+                        Drag and drop a file or{' '}
+                        <label className="text-blue-600 hover:underline cursor-pointer">
+                          browse
+                          <input
+                            type="file"
+                            className="hidden"
+                            accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif,.webp"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) setSelectedFile(file);
+                            }}
+                          />
+                        </label>
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Supports: PDF, Word, Images (Max 10MB)
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -638,16 +873,22 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
             
             <div className="p-6 border-t border-gray-200 flex justify-end space-x-3">
               <button
-                onClick={() => setEditingDoc(null)}
+                onClick={() => {
+                  setEditingDoc(null);
+                  setSelectedFile(null);
+                }}
                 className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                disabled={uploadingFile}
               >
                 Cancel
               </button>
               <button
                 onClick={handleUpdateDocument}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                disabled={uploadingFile}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
-                Update Document
+                {uploadingFile && <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />}
+                <span>{uploadingFile ? 'Updating...' : 'Update Document'}</span>
               </button>
             </div>
           </div>
@@ -721,6 +962,48 @@ const ProjectDocumentsPage = ({ params }: { params: Promise<{ id: string }> }) =
             >
               ×
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deletingDocId && (
+        <div className="fixed inset-0 flex items-center justify-center z-50">
+          {/* Backdrop */}
+          <div 
+            className="absolute inset-0 backdrop-blur-sm transition-opacity" 
+            style={{ backgroundColor: "rgba(0, 0, 0, 0.5)" }}
+            onClick={() => setDeletingDocId(null)}
+          />
+          
+          {/* Modal */}
+          <div className="relative bg-white rounded-lg shadow-xl w-full max-w-md mx-4 p-6">
+            <div className="text-center">
+              <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 mb-4">
+                <Trash2 className="h-6 w-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                Delete Document
+              </h3>
+              <p className="text-sm text-gray-600 mb-6">
+                Are you sure you want to delete this document? This action cannot be undone.
+              </p>
+              
+              <div className="flex justify-center space-x-3">
+                <button
+                  onClick={() => setDeletingDocId(null)}
+                  className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

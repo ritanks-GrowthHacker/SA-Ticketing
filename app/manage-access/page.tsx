@@ -84,6 +84,23 @@ const ManageAccessPage = () => {
       ? (orgDeptRole === 'Admin' || orgDeptRole === 'Manager')
       : (effectiveRole === 'Admin' || effectiveRole === 'Manager');
   };
+  
+  // Helper function: Check if user can manage a specific project's assignments
+  // User must be assigned to the project as Admin or Manager
+  const canManageProjectAssignments = (projectId: string): boolean => {
+    if (!projectId || projectId === 'all') return false;
+    
+    // Check if current user is assigned to this project
+    const userProjectAssignment = assignments.find(
+      a => a.user_id === user?.id && a.project_id === projectId
+    );
+    
+    if (!userProjectAssignment) return false;
+    
+    // Must be Admin or Manager in that specific project
+    return userProjectAssignment.role_name === 'Admin' || userProjectAssignment.role_name === 'Manager';
+  };
+  
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [assignmentLoading, setAssignmentLoading] = useState(false);
@@ -173,6 +190,33 @@ const ManageAccessPage = () => {
     }
   }, [selectedProject, token, effectiveRole]);
 
+  // Auto-refresh data every 30 seconds to catch new resource request approvals
+  useEffect(() => {
+    if (!token || (effectiveRole !== 'Admin' && effectiveRole !== 'Manager')) {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      console.log('🔄 Auto-refreshing manage access data...');
+      fetchAssignments();
+      fetchResourceRequests();
+    }, 30000); // 30 seconds
+
+    // Listen for resource request events for instant update
+    const handleResourceRequestEvent = () => {
+      console.log('🎯 Resource request handled - refreshing data instantly!');
+      fetchAssignments();
+      fetchResourceRequests();
+    };
+
+    window.addEventListener('resource-request-handled', handleResourceRequestEvent);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('resource-request-handled', handleResourceRequestEvent);
+    };
+  }, [token, effectiveRole, selectedProject]);
+
   // Fetch departments when modal opens
   useEffect(() => {
     if (showResourceModal) {
@@ -195,17 +239,22 @@ const ManageAccessPage = () => {
     if (selectedProject === 'all' && effectiveRole !== 'Admin' && effectiveRole !== 'Manager') {
       setSelectedUsers([]);
     }
+    // Refetch projects when selection changes to update filtering
+    fetchProjects();
   }, [selectedProject, effectiveRole]);
 
   const fetchData = async () => {
     try {
       console.log('📊 MANAGE ACCESS: Starting fetchData...');
       setLoading(true);
+      
+      // Fetch everything in parallel (fetchUsers now handles assignments internally)
       await Promise.all([
         fetchUsers(),
         fetchProjects(),
         fetchAssignments()
       ]);
+      
       console.log('✅ MANAGE ACCESS: fetchData complete');
     } catch (error) {
       console.error('❌ MANAGE ACCESS: Error in fetchData:', error);
@@ -216,7 +265,22 @@ const ManageAccessPage = () => {
 
   const fetchUsers = async () => {
     try {
-      // PROJECT-BASED SYSTEM: Get eligible users (exclude Sales, HR, Administration)
+      // STEP 1: Get current project assignments to know who's already assigned
+      const assignmentsResponse = await fetch('/api/get-project-assignments', {
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      let assignedUserIds = new Set<string>();
+      if (assignmentsResponse.ok) {
+        const assignmentsData = await assignmentsResponse.json();
+        assignedUserIds = new Set((assignmentsData.assignments || []).map((a: any) => a.user_id));
+        console.log(`📌 Found ${assignedUserIds.size} users assigned to projects`);
+      }
+      
+      // STEP 2: Get eligible users + ALL users from API
       const url = new URL('/api/get-eligible-users', window.location.origin);
       const response = await fetch(url.toString(), {
         headers: {
@@ -227,11 +291,18 @@ const ManageAccessPage = () => {
 
       if (response.ok) {
         const data = await response.json();
-        console.log(`✅ MANAGE ACCESS: Loaded ${data.users.length} eligible users (${data.totalUsers} total)`);
-        setUsers(data.users || []);
+        
+        // Include eligible users + any users already in projects (even if from HR/Sales/Admin)
+        const allRelevantUsers = data.allUsers?.filter((user: any) => 
+          data.users.some((u: any) => u.id === user.id) || // Eligible user
+          assignedUserIds.has(user.id) // Already assigned to a project
+        ) || data.users || [];
+        
+        console.log(`✅ MANAGE ACCESS: Loaded ${allRelevantUsers.length} users (${data.users.length} eligible + ${assignedUserIds.size} assigned)`);
+        setUsers(allRelevantUsers);
       } else {
         const err = await response.json().catch(() => ({}));
-        console.error('Failed to fetch eligible users:', err);
+        console.error('Failed to fetch users:', err);
         showNotification('error', 'Failed to load users');
       }
       
@@ -247,10 +318,13 @@ const ManageAccessPage = () => {
     try {
       const url = new URL('/api/get-all-projects', window.location.origin);
       
-      // Filter by current department if available
-      if (currentDepartment?.id) {
+      // Only filter by department if a specific project is selected
+      // For "All Projects" view, we need to see all org projects to display user assignments correctly
+      if (currentDepartment?.id && selectedProject !== 'all') {
         url.searchParams.append('department_id', currentDepartment.id);
         console.log(`🔍 MANAGE ACCESS: Filtering projects by department ${currentDepartment.name} (${currentDepartment.id})`);
+      } else if (selectedProject === 'all') {
+        console.log(`🔍 MANAGE ACCESS: Loading all organization projects for "All Projects" view`);
       }
       
       const response = await fetch(url.toString(), {
@@ -263,6 +337,7 @@ const ManageAccessPage = () => {
       if (response.ok) {
         const data = await response.json();
         console.log(`✅ MANAGE ACCESS: Loaded ${data.projects?.length || 0} projects`);
+        console.log('📋 MANAGE ACCESS: Sample project data:', data.projects?.[0]);
         setProjects(data.projects || []);
       } else {
         console.error('Failed to fetch projects');
@@ -418,7 +493,7 @@ const ManageAccessPage = () => {
         user_name: employee.name,
         user_email: employee.email,
         user_job_title: employee.job_title,
-        department_id: department.id,
+        department_id: department.id, // Employee's department for display
         department_name: department.name,
         message: requestMessage
       }]);
@@ -591,6 +666,12 @@ const ManageAccessPage = () => {
 
     if (!projectId || !roleId) {
       alert('Please select both project and role for this user');
+      return;
+    }
+
+    // Check if current user has permission to assign to this specific project
+    if (!canManageProjectAssignments(projectId) && orgDeptRole !== 'Admin') {
+      showNotification('error', 'You can only assign users to projects where you are Admin or Manager');
       return;
     }
 
@@ -868,6 +949,18 @@ const ManageAccessPage = () => {
               {selectedProject === 'all' ? 'All Organization Members' : 'Project Members'}
             </h2>
             <div className="flex items-center space-x-3">
+              <button
+                onClick={() => {
+                  fetchAssignments();
+                  fetchResourceRequests();
+                }}
+                className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                title="Refresh data"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
               {selectedProject !== 'all' ? (
                 <button
                   onClick={() => setShowResourceModal(true)}

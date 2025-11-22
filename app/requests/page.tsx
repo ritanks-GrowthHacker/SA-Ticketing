@@ -38,6 +38,18 @@ export default function RequestsPage() {
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
+  const [notification, setNotification] = useState<{
+    show: boolean;
+    message: string;
+    type: 'success' | 'error' | 'warning';
+  }>({ show: false, message: '', type: 'success' });
+
+  const showNotification = (message: string, type: 'success' | 'error' | 'warning') => {
+    setNotification({ show: true, message, type });
+    setTimeout(() => {
+      setNotification(prev => ({ ...prev, show: false }));
+    }, 4000);
+  };
 
   useEffect(() => {
     fetchPendingRequests();
@@ -89,17 +101,27 @@ export default function RequestsPage() {
         })
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to ${action} request`);
-      }
-
       const data = await response.json();
+
+      if (!response.ok) {
+        // Check if it's a duplicate error
+        if (response.status === 409 && data.isDuplicate) {
+          showNotification(data.error, 'warning');
+          // Refresh the list to remove the duplicate
+          await fetchPendingRequests();
+          return;
+        }
+        throw new Error(data.error || `Failed to ${action} request`);
+      }
       
       // Show success message
-      alert(`Request ${action} successfully!`);
+      showNotification(`Request ${action} successfully!`, 'success');
       
       // Refresh the list
       await fetchPendingRequests();
+      
+      // Trigger event to refresh manage-access page if it's open
+      window.dispatchEvent(new CustomEvent('resource-request-handled'));
       
       // Clear review notes
       setReviewNotes(prev => {
@@ -110,7 +132,10 @@ export default function RequestsPage() {
 
     } catch (error) {
       console.error(`Error handling request:`, error);
-      alert(`Failed to ${action} request. Please try again.`);
+      showNotification(
+        error instanceof Error ? error.message : `Failed to ${action} request. Please try again.`,
+        'error'
+      );
     } finally {
       setProcessingId(null);
     }
@@ -289,6 +314,29 @@ export default function RequestsPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {notification.show && (
+        <div
+          className={`fixed bottom-4 right-4 z-50 px-6 py-4 rounded-lg shadow-lg transition-all duration-300 ${
+            notification.type === 'success'
+              ? 'bg-green-500 text-white'
+              : notification.type === 'error'
+              ? 'bg-red-500 text-white'
+              : 'bg-yellow-500 text-white'
+          }`}
+        >
+          <div className="flex items-center space-x-3">
+            <span className="font-medium">{notification.message}</span>
+            <button
+              onClick={() => setNotification(prev => ({ ...prev, show: false }))}
+              className="ml-2 text-white hover:text-gray-200"
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
     </div>

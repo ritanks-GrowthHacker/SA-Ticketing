@@ -46,14 +46,12 @@ export async function GET(request: NextRequest) {
     const userId = decoded.sub; // Use 'sub' from JWT token
     const userRole = decoded.role; // org-level role (may be null for dept-only users)
     const organization_id = decoded.org_id; // Use 'org_id' from JWT token
-    const department_id = decoded.department_id || null; // department context from JWT
     const department_role = decoded.department_role || null; // department role from JWT
 
     console.log('🔧 User Dashboard Metrics - Decoded JWT values:', {
       userId: decoded.sub,
       orgRole: userRole,
       orgId: decoded.org_id,
-      department_id: department_id,
       department_role: department_role
     });
 
@@ -72,16 +70,18 @@ export async function GET(request: NextRequest) {
     const page = parseInt(searchParams.get('page') || '1');
     const limit = parseInt(searchParams.get('limit') || '10');
     const project_id = searchParams.get('project_id');
+    const department_id = searchParams.get('department_id'); // GET FROM URL, NOT JWT
     const offset = (page - 1) * limit;
 
-    console.log('🔧 MEMBER: Query params - page:', page, 'limit:', limit, 'project_id:', project_id);
+    console.log('🔧 MEMBER: Query params - page:', page, 'limit:', limit, 'project_id:', project_id, 'department_id:', department_id);
 
     // Determine applicable projects based on department/project context
     let memberProjects: any[] = [];
     let memberProjectsError: any = null;
 
     if (department_role === 'Admin' && department_id) {
-      // Department Admin: can see all projects within this department
+      // Department Admin: can see all projects within the SELECTED department
+      console.log('🔧 MEMBER: Dept Admin mode - filtering by department:', department_id);
       const { data: deptProjects, error: deptProjectsError } = await supabase
         .from('projects')
         .select(`
@@ -97,22 +97,22 @@ export async function GET(request: NextRequest) {
       memberProjects = (deptProjects || []).map((p: any) => ({ project_id: p.id, projects: { id: p.id, name: p.name, description: p.description }, global_roles: { name: 'Admin' } }));
       memberProjectsError = deptProjectsError;
     } else {
-      // Department Manager or Regular Member: Get only projects they're assigned to, but scoped to current department if present
+      // Department Manager or Regular Member: Get assigned projects, filtered by selected department
       const query = supabase
         .from('user_project')
         .select(`
           project_id,
           role_id,
-          projects!inner(id, name, description, project_department(department_id)),
-          global_roles!user_project_global_role_id_fkey(id, name)
+          projects!inner(id, name, description, project_department!inner(department_id)),
+          global_roles!user_project_role_id_fkey(id, name)
         `)
         .eq('user_id', userId)
-        .eq('projects.organization_id', organization_id)
-        .order('projects(created_at)', { ascending: true });
+        .eq('projects.organization_id', organization_id);
 
-      // If department context exists, filter assigned projects to that department
+      // Filter by department if selected in UI
       if (department_id) {
-        query.filter('projects.project_department.department_id', 'eq', department_id);
+        query.eq('projects.project_department.department_id', department_id);
+        console.log('🔧 MEMBER: Filtering projects by selected department:', department_id);
       }
 
       const { data: assignedProjects, error: projectsError } = await query;
@@ -125,9 +125,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Failed to fetch projects' }, { status: 500 });
     }
 
-    console.log('🔧 MEMBER PROJECTS:', { memberProjects, userId, organizationId: organization_id });
+    console.log('🔧 MEMBER PROJECTS:', { 
+      memberProjectsCount: memberProjects.length,
+      userId, 
+      organizationId: organization_id
+    });
 
     const assignedProjectIds = memberProjects.map((mp: any) => mp.project_id);
+    
+    console.log('🔧 ASSIGNED PROJECT IDS:', assignedProjectIds);
+    console.log('🔧 REQUESTED PROJECT ID:', project_id);
     
     if (assignedProjectIds.length === 0) {
       return NextResponse.json({
@@ -156,6 +163,11 @@ export async function GET(request: NextRequest) {
       : assignedProjectIds;
 
     console.log('🔧 MEMBER: Target project IDs:', targetProjectIds);
+    console.log('🔧 MEMBER: Filtering logic - project_id param:', project_id, 'is not "all":', project_id !== 'all', 'filter applied:', project_id && project_id !== 'all');
+    
+    if (targetProjectIds.length === 0) {
+      console.log('⚠️ MEMBER: No target projects found after filtering!');
+    }
 
     // Get tickets assigned to this member in their projects
     const { data: memberTickets, error: ticketsError } = await supabase

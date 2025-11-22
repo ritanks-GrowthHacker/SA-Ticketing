@@ -131,11 +131,25 @@ export async function GET(request: NextRequest) {
       role: roleMap[user.id] || 'Member'
     }));
 
+    // Also format ALL users (including restricted departments)
+    const allFormattedUsers = (users || []).map((user: any) => ({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      job_title: user.job_title,
+      department: user.departments?.name || user.department,
+      department_id: user.department_id,
+      profile_picture_url: user.profile_picture_url,
+      created_at: user.created_at,
+      role: roleMap[user.id] || 'Member'
+    }));
+
     console.log(`✅ GET ELIGIBLE USERS: Found ${formattedUsers.length} eligible users (${users?.length || 0} total users)`);
 
     return NextResponse.json({
       success: true,
       users: formattedUsers,
+      allUsers: allFormattedUsers, // ALL users including HR/Sales/Admin
       totalUsers: users?.length || 0,
       eligibleUsers: formattedUsers.length,
       restrictedDepartments: RESTRICTED_DEPARTMENTS

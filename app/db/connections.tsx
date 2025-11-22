@@ -18,7 +18,7 @@ export const supabaseAdmin = supabaseServiceKey
         persistSession: false
       }
     })
-  : null
+  : createClient(supabaseUrl, supabaseKey) // Fallback to anon key
 
 export default supabase
 

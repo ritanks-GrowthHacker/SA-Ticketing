@@ -16,7 +16,7 @@ interface AdminDashboardProps {
 
 const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
   console.log('🎯 ADMIN: AdminDashboard component rendered with projectId:', projectId);
-  const { token, organization, roles, currentProject, switchProject } = useAuthStore();
+  const { token, organization, roles, currentProject, currentDepartment, switchProject } = useAuthStore();
   const searchParams = useSearchParams();
   const router = useRouter();
   
@@ -43,6 +43,7 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
   const [isCreateProjectModalOpen, setIsCreateProjectModalOpen] = useState(false);
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState<string | undefined>(undefined);
+  const [selectedDepartment, setSelectedDepartment] = useState<string>('');
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [showDragDropView, setShowDragDropView] = useState(false);
@@ -59,6 +60,14 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
   
   // Add debug state for easy monitoring
   const [debugInfo, setDebugInfo] = useState('Ready to load metrics...');
+  
+  // Update selectedDepartment when currentDepartment changes
+  useEffect(() => {
+    if (currentDepartment?.id) {
+      setSelectedDepartment(currentDepartment.id);
+      console.log('🏢 AdminDashboard: Department context changed to', currentDepartment.name);
+    }
+  }, [currentDepartment]);
   
   // Fetch dashboard metrics with caching
   useEffect(() => {
@@ -240,9 +249,21 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
 
       // Build URL with filters and pagination
       const params = new URLSearchParams();
+      
+      console.log('🔧 ADMIN: Building API params with selectedProject:', selectedProject);
+      
+      if (selectedDepartment) {
+        params.set('department_id', selectedDepartment);
+        console.log('✅ ADMIN: Added department_id to params:', selectedDepartment);
+      }
+      
       if (selectedProject && selectedProject !== 'all') {
         params.set('project_id', selectedProject);
+        console.log('✅ ADMIN: Added project_id to params:', selectedProject);
+      } else {
+        console.log('⚠️ ADMIN: No specific project selected, will fetch all department data');
       }
+      
       if (selectedStatus && selectedStatus !== 'all') {
         params.set('status_id', selectedStatus);
       }
@@ -425,6 +446,7 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
               refreshKey={projectRefreshKey}
               onProjectChange={async (projectId, departmentId) => {
                 setSelectedProject(projectId);
+                setSelectedDepartment(departmentId || '');
                 if (projectId && token) {
                   try {
                     console.log('🔄 Admin switching to project:', projectId, 'in department:', departmentId);
@@ -779,6 +801,7 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
         onClose={handleTicketModalClose}
         ticketId={selectedTicketId}
         onSuccess={handleTicketSuccess}
+        departmentId={selectedDepartment}
       />
     </div>
   );

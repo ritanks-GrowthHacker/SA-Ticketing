@@ -20,7 +20,7 @@ interface UserDashboardProps {
 
 const UserDashboard = ({ projectId }: UserDashboardProps) => {
   console.log('🎯 USER: UserDashboard component rendered with projectId:', projectId);
-  const { token, organization, user, roles, currentProject, switchProject } = useAuthStore();
+  const { token, organization, user, roles, currentProject, currentDepartment, switchProject } = useAuthStore();
   
   // Extract project role for display
   const projectRole = currentProject?.role || 'Member';
@@ -50,6 +50,7 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
   } = useDashboardStore();
   
   const [selectedProject, setSelectedProject] = useState(projectId || currentProject?.id || '');
+  const [selectedDepartment, setSelectedDepartment] = useState<string>(currentDepartment?.id || '');
   const [isTicketModalOpen, setIsTicketModalOpen] = useState(false);
   const [selectedTicketId, setSelectedTicketId] = useState<string | undefined>(undefined);
 
@@ -62,6 +63,14 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
       setSelectedProject(currentProject.id);
     }
   }, [projectId, currentProject?.id]);
+  
+  // Update selectedDepartment when currentDepartment changes
+  useEffect(() => {
+    if (currentDepartment?.id) {
+      setSelectedDepartment(currentDepartment.id);
+      console.log('🏢 UserDashboard: Department initialized/changed to', currentDepartment.name, currentDepartment.id);
+    }
+  }, [currentDepartment?.id]);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [loading, setLoading] = useState(false); // Start with false to show UI immediately
   const [dataLoading, setDataLoading] = useState(true); // Separate state for data loading
@@ -74,8 +83,8 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
   const [itemsPerPage] = useState(10);
   
   // Fetch dashboard metrics with caching
-  const fetchDashboardMetrics = async () => {
-    console.log('🔄 MEMBER: fetchDashboardMetrics called!');
+  const fetchDashboardMetrics = async (overrideProjectId?: string) => {
+    console.log('🔄 MEMBER: fetchDashboardMetrics called with override:', overrideProjectId);
     console.log('🔄 MEMBER: token exists:', !!token);
     console.log('🔄 MEMBER: organization exists:', !!organization);
     console.log('🔄 MEMBER: organization.id:', organization?.id);
@@ -89,13 +98,23 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
     // TEMPORARY: Force fresh API call every time - bypassing cache completely
     console.log('� MEMBER: FORCING FRESH API CALL - CACHE BYPASSED');
 
+    // Use override projectId if provided, otherwise use state
+    const activeProjectId = overrideProjectId !== undefined ? overrideProjectId : selectedProject;
+
     try {
       setLoading(true);
       
       // Build query params
       const params = new URLSearchParams();
-      if (selectedProject) {
-        params.append('project_id', selectedProject);
+      if (selectedDepartment) {
+        params.append('department_id', selectedDepartment);
+        console.log('🔧 MEMBER: Adding department_id to params:', selectedDepartment);
+      }
+      if (activeProjectId && activeProjectId !== '') {
+        params.append('project_id', activeProjectId);
+        console.log('🔧 MEMBER: Adding project_id to params:', activeProjectId);
+      } else {
+        console.log('⚠️ MEMBER: No project selected, fetching all projects');
       }
       params.append('page', currentPage.toString());
       params.append('limit', itemsPerPage.toString());
@@ -103,6 +122,7 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
       // Use dedicated user-dashboard-metrics API for Member role
       const url = `/api/user-dashboard-metrics?${params.toString()}`;
       console.log('🔄 MEMBER: Fetching from dedicated user dashboard API:', url);
+      console.log('🔄 MEMBER: Active project ID in use:', activeProjectId);
       
       const response = await fetch(url, {
         headers: {
@@ -294,6 +314,8 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
   const handleTicketModalClose = () => {
     setIsTicketModalOpen(false);
     setSelectedTicketId(undefined);
+    // Refresh dashboard data after ticket modal closes
+    fetchDashboardMetrics(selectedProject);
   };
 
   const handleTicketClick = (ticketId: string) => {
@@ -385,6 +407,7 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
               token={token}
               onProjectChange={async (projectId, departmentId) => {
                 setSelectedProject(projectId);
+                setSelectedDepartment(departmentId || '');
                 if (projectId && token) {
                   try {
                     console.log('🔄 Switching to project:', projectId, 'in department:', departmentId);
@@ -411,8 +434,8 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
                         }
                       });
                       
-                      // Refresh dashboard metrics
-                      fetchDashboardMetrics();
+                      // Refresh dashboard metrics with new projectId
+                      fetchDashboardMetrics(projectId);
                     } else {
                       console.error('❌ Failed to switch project');
                     }
@@ -610,6 +633,8 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
         isOpen={isTicketModalOpen}
         onClose={handleTicketModalClose}
         ticketId={selectedTicketId}
+        departmentId={selectedDepartment}
+        onSuccess={() => fetchDashboardMetrics(selectedProject)}
       />
     </div>
   );
