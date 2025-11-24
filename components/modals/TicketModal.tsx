@@ -41,6 +41,7 @@ interface TicketFormData {
   assigned_to: string;
   status_id: string;
   priority_id: string;
+  expected_closing_date: string; // ISO date string
 }
 
 interface TicketData {
@@ -49,6 +50,8 @@ interface TicketData {
   description: string;
   created_at: string;
   updated_at: string;
+  expected_closing_date?: string;
+  actual_closing_date?: string;
   project: {
     id: string;
     name: string;
@@ -119,7 +122,8 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
     description: '',
     assigned_to: '',
     status_id: '',
-    priority_id: ''
+    priority_id: '',
+    expected_closing_date: ''
   });
   
   const [notification, setNotification] = useState<{
@@ -152,7 +156,8 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
       description: '',
       assigned_to: '',
       status_id: '',
-      priority_id: ''
+      priority_id: '',
+      expected_closing_date: ''
     });
     setSelectedProject(null);
     setTicketData(null);
@@ -208,7 +213,8 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
         description: ticketData.description || '',
         assigned_to: ticketData.assignee?.id || '',
         status_id: ticketData.status?.id || '',
-        priority_id: ticketData.priority?.id || ''
+        priority_id: ticketData.priority?.id || '',
+        expected_closing_date: ticketData.expected_closing_date ? ticketData.expected_closing_date.split('T')[0] : ''
       });
     }
   }, [isEditMode, ticketData, selectedProject, users, ticketStatuses, priorities]);
@@ -393,7 +399,8 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
         description: formData.description.trim() || undefined,
         assigned_to: formData.assigned_to || undefined,
         status_id: formData.status_id || undefined,
-        ...(formData.priority_id && formData.priority_id.trim() !== '' && { priority_id: formData.priority_id })
+        ...(formData.priority_id && formData.priority_id.trim() !== '' && { priority_id: formData.priority_id }),
+        ...(formData.expected_closing_date && { expected_closing_date: new Date(formData.expected_closing_date).toISOString() })
       };
 
       const response = await fetch(apiEndpoint, {
@@ -417,7 +424,8 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
             description: '',
             assigned_to: '',
             status_id: ticketStatuses[0]?.id || '',
-            priority_id: priorities[0]?.id || ''
+            priority_id: priorities[0]?.id || '',
+            expected_closing_date: ''
           });
         }
         
@@ -602,6 +610,31 @@ const TicketModal: React.FC<TicketModalProps> = ({ isOpen, onClose, ticketId, on
                   rows={4}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none transition-colors"
                 />
+              </div>
+
+              {/* Expected Closing Date Field */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Expected Closing Date
+                  {isEditMode && ticketData?.creator?.id !== user?.id && (
+                    <span className="ml-2 text-xs text-gray-500">(Only creator can edit)</span>
+                  )}
+                </label>
+                <input
+                  type="date"
+                  value={formData.expected_closing_date}
+                  onChange={(e) => handleInputChange('expected_closing_date', e.target.value)}
+                  disabled={isEditMode && ticketData?.creator?.id !== user?.id}
+                  min={new Date().toISOString().split('T')[0]}
+                  className={`w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors ${
+                    isEditMode && ticketData?.creator?.id !== user?.id ? 'bg-gray-100 cursor-not-allowed' : ''
+                  }`}
+                />
+                {isEditMode && ticketData?.actual_closing_date && (
+                  <p className="mt-1 text-xs text-green-600">
+                    ✓ Resolved on {new Date(ticketData.actual_closing_date).toLocaleDateString()}
+                  </p>
+                )}
               </div>
 
               {/* Three-column layout for dropdowns */}

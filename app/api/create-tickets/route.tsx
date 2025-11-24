@@ -19,6 +19,7 @@ interface CreateTicketRequest {
   status_id?: string;
   priority_id?: string;
   assigned_to?: string;
+  expected_closing_date?: string; // ISO date string for expected completion
 }
 
 export async function POST(request: NextRequest) {
@@ -64,7 +65,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { project_id, title, description, status_id, priority_id, assigned_to } = body;
+    const { project_id, title, description, status_id, priority_id, assigned_to, expected_closing_date } = body;
 
     // Validate required fields
     if (!project_id || !title) {
@@ -72,6 +73,26 @@ export async function POST(request: NextRequest) {
         { error: 'project_id and title are required' },
         { status: 400 }
       );
+    }
+
+    // Validate expected_closing_date if provided
+    if (expected_closing_date) {
+      const expectedDate = new Date(expected_closing_date);
+      if (isNaN(expectedDate.getTime())) {
+        return NextResponse.json(
+          { error: 'Invalid expected_closing_date format. Use ISO date string.' },
+          { status: 400 }
+        );
+      }
+      // Check if date is not in the past
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (expectedDate < today) {
+        return NextResponse.json(
+          { error: 'Expected closing date cannot be in the past' },
+          { status: 400 }
+        );
+      }
     }
 
     // Verify project exists and belongs to user's organization
@@ -262,6 +283,7 @@ export async function POST(request: NextRequest) {
         description: description?.trim() || null,
         status_id: finalStatusId,
         priority_id: priority_id || null,
+        expected_closing_date: expected_closing_date || null,
         updated_by: decoded.sub
       })
       .select(`
@@ -273,6 +295,8 @@ export async function POST(request: NextRequest) {
         description,
         status_id,
         priority_id,
+        expected_closing_date,
+        actual_closing_date,
         created_at,
         updated_at,
         projects!inner(id, name),

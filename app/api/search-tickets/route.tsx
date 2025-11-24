@@ -71,6 +71,7 @@ export async function GET(request: NextRequest) {
       .from('tickets')
       .select(`
         id, title, description, created_at, updated_at, 
+        expected_closing_date, actual_closing_date,
         status_id, priority_id, created_by, assigned_to, project_id,
         projects!inner(name, organization_id),
         creator:users!tickets_created_by_fkey(name, email),

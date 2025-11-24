@@ -57,6 +57,8 @@ export async function GET(request: NextRequest) {
         description,
         status_id,
         priority_id,
+        expected_closing_date,
+        actual_closing_date,
         created_at,
         updated_at,
         updated_by
@@ -238,6 +240,8 @@ export async function GET(request: NextRequest) {
         id: ticket.id,
         title: ticket.title,
         description: ticket.description,
+        expected_closing_date: ticket.expected_closing_date,
+        actual_closing_date: ticket.actual_closing_date,
         created_at: ticket.created_at,
         updated_at: ticket.updated_at,
         project: project ? {

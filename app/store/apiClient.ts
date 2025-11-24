@@ -10,9 +10,9 @@ export class ApiClient {
     }
   }
 
-  private static async handleResponse(response: Response) {
+  private static async handleResponse(response: Response, skipAuthCheck = false) {
     if (!response.ok) {
-      if (response.status === 401) {
+      if (response.status === 401 && !skipAuthCheck) {
         // Token expired or invalid, logout user
         useAuthStore.getState().logout()
         throw new Error('Authentication required')
@@ -31,7 +31,7 @@ export class ApiClient {
       body: JSON.stringify({ email, password }),
     })
 
-    const data = await this.handleResponse(response)
+    const data = await this.handleResponse(response, true) // Skip auth check for login
     
     // Don't update store here - OTP verification will handle login
     // Just return the OTP response

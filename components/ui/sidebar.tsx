@@ -15,7 +15,8 @@ import {
   AlertCircle,
   Users,
   Shield,
-  Inbox
+  Inbox,
+  DollarSign
 } from 'lucide-react';
 import { useAuthStore } from '../../app/store/authStore';
 
@@ -26,6 +27,8 @@ interface NavItem {
   adminOnly?: boolean;
   managerOnly?: boolean;
   adminOrManager?: boolean;
+  salesOnly?: boolean; // For sales-specific items
+  nonSalesOnly?: boolean; // For non-sales items
 }
 
 interface TicketItem {
@@ -39,18 +42,22 @@ interface TicketItem {
 }
 
 const navItems: NavItem[] = [
-  { name: 'Dashboard', href: '/dashboard', icon: Home },
-  { name: 'Projects', href: '/projects', icon: FolderOpen },
-  { name: 'Requests', href: '/requests', icon: Inbox, adminOrManager: true },
-  { name: 'Manage Access', href: '/manage-access', icon: Users, adminOrManager: true },
-  { name: 'Profile', href: '/profile', icon: User },
-  { name: 'Tickets', href: '/tickets', icon: Ticket },
+  { name: 'Dashboard', href: '/dashboard', icon: Home, nonSalesOnly: true },
+  { name: 'Projects', href: '/projects', icon: FolderOpen, nonSalesOnly: true },
+  { name: 'Requests', href: '/requests', icon: Inbox, adminOrManager: true, nonSalesOnly: true },
+  { name: 'Manage Access', href: '/manage-access', icon: Users, adminOrManager: true, nonSalesOnly: true },
+  { name: 'Profile', href: '/profile', icon: User, nonSalesOnly: true },
+  { name: 'Tickets', href: '/tickets', icon: Ticket, nonSalesOnly: true },
+  { name: 'Home', href: '/sales', icon: Home, salesOnly: true }, // Sales Dashboard as Home
+  { name: 'Requests', href: '/requests', icon: Inbox, salesOnly: true, adminOnly: true }, // Only for Sales Admin
+  { name: 'Sales', href: '/sales', icon: DollarSign }, // Always visible
 ];
 
 const Sidebar = () => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [tickets, setTickets] = useState<TicketItem[]>([]);
   const [isLoadingTickets, setIsLoadingTickets] = useState(false);
+  const [isSalesOnly, setIsSalesOnly] = useState(false);
   const pathname = usePathname();
   const { user, roles, currentProject, currentDepartment, role, token } = useAuthStore();
 
@@ -58,11 +65,38 @@ const Sidebar = () => {
   // Manage Access and Requests tabs are organization/department level features
   const effectiveRole = currentDepartment?.role || role || roles?.[0] || 'Member';
 
+  // Check if user is Sales-only (only has Sales department role, no other departments)
+  useEffect(() => {
+    const checkSalesOnly = async () => {
+      if (!token || !user) return;
+      
+      try {
+        const response = await fetch('/api/check-user-departments', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          // User is sales-only if they only have Sales department and no other departments
+          setIsSalesOnly(data.isSalesOnly || false);
+        }
+      } catch (error) {
+        console.error('Error checking user departments:', error);
+      }
+    };
+
+    checkSalesOnly();
+  }, [token, user]);
+
   console.log('🔍 Sidebar - Role Check (Org/Dept Based):', {
     departmentRole: currentDepartment?.role,
     globalRole: role,
     rolesArray: roles,
     effectiveRole,
+    isSalesOnly,
     note: 'Sidebar uses ORG/DEPT role, not project role'
   });
 
@@ -94,18 +128,35 @@ const Sidebar = () => {
     fetchRecentTickets();
   }, [token, isExpanded]);
 
-  // Filter navigation items based on user role
+  // Filter navigation items based on user role and sales-only status
   const filteredNavItems = navItems.filter(item => {
-    if (item.adminOnly) {
-      return effectiveRole === 'Admin';
+    // If user is sales-only
+    if (isSalesOnly) {
+      // Hide non-sales items
+      if (item.nonSalesOnly) return false;
+      // Show sales-only items
+      if (item.salesOnly) return true;
+      // For Sales tab (always visible), show it
+      if (item.href === '/sales') return true;
+      return false;
     }
-    if (item.managerOnly) {
-      return effectiveRole === 'Manager';
+    
+    // If user is NOT sales-only
+    else {
+      // Hide sales-only items
+      if (item.salesOnly) return false;
+      // Show non-sales items based on role
+      if (item.adminOnly) {
+        return effectiveRole === 'Admin';
+      }
+      if (item.managerOnly) {
+        return effectiveRole === 'Manager';
+      }
+      if (item.adminOrManager) {
+        return effectiveRole === 'Admin' || effectiveRole === 'Manager';
+      }
+      return true;
     }
-    if (item.adminOrManager) {
-      return effectiveRole === 'Admin' || effectiveRole === 'Manager';
-    }
-    return true;
   });
 
   const getStatusColor = (status: string) => {

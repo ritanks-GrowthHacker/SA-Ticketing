@@ -41,7 +41,36 @@ export async function GET(request: NextRequest) {
 
     const organizationId = decoded.org_id;
 
+    // First, get all user IDs who are active members of this organization
+    const { data: orgMembers, error: orgMembersError } = await supabase
+      .from('user_organisation_role')
+      .select('user_id')
+      .eq('organization_id', organizationId);
+
+    if (orgMembersError) {
+      console.error('Error fetching organization members:', orgMembersError);
+      return NextResponse.json(
+        { error: 'Failed to fetch organization members' },
+        { status: 500 }
+      );
+    }
+
+    const activeUserIds = (orgMembers || []).map((m: any) => m.user_id);
+    
+    if (activeUserIds.length === 0) {
+      console.log('⚠️ No active users found in organization');
+      return NextResponse.json({
+        success: true,
+        users: [],
+        allUsers: [],
+        totalUsers: 0,
+        eligibleUsers: 0,
+        restrictedDepartments: RESTRICTED_DEPARTMENTS
+      });
+    }
+
     // Get all users in the organization with their department information
+    // Only include users who are active members (exist in user_organisation_role)
     const { data: users, error: usersError } = await supabase
       .from('users')
       .select(`
@@ -59,6 +88,7 @@ export async function GET(request: NextRequest) {
         )
       `)
       .eq('organization_id', organizationId)
+      .in('id', activeUserIds)
       .order('name');
 
     if (usersError) {

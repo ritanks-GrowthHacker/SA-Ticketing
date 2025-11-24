@@ -1,0 +1,4 @@
+POST http://localhost:3000/api/sales/decode-token HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer YOUR_ADMIN_TOKEN_HERE
+

@@ -90,28 +90,12 @@ export async function GET(request: NextRequest) {
     }
 
     // Get ALL users who have either:
-    // 1. organization_id matching (user_organization_roles)
-    // 2. department roles in this org (user_department_roles)
+    // 1. Active in user_organisation_role for this org
+    // 2. Have department roles in user_department_roles for this org
     
-    // First get users with org roles
-    const { data: usersWithOrgRoles, error: orgUsersError } = await supabase
-      .from('users')
-      .select(`
-        id,
-        name,
-        email,
-        job_title,
-        phone,
-        location,
-        department,
-        department_id,
-        organization_id,
-        created_at
-      `)
-      .eq('organization_id', orgId);
-
-    // Then get users with department roles (might not have org role)
     const departmentIds = allDepartments?.map(d => d.id) || [];
+    
+    // First get users with department roles (this is the primary source)
     let usersWithDeptRoles: any[] = [];
     
     if (departmentIds.length > 0) {
@@ -141,11 +125,41 @@ export async function GET(request: NextRequest) {
       usersWithDeptRoles = deptRoleUsers || [];
     }
 
+    // Get user IDs who are active in this organization (from user_organisation_role)
+    const { data: activeOrgUsers } = await supabase
+      .from('user_organisation_role')
+      .select('user_id')
+      .eq('organization_id', orgId);
+    
+    const activeOrgUserIds = (activeOrgUsers || []).map(u => u.user_id);
+    
+    // Get users who have org roles
+    let usersWithOrgRoles: any[] = [];
+    if (activeOrgUserIds.length > 0) {
+      const { data: orgUsers } = await supabase
+        .from('users')
+        .select(`
+          id,
+          name,
+          email,
+          job_title,
+          phone,
+          location,
+          department,
+          department_id,
+          organization_id,
+          created_at
+        `)
+        .in('id', activeOrgUserIds);
+      
+      usersWithOrgRoles = orgUsers || [];
+    }
+
     // Merge and deduplicate users
     const userMap = new Map();
     
     // Add users with org roles
-    (usersWithOrgRoles || []).forEach((user: any) => {
+    usersWithOrgRoles.forEach((user: any) => {
       userMap.set(user.id, { ...user, departmentRoles: [] });
     });
     
@@ -168,7 +182,7 @@ export async function GET(request: NextRequest) {
     const userIds = allUsers.map((u: any) => u.id);
     
     const { data: orgRoles } = userIds.length > 0 ? await supabase
-      .from('user_organization_roles')
+      .from('user_organisation_role')
       .select(`
         user_id,
         role_id,
@@ -203,23 +217,14 @@ export async function GET(request: NextRequest) {
 
     // Map employees with their role information and ALL their departments
     const employeesWithDepartments = filteredUsers.map((employee: any) => {
-      // Extract role information - prioritize org role, fallback to department role
-      let roleInfo = null;
-      let roleType = null;
+      // Get org-level role (if exists)
+      let orgRoleInfo = null;
+      let orgRoleType = null;
       
       const orgRole = orgRoleMap.get(employee.id);
       if (orgRole?.global_roles) {
-        roleInfo = orgRole.global_roles;
-        roleType = 'organization';
-      }
-      
-      if (!roleInfo && employee.departmentRoles && employee.departmentRoles.length > 0) {
-        // Use first department role
-        roleInfo = {
-          id: employee.departmentRoles[0].role_id,
-          name: employee.departmentRoles[0].role_name
-        };
-        roleType = 'department';
+        orgRoleInfo = orgRole.global_roles;
+        orgRoleType = 'organization';
       }
       
       // Get all departments user belongs to
@@ -261,9 +266,9 @@ export async function GET(request: NextRequest) {
         all_departments: Array.from(userDepts), // All department IDs user belongs to
         organization_id: employee.organization_id,
         created_at: employee.created_at,
-        current_role: roleInfo?.name || null,
-        current_role_id: roleInfo?.id || null,
-        role_type: roleType,
+        current_role: orgRoleInfo?.name || null, // Org-level role only
+        current_role_id: orgRoleInfo?.id || null, // Org-level role ID only
+        role_type: orgRoleType, // 'organization' or null
         department_roles: departmentRoleMap // Map of department_id -> role info
       };
     });

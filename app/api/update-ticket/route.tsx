@@ -18,6 +18,7 @@ interface UpdateTicketRequest {
   status_id?: string;
   priority_id?: string;
   assigned_to?: string;
+  expected_closing_date?: string; // Allow updating expected date
 }
 
 export async function PUT(request: NextRequest) {
@@ -54,13 +55,26 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const { ticket_id, description, status_id, priority_id, assigned_to } = body;
+    const { ticket_id, description, status_id, priority_id, assigned_to, expected_closing_date } = body;
 
     if (!ticket_id) {
       return NextResponse.json(
         { error: 'Ticket ID is required' },
         { status: 400 }
       );
+    }
+
+    // Validate expected_closing_date if provided
+    if (expected_closing_date !== undefined) {
+      if (expected_closing_date !== null && expected_closing_date !== '') {
+        const expectedDate = new Date(expected_closing_date);
+        if (isNaN(expectedDate.getTime())) {
+          return NextResponse.json(
+            { error: 'Invalid expected_closing_date format. Use ISO date string.' },
+            { status: 400 }
+          );
+        }
+      }
     }
 
     // First, fetch the existing ticket to check permissions
@@ -307,6 +321,46 @@ export async function PUT(request: NextRequest) {
       updateData.assigned_to = assigned_to || null;
     }
 
+    // Check if status is being changed to "Resolved" to capture actual closing date
+    if (status_id !== undefined && status_id !== existingTicket.status_id) {
+      // Fetch the new status to check if it's "Resolved"
+      const { data: newStatus } = await supabase
+        .from('statuses')
+        .select('name')
+        .eq('id', status_id)
+        .single();
+      
+      // If status is being changed to "Resolved", set actual_closing_date to now
+      if (newStatus?.name?.toLowerCase() === 'resolved') {
+        updateData.actual_closing_date = new Date().toISOString();
+        console.log('🎉 Ticket being resolved, setting actual_closing_date:', updateData.actual_closing_date);
+      }
+      
+      // If status is being changed FROM "Resolved" to something else, clear actual_closing_date
+      if (existingTicket.status_id) {
+        const { data: oldStatus } = await supabase
+          .from('statuses')
+          .select('name')
+          .eq('id', existingTicket.status_id)
+          .single();
+        
+        if (oldStatus?.name?.toLowerCase() === 'resolved' && newStatus?.name?.toLowerCase() !== 'resolved') {
+          updateData.actual_closing_date = null;
+          console.log('⚠️ Ticket being reopened, clearing actual_closing_date');
+        }
+      }
+    }
+
+    // Handle expected_closing_date update (frozen in edit mode - only creator can change)
+    if (expected_closing_date !== undefined) {
+      // Only allow creator to update expected_closing_date
+      if (decoded.sub === existingTicket.created_by) {
+        updateData.expected_closing_date = expected_closing_date || null;
+      } else {
+        console.log('⚠️ Non-creator attempted to update expected_closing_date, ignoring');
+      }
+    }
+
     // Update the ticket
     const { data: updatedTicket, error: updateError } = await supabase
       .from('tickets')
@@ -321,6 +375,8 @@ export async function PUT(request: NextRequest) {
         description,
         status_id,
         priority_id,
+        expected_closing_date,
+        actual_closing_date,
         created_at,
         updated_at,
         updated_by

@@ -31,11 +31,44 @@ export default function AuthPage() {
 
   // Simple redirect to dashboard on authentication
   useEffect(() => {
-    if (isAuthenticated && !isRedirecting) {
-      setIsRedirecting(true)
-      router.push('/dashboard')
-    }
-  }, [isAuthenticated, isRedirecting, router])
+    const redirectUser = async () => {
+      if (isAuthenticated && !isRedirecting) {
+        setIsRedirecting(true);
+        
+        // Check if user is sales-only
+        const authStore = useAuth();
+        const token = authStore.token;
+        
+        if (token) {
+          try {
+            const response = await fetch('/api/check-user-departments', {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              }
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              
+              // If user is sales-only, redirect to sales dashboard
+              if (data.isSalesOnly) {
+                router.push('/sales');
+                return;
+              }
+            }
+          } catch (error) {
+            console.error('Error checking departments:', error);
+          }
+        }
+        
+        // Default redirect to dashboard
+        router.push('/dashboard');
+      }
+    };
+    
+    redirectUser();
+  }, [isAuthenticated, isRedirecting, router]);
 
   // Reset redirecting flag when not authenticated
   useEffect(() => {

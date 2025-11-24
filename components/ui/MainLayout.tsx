@@ -22,7 +22,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
     '/rbac-test',
     '/manage-access',
     '/create-ticket',
-    '/requests'
+    '/requests',
+    '/sales'
   ];
 
   // Check if current path should show the layout
