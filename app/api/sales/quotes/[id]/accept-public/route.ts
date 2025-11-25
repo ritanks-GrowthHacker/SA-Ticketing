@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdminSales } from '@/app/db/connections';
 import { emailService } from '@/lib/emailService';
-import { createSalesNotification } from '@/lib/salesNotifications';
+import { emailTemplates } from '@/app/emailTemplates';
 
 export async function POST(
   request: NextRequest,
@@ -103,30 +103,14 @@ export async function POST(
       await emailService.sendEmail({
         to: quote.clients.email,
         subject: `Invoice ${invoiceNumber} - Payment Details`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #16a34a;">✅ Quote Accepted - Invoice Generated</h2>
-            <p>Hello ${quote.clients.contact_person || quote.clients.client_name},</p>
-            <p>Thank you for accepting our quote! Your invoice has been generated:</p>
-            <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-              <p style="margin: 5px 0;"><strong>Invoice Number:</strong> ${invoiceNumber}</p>
-              <p style="margin: 5px 0;"><strong>Quote Number:</strong> ${quote.quote_number}</p>
-              <p style="margin: 5px 0;"><strong>Amount Due:</strong> ${new Intl.NumberFormat('en-IN', { style: 'currency', currency: quote.currency || 'INR' }).format(quote.total_amount)}</p>
-            </div>
-            <h3 style="color: #333;">Payment Details:</h3>
-            <div style="background: #e8f5e9; padding: 15px; border-radius: 6px; margin: 15px 0;">
-              <p style="margin: 5px 0;"><strong>Bank Name:</strong> Your Bank Name</p>
-              <p style="margin: 5px 0;"><strong>Account Number:</strong> XXXX XXXX XXXX</p>
-              <p style="margin: 5px 0;"><strong>IFSC Code:</strong> YOURBANK0000</p>
-              <p style="margin: 5px 0;"><strong>Account Name:</strong> Your Company Name</p>
-              <p style="margin: 5px 0;"><strong>UPI ID:</strong> yourcompany@upi</p>
-            </div>
-            <p>Please make the payment and send us the payment reference/screenshot for confirmation.</p>
-            <p style="color: #666; font-size: 12px; margin-top: 30px;">
-              For any questions, please contact us at sales@yourcompany.com
-            </p>
-          </div>
-        `
+        html: emailTemplates.quoteAccepted({
+          invoiceNumber,
+          quoteNumber: quote.quote_number,
+          totalAmount: quote.total_amount,
+          currency: quote.currency || 'INR',
+          clientName: quote.clients.client_name,
+          contactPerson: quote.clients.contact_person
+        })
       });
       console.log('✅ Payment email sent to:', quote.clients.email);
     } catch (emailError) {
@@ -135,7 +119,16 @@ export async function POST(
 
     // Send notification to sales member who created the quote
     try {
-      await createSalesNotification({
+      const { createSalesNotification } = await import('@/lib/salesNotifications');
+      
+      console.log('🔔 Creating sales notification for:', {
+        userId: quote.created_by_user_id,
+        organizationId: quote.organization_id,
+        entityType: 'quote',
+        entityId: quote.quote_id
+      });
+      
+      const notificationResult = await createSalesNotification({
         userId: quote.created_by_user_id,
         organizationId: quote.organization_id,
         entityType: 'quote',
@@ -151,9 +144,14 @@ export async function POST(
           currency: quote.currency || 'INR'
         }
       });
-      console.log('✅ Notification sent to user:', quote.created_by_user_id);
+      
+      if (notificationResult) {
+        console.log('✅ Sales notification created successfully:', notificationResult);
+      } else {
+        console.error('❌ Sales notification creation returned null');
+      }
     } catch (notifError) {
-      console.error('❌ Error sending notification:', notifError);
+      console.error('❌ Error sending sales notification:', notifError);
     }
 
     return NextResponse.json({

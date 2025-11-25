@@ -270,7 +270,7 @@ export async function POST(req: Request) {
               <p>Great news! Your request to access the project <strong>"${projectName}"</strong> has been approved.</p>
               <p>You can now view and collaborate on this project in your dashboard.</p>
               <div style="margin: 30px 0;">
-                <a href="${process.env.NEXT_PUBLIC_APP_URL}/projects" 
+                <a href="${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/projects" 
                    style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
                   View Project
                 </a>

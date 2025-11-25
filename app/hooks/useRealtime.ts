@@ -98,7 +98,7 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
     };
 
     eventSource.onerror = (error) => {
-      console.error('❌ Notification stream error:', error);
+      // SSE errors are normal when connection closes - don't spam console
       setIsConnected(false);
       eventSource.close();
     };
@@ -143,7 +143,7 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
     };
 
     eventSource.onerror = (error) => {
-      console.error('❌ Ticket stream error:', error);
+      // SSE errors are normal when connection closes - don't spam console
       eventSource.close();
     };
 

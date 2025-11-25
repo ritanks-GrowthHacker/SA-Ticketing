@@ -35,6 +35,29 @@ export async function POST(
       })
       .eq('quote_id', id);
 
+    // Send notification to sales member
+    try {
+      const { createSalesNotification } = await import('@/lib/salesNotifications');
+      
+      await createSalesNotification({
+        userId: quote.created_by_user_id,
+        organizationId: quote.organization_id,
+        entityType: 'quote',
+        entityId: quote.quote_id,
+        title: '❌ Quote Rejected',
+        message: `Quote ${quote.quote_number} was rejected by ${quote.clients.client_name}.`,
+        type: 'quote_sent',
+        metadata: {
+          quote_number: quote.quote_number,
+          client_name: quote.clients.client_name,
+          amount: quote.total_amount,
+          currency: quote.currency || 'INR'
+        }
+      });
+    } catch (notifError) {
+      console.error('❌ Error sending reject notification:', notifError);
+    }
+
     return NextResponse.json({
       message: 'Quote rejected successfully'
     });

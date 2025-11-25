@@ -25,7 +25,7 @@ export default function AuthPage() {
   const [resetEmail, setResetEmail] = useState('') 
   
   const { login } = useApiClient()
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, token } = useAuth()
   const { login: authLogin } = useAuthActions()
   const router = useRouter()
 
@@ -36,9 +36,6 @@ export default function AuthPage() {
         setIsRedirecting(true);
         
         // Check if user is sales-only
-        const authStore = useAuth();
-        const token = authStore.token;
-        
         if (token) {
           try {
             const response = await fetch('/api/check-user-departments', {
@@ -68,7 +65,7 @@ export default function AuthPage() {
     };
     
     redirectUser();
-  }, [isAuthenticated, isRedirecting, router]);
+  }, [isAuthenticated, isRedirecting, router, token]);
 
   // Reset redirecting flag when not authenticated
   useEffect(() => {

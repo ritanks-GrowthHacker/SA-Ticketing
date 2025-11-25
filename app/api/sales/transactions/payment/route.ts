@@ -82,8 +82,17 @@ export async function PATCH(request: NextRequest) {
     // Send notification to sales member who created the transaction
     try {
       const clientName = (currentTxn as any).clients?.client_name || 'Client';
-      await createSalesNotification({
-        userId: currentTxn.sales_member_id || userId,
+      const notificationUserId = currentTxn.sales_member_id || userId;
+      
+      console.log('🔔 Creating payment notification for:', {
+        userId: notificationUserId,
+        organizationId,
+        entityType: 'payment',
+        entityId: transaction_id
+      });
+      
+      const notificationResult = await createSalesNotification({
+        userId: notificationUserId,
         organizationId,
         entityType: 'payment',
         entityId: transaction_id,

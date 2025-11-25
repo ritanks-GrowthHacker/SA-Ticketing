@@ -20,7 +20,7 @@ export class InvitationEmailService {
   async sendUserInvitation(data: InvitationData): Promise<{ success: boolean; message: string }> {
     try {
       // Create registration link
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
       const userName = data.name || data.email.split('@')[0];
       const params = new URLSearchParams({
         email: data.email,
@@ -235,7 +235,7 @@ export class InvitationEmailService {
               </div>
 
               <div style="text-align: center; margin: 30px 0;">
-                <a href="${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/user-login" 
+                <a href="${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/user-login" 
                    style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-decoration: none; padding: 16px 40px; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);">
                   Login Now
                 </a>

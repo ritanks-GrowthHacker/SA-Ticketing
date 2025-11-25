@@ -84,6 +84,8 @@ const NotificationBell: React.FC = () => {
           window.focus();
           if (newNotification.entity_type === 'ticket') {
             window.location.href = `/tickets/${newNotification.entity_id}`;
+          } else if (newNotification.entity_type === 'quote') {
+            window.location.href = `/sales/quotes`;
           }
           notification.close();
         };
@@ -91,8 +93,60 @@ const NotificationBell: React.FC = () => {
     };
 
     eventSource.onerror = (error) => {
-      console.error('SSE Error:', error);
+      // SSE errors are normal when connection closes or reconnects
+      // Only log if it's not a normal closure
       eventSource.close();
+    };
+
+    // Sales notifications stream
+    const salesEventSource = new EventSource(`/api/sales/notifications/stream?token=${encodeURIComponent(token)}`);
+
+    salesEventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      
+      // Ignore connection messages
+      if (data.type === 'connected') return;
+      
+      const newNotification = {
+        ...data,
+        id: data.notification_id || data.id
+      };
+      
+      // Check if notification already exists to prevent duplicates
+      setNotifications((prev) => {
+        const exists = prev.some(n => n.id === newNotification.id);
+        if (exists) return prev;
+        
+        // Only increment count if notification is actually new
+        setUnreadCount((count) => count + 1);
+        return [newNotification, ...prev];
+      });
+      
+      // Show browser notification for sales notifications
+      if (Notification.permission === 'granted' && newNotification.title) {
+        const notification = new Notification(newNotification.title, {
+          body: newNotification.message,
+          icon: '/favicon.ico',
+          tag: newNotification.id,
+          requireInteraction: false,
+        });
+
+        setTimeout(() => notification.close(), 5000);
+
+        notification.onclick = () => {
+          window.focus();
+          if (newNotification.entity_type === 'quote') {
+            window.location.href = `/sales/quotes`;
+          } else if (newNotification.entity_type === 'transaction') {
+            window.location.href = `/sales/transactions`;
+          }
+          notification.close();
+        };
+      }
+    };
+
+    salesEventSource.onerror = () => {
+      salesEventSource.close();
     };
 
     // Auto-request browser notification permission
@@ -108,6 +162,7 @@ const NotificationBell: React.FC = () => {
 
     return () => {
       eventSource.close();
+      salesEventSource.close();
     };
   }, [user, token]);
 

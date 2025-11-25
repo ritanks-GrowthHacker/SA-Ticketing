@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
             <p>${commentText.replace(/@\[([^\]]+)\]\([^)]+\)/g, '<strong>@$1</strong>')}</p>
           </div>
           
-          <p><a href="${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/tickets/${ticketId}" style="background-color: #3b82f6; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">View Ticket</a></p>
+          <p><a href="${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/tickets/${ticketId}" style="background-color: #3b82f6; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">View Ticket</a></p>
           
           <hr style="margin: 30px 0;">
           <p style="color: #6b7280; font-size: 12px;">

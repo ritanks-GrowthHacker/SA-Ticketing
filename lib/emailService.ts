@@ -1,6 +1,9 @@
 import nodemailer from "nodemailer";
 import { supabase } from "@/app/db/connections";
 
+// Helper to get base URL for all email links
+const getBaseUrl = () => process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
 interface EmailOptions {
   to: string | string[];
   subject: string;
@@ -27,9 +30,13 @@ class EmailService {
     // Use environment variables for security
     this.config = {
       service: process.env.EMAIL_SERVICE || "gmail",
-      user: process.env.EMAIL_USER || "rihina.techorzo@gmail.com",
-      pass: process.env.EMAIL_PASS || "wdufgyawvizccnwc",
+      user: process.env.EMAIL_USER || "",
+      pass: process.env.EMAIL_PASS || "",
     };
+
+    if (!this.config.user || !this.config.pass) {
+      console.warn('⚠️ EMAIL_USER or EMAIL_PASS not set in environment variables');
+    }
 
     this.transporter = nodemailer.createTransport({
       service: this.config.service,
@@ -502,8 +509,7 @@ SA Ticketing System
     commentContent: string,
     isReply: boolean = false
   ): Promise<{ success: boolean; messageId?: string; error?: string }> {
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-    const ticketUrl = `${appUrl}/tickets/${ticketId}`;
+    const ticketUrl = `${getBaseUrl()}/tickets/${ticketId}`;
 
     const html = `
       <!DOCTYPE html>

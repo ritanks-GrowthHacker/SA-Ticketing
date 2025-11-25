@@ -23,6 +23,8 @@ export async function GET(request: NextRequest) {
     
     const userId = decoded.sub || decoded.userId || decoded.id || decoded.user_id;
 
+    console.log('📡 Sales SSE stream connected for user:', userId, 'Decoded:', decoded);
+
     // Set up SSE headers
     const encoder = new TextEncoder();
     let lastCheckTime = new Date();
@@ -44,7 +46,7 @@ export async function GET(request: NextRequest) {
             }
           }, 30000); // Send keep-alive every 30 seconds
 
-          // Poll for new sales notifications every 60 seconds
+          // Poll for new sales notifications every 3 seconds
           const pollInterval = setInterval(async () => {
             try {
               const { data: newNotifications, error } = await supabaseAdminSales
@@ -55,7 +57,13 @@ export async function GET(request: NextRequest) {
                 .gt('created_at', lastCheckTime.toISOString())
                 .order('created_at', { ascending: false });
 
-              if (!error && newNotifications && newNotifications.length > 0) {
+              if (error) {
+                console.error('❌ SSE Poll error:', error);
+              }
+              
+              if (newNotifications && newNotifications.length > 0) {
+                console.log(`🔔 Found ${newNotifications.length} new sales notifications for user ${userId}:`, newNotifications);
+                
                 // Send each new notification
                 for (const notification of newNotifications) {
                   controller.enqueue(
@@ -69,7 +77,7 @@ export async function GET(request: NextRequest) {
             } catch (error) {
               console.error('Error polling sales notifications:', error);
             }
-          }, 60000); // Poll every 60 seconds
+          }, 3000); // Poll every 3 seconds
 
           // Cleanup on close
           request.signal.addEventListener('abort', () => {

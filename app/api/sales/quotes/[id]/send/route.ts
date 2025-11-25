@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { supabaseAdminSales } from '@/app/db/connections';
 import { DecodedToken, extractUserAndOrgId } from '../../../helpers';
 import { emailService } from '@/lib/emailService';
+import { emailTemplates } from '@/app/emailTemplates';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -53,27 +54,16 @@ export async function POST(
       await emailService.sendEmail({
         to: quote.clients.email,
         subject: `Quote ${quote.quote_number} - ${quote.quote_title}`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #333;">New Quote from Your Sales Team</h2>
-            <p>Hello ${quote.clients.contact_person || quote.clients.client_name},</p>
-            <p>We have prepared a quote for you:</p>
-            <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-              <p style="margin: 5px 0;"><strong>Quote Number:</strong> ${quote.quote_number}</p>
-              <p style="margin: 5px 0;"><strong>Title:</strong> ${quote.quote_title}</p>
-              <p style="margin: 5px 0;"><strong>Amount:</strong> ${new Intl.NumberFormat('en-IN', { style: 'currency', currency: quote.currency || 'INR' }).format(quote.total_amount)}</p>
-              <p style="margin: 5px 0;"><strong>Valid Until:</strong> ${quote.valid_until ? new Date(quote.valid_until).toLocaleDateString() : 'N/A'}</p>
-            </div>
-            <p>Click the button below to view and review your quote:</p>
-            <div style="text-align: center; margin: 30px 0;">
-              <a href="${magicLink}" style="background: #3b82f6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
-                View Quote
-              </a>
-            </div>
-            <p style="color: #666; font-size: 12px;">This link will expire in 15 days.</p>
-            <p style="color: #666; font-size: 12px;">If you have any questions, please don't hesitate to contact us.</p>
-          </div>
-        `
+        html: emailTemplates.quoteSent({
+          quoteNumber: quote.quote_number,
+          quoteTitle: quote.quote_title,
+          totalAmount: quote.total_amount,
+          currency: quote.currency || 'INR',
+          validUntil: quote.valid_until,
+          clientName: quote.clients.client_name,
+          contactPerson: quote.clients.contact_person,
+          magicLink
+        })
       });
       console.log('✅ Quote email sent to:', quote.clients.email);
     } catch (emailError) {
