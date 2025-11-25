@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
             } catch (error) {
               console.error('Error polling sales notifications:', error);
             }
-          }, 3000); // Poll every 3 seconds
+          }, 5000); // Poll every 5 seconds
 
           // Cleanup on close
           request.signal.addEventListener('abort', () => {

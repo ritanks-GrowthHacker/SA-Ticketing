@@ -102,11 +102,16 @@ export default function SalesAdminDashboard() {
     // Set view type for All Clients page
     localStorage.setItem('sales_user_view', 'admin');
 
-    // Sync user to sales DB
-    syncUser();
-    fetchHierarchy();
-    fetchAnalytics();
-    fetchClients();
+    // Sync user first, then fetch all data in parallel for faster loading
+    syncUser().finally(() => {
+      Promise.all([
+        fetchHierarchy(),
+        fetchAnalytics(),
+        fetchClients()
+      ]).finally(() => {
+        setLoading(false);
+      });
+    });
   }, [token]);
 
   const syncUser = async () => {

@@ -94,10 +94,17 @@ export default function SalesManagerDashboard() {
     // Set view type for All Clients page
     localStorage.setItem('sales_user_view', 'manager');
 
-    fetchMembers();
-    fetchAnalytics();
-    fetchClients();
-    fetchTransactions();
+    // Fetch all data in parallel for faster loading
+    Promise.all([
+      fetchMembers(),
+      fetchAnalytics(),
+      fetchClients(),
+      fetchTransactions()
+    ]).catch(error => {
+      console.error('Error loading dashboard:', error);
+    }).finally(() => {
+      setLoading(false);
+    });
   }, [token, viewType]); // Re-fetch when viewType changes
 
   const fetchMembers = async () => {
@@ -112,8 +119,6 @@ export default function SalesManagerDashboard() {
       }
     } catch (error) {
       console.error('Error fetching members:', error);
-    } finally {
-      setLoading(false);
     }
   };
 

@@ -67,10 +67,15 @@ export default function SalesMemberDashboard() {
     }
 
     // Set view type for All Clients page
-    localStorage.setItem('sales_user_view', 'my');
+    localStorage.setItem('sales_user_view', 'member');
 
-    fetchClients();
-    fetchAnalytics();
+    // Fetch all data in parallel for faster loading
+    Promise.all([
+      fetchClients(),
+      fetchAnalytics()
+    ]).finally(() => {
+      setLoading(false);
+    });
   }, [token]);
 
   const fetchClients = async () => {
@@ -85,8 +90,6 @@ export default function SalesMemberDashboard() {
       }
     } catch (error) {
       console.error('Error fetching clients:', error);
-    } finally {
-      setLoading(false);
     }
   };
 

@@ -97,7 +97,7 @@ export async function GET(request: NextRequest) {
             } catch (error) {
               console.error('Error polling ticket updates:', error);
             }
-          }, 2000); // Poll every 2 seconds
+          }, 5000); // Poll every 5 seconds
 
           // Cleanup on close
           request.signal.addEventListener('abort', () => {
