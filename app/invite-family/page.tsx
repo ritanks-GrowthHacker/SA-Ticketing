@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, Mail, Plus, Trash2, CheckCircle, Heart, Send } from 'lucide-react';
+import { Users, Mail, Plus, Trash2, CheckCircle, Send } from 'lucide-react';
 import { useOrganizationStore } from '@/app/store/organizationStore';
 
 interface Department {
@@ -151,11 +151,8 @@ export default function InviteFamilyPage() {
         
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="mx-auto w-20 h-20 bg-gradient-to-r from-pink-500 to-purple-600 rounded-full flex items-center justify-center mb-6">
-            <Heart className="w-10 h-10 text-white" />
-          </div>
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            Invite Your Team! �
+            Invite Your Team! 
           </h1>
           <p className="text-lg text-gray-600">
             Invite your team members to join your organization

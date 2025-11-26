@@ -50,7 +50,7 @@ const navItems: NavItem[] = [
   { name: 'Tickets', href: '/tickets', icon: Ticket, nonSalesOnly: true },
   { name: 'Home', href: '/sales', icon: Home, salesOnly: true }, // Sales Dashboard as Home
   { name: 'Requests', href: '/requests', icon: Inbox, salesOnly: true, adminOnly: true }, // Only for Sales Admin
-  { name: 'Sales', href: '/sales', icon: DollarSign }, // Always visible
+  { name: 'Sales', href: '/sales', icon: DollarSign , nonSalesOnly: false }, // Always visible
 ];
 
 const Sidebar = () => {
