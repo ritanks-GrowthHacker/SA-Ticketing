@@ -41,21 +41,25 @@ export async function GET(request: NextRequest) {
 
     const organizationId = decoded.org_id;
 
-    // First, get all user IDs who are active members of this organization
-    const { data: orgMembers, error: orgMembersError } = await supabase
-      .from('user_organisation_role')
-      .select('user_id')
-      .eq('organization_id', organizationId);
+    // Get all user IDs who are active members of this organization
+    // Check both organization-level roles AND department-level roles
+    const [{ data: orgMembers }, { data: deptMembers }] = await Promise.all([
+      supabase
+        .from('user_organization_roles')
+        .select('user_id')
+        .eq('organization_id', organizationId),
+      supabase
+        .from('user_department_roles')
+        .select('user_id')
+        .eq('organization_id', organizationId)
+    ]);
 
-    if (orgMembersError) {
-      console.error('Error fetching organization members:', orgMembersError);
-      return NextResponse.json(
-        { error: 'Failed to fetch organization members' },
-        { status: 500 }
-      );
-    }
-
-    const activeUserIds = (orgMembers || []).map((m: any) => m.user_id);
+    // Combine and deduplicate user IDs from both sources
+    const allUserIds = new Set<string>();
+    (orgMembers || []).forEach((m: any) => allUserIds.add(m.user_id));
+    (deptMembers || []).forEach((m: any) => allUserIds.add(m.user_id));
+    
+    const activeUserIds = Array.from(allUserIds);
     
     if (activeUserIds.length === 0) {
       console.log('⚠️ No active users found in organization');
@@ -70,7 +74,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get all users in the organization with their department information
-    // Only include users who are active members (exist in user_organisation_role)
+    // Only include users who are active members (exist in user_organization_roles or user_department_roles)
     const { data: users, error: usersError } = await supabase
       .from('users')
       .select(`
