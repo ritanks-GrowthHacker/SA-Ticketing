@@ -16,10 +16,38 @@ const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
   const [isDepartmentDropdownOpen, setIsDepartmentDropdownOpen] = useState(false);
   const [userDepartments, setUserDepartments] = useState<any[]>([]);
   const [isLoadingDepartments, setIsLoadingDepartments] = useState(false);
+  const [organizationLogo, setOrganizationLogo] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const departmentDropdownRef = useRef<HTMLDivElement>(null);
   const { user, logout, currentDepartment, hasMultipleDepartments, switchDepartment, switchProject, token } = useAuthStore();
   const router = useRouter();
+
+  // Fetch organization logo
+  useEffect(() => {
+    const fetchOrganizationLogo = async () => {
+      if (!token || !user) return;
+      
+      try {
+        const response = await fetch('/api/get-organization-info', {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.organization?.logo_url) {
+            setOrganizationLogo(data.organization.logo_url);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching organization logo:', error);
+      }
+    };
+
+    fetchOrganizationLogo();
+  }, [token, user]);
 
   // Fetch user departments when component mounts if user has multiple departments
   useEffect(() => {
@@ -165,11 +193,18 @@ const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
       bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between transition-colors
       ${className}
     `}>
-      {/* Left side - can add breadcrumb or page title here */}
+      {/* Left side - Organization Logo or empty */}
       <div className="flex-1">
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-          Ticketing Metrix System
-        </h1>
+        {organizationLogo ? (
+          <img 
+            src={organizationLogo} 
+            alt="Organization Logo" 
+            className="h-10 object-contain"
+            onError={() => setOrganizationLogo(null)}
+          />
+        ) : (
+          <div className="h-10"></div>
+        )}
       </div>
 
       {/* Right side - User menu */}

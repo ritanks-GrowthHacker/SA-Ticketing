@@ -13,6 +13,11 @@ interface OnboardingFormData {
   confirmPassword: string;
   mobileNumber: string;
   selectedDepartments: string[];
+  logoUrl: string;
+  address: string;
+  taxPercentage: string;
+  gstNumber: string;
+  cin: string;
 }
 
 interface ValidationErrors {
@@ -24,6 +29,11 @@ interface ValidationErrors {
   confirmPassword?: string;
   mobileNumber?: string;
   selectedDepartments?: string;
+  logoUrl?: string;
+  address?: string;
+  taxPercentage?: string;
+  gstNumber?: string;
+  cin?: string;
 }
 
 const OrganizationOnboarding: React.FC = () => {
@@ -36,7 +46,12 @@ const OrganizationOnboarding: React.FC = () => {
     password: '',
     confirmPassword: '',
     mobileNumber: '',
-    selectedDepartments: []
+    selectedDepartments: [],
+    logoUrl: '',
+    address: '',
+    taxPercentage: '',
+    gstNumber: '',
+    cin: ''
   });
 
   const [showPassword, setShowPassword] = useState(false);
@@ -135,12 +150,25 @@ const OrganizationOnboarding: React.FC = () => {
     setSubmitStatus('idle');
 
     try {
-      const response = await fetch('/api/org-onboarding', {
+      const response = await fetch('/api/org-onboarding-new', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          organizationName: formData.organizationName,
+          domain: formData.domain,
+          username: formData.username,
+          orgEmail: formData.orgEmail,
+          password: formData.password,
+          mobileNumber: formData.mobileNumber,
+          selectedDepartments: formData.selectedDepartments,
+          logoUrl: formData.logoUrl || null,
+          address: formData.address || null,
+          taxPercentage: formData.taxPercentage ? parseFloat(formData.taxPercentage) : null,
+          gstNumber: formData.gstNumber || null,
+          cin: formData.cin || null
+        }),
       });
 
       const result = await response.json();
@@ -151,7 +179,7 @@ const OrganizationOnboarding: React.FC = () => {
         
         // Redirect to verification page with email parameter
         setTimeout(() => {
-          router.push(`/org-verify?email=${encodeURIComponent(formData.orgEmail)}&orgId=${result.organizationId}`);
+          router.push(`/org-verify-new?email=${encodeURIComponent(formData.orgEmail)}&registrationId=${result.registrationId}`);
         }, 2000);
       } else {
         setSubmitStatus('error');
@@ -168,7 +196,7 @@ const OrganizationOnboarding: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
+      <div className="max-w-6xl w-full bg-white rounded-2xl shadow-xl p-8 my-8">
         {/* Header */}
         <div className="text-center mb-8">
           <div className="mx-auto w-16 h-16 bg-blue-600 rounded-full flex items-center justify-center mb-4">
@@ -199,54 +227,59 @@ const OrganizationOnboarding: React.FC = () => {
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Organization Name */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Organization Name *
-            </label>
-            <div className="relative">
-              <Building2 className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                value={formData.organizationName}
-                onChange={(e) => handleInputChange('organizationName', e.target.value)}
-                className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.organizationName ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="Enter your organization name"
-                disabled={isSubmitting}
-              />
+          {/* Row 1: Organization Name & Domain */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Organization Name */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Organization Name *
+              </label>
+              <div className="relative">
+                <Building2 className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  value={formData.organizationName}
+                  onChange={(e) => handleInputChange('organizationName', e.target.value)}
+                  className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    errors.organizationName ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  placeholder="Enter your organization name"
+                  disabled={isSubmitting}
+                />
+              </div>
+              {errors.organizationName && (
+                <p className="mt-1 text-sm text-red-600">{errors.organizationName}</p>
+              )}
             </div>
-            {errors.organizationName && (
-              <p className="mt-1 text-sm text-red-600">{errors.organizationName}</p>
-            )}
+
+            {/* Domain */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Domain *
+              </label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  value={formData.domain}
+                  onChange={(e) => handleInputChange('domain', e.target.value)}
+                  className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    errors.domain ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  placeholder="company.com"
+                  disabled={isSubmitting}
+                />
+              </div>
+              {errors.domain && (
+                <p className="mt-1 text-sm text-red-600">{errors.domain}</p>
+              )}
+            </div>
           </div>
 
-          {/* Domain */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Domain *
-            </label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                value={formData.domain}
-                onChange={(e) => handleInputChange('domain', e.target.value)}
-                className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.domain ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="company.com"
-                disabled={isSubmitting}
-              />
-            </div>
-            {errors.domain && (
-              <p className="mt-1 text-sm text-red-600">{errors.domain}</p>
-            )}
-          </div>
-
-          {/* Username */}
-          <div>
+          {/* Row 2: Username & Organization Email */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Username */}
+            <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Username *
             </label>
@@ -266,18 +299,18 @@ const OrganizationOnboarding: React.FC = () => {
             {errors.username && (
               <p className="mt-1 text-sm text-red-600">{errors.username}</p>
             )}
-          </div>
+            </div>
 
-          {/* Organization Email */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Organization Email *
-            </label>
-            <div className="relative">
-              <Mail className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                type="email"
-                value={formData.orgEmail}
+            {/* Organization Email */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Organization Email *
+              </label>
+              <div className="relative">
+                <Mail className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <input
+                  type="email"
+                  value={formData.orgEmail}
                 onChange={(e) => handleInputChange('orgEmail', e.target.value)}
                 className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
                   errors.orgEmail ? 'border-red-300' : 'border-gray-300'
@@ -289,10 +322,13 @@ const OrganizationOnboarding: React.FC = () => {
             {errors.orgEmail && (
               <p className="mt-1 text-sm text-red-600">{errors.orgEmail}</p>
             )}
+            </div>
           </div>
 
-          {/* Password */}
-          <div>
+          {/* Row 3: Password & Confirm Password */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Password */}
+            <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Password *
             </label>
@@ -323,10 +359,10 @@ const OrganizationOnboarding: React.FC = () => {
             <p className="mt-1 text-xs text-gray-500">
               Must be 8+ characters with uppercase, lowercase, and number
             </p>
-          </div>
+            </div>
 
-          {/* Confirm Password */}
-          <div>
+            {/* Confirm Password */}
+            <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Confirm Password *
             </label>
@@ -354,6 +390,133 @@ const OrganizationOnboarding: React.FC = () => {
             {errors.confirmPassword && (
               <p className="mt-1 text-sm text-red-600">{errors.confirmPassword}</p>
             )}
+            </div>
+          </div>
+
+          {/* Address - Full Width */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Complete Address (Optional)
+            </label>
+            <textarea
+              value={formData.address}
+              onChange={(e) => handleInputChange('address', e.target.value)}
+              rows={3}
+              className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                errors.address ? 'border-red-300' : 'border-gray-300'
+              }`}
+              placeholder="Enter your organization's complete address"
+              disabled={isSubmitting}
+            />
+            {errors.address && (
+              <p className="mt-1 text-sm text-red-600">{errors.address}</p>
+            )}
+          </div>
+
+          {/* Row 4: Logo URL & Tax Percentage */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Logo URL */}
+            <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Logo URL (Optional)
+            </label>
+            <div className="relative">
+              <Building2 className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <input
+                type="url"
+                value={formData.logoUrl}
+                onChange={(e) => handleInputChange('logoUrl', e.target.value)}
+                className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  errors.logoUrl ? 'border-red-300' : 'border-gray-300'
+                }`}
+                placeholder="https://example.com/logo.png"
+                disabled={isSubmitting}
+              />
+            </div>
+            {errors.logoUrl && (
+              <p className="mt-1 text-sm text-red-600">{errors.logoUrl}</p>
+            )}
+            </div>
+
+            {/* Tax Percentage */}
+            <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Tax Percentage (Optional)
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                max="100"
+                value={formData.taxPercentage}
+                onChange={(e) => handleInputChange('taxPercentage', e.target.value)}
+                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  errors.taxPercentage ? 'border-red-300' : 'border-gray-300'
+                }`}
+                placeholder="18.00"
+                disabled={isSubmitting}
+              />
+              <span className="absolute right-3 top-3 text-gray-400">%</span>
+            </div>
+            {errors.taxPercentage && (
+              <p className="mt-1 text-sm text-red-600">{errors.taxPercentage}</p>
+            )}
+            <p className="mt-1 text-xs text-gray-500">
+              Tax percentage that will be levied on customers (0-100)
+            </p>
+            </div>
+          </div>
+
+          {/* Row 5: GST Number & CIN */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* GST Number */}
+            <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              GST Number (Optional)
+            </label>
+            <input
+              type="text"
+              value={formData.gstNumber}
+              onChange={(e) => handleInputChange('gstNumber', e.target.value.toUpperCase())}
+              maxLength={15}
+              className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                errors.gstNumber ? 'border-red-300' : 'border-gray-300'
+              }`}
+              placeholder="22AAAAA0000A1Z5"
+              disabled={isSubmitting}
+            />
+            {errors.gstNumber && (
+              <p className="mt-1 text-sm text-red-600">{errors.gstNumber}</p>
+            )}
+            <p className="mt-1 text-xs text-gray-500">
+              15-character alphanumeric GST identification number
+            </p>
+            </div>
+
+            {/* CIN */}
+            <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              CIN - Corporate Identification Number (Optional)
+            </label>
+            <input
+              type="text"
+              value={formData.cin}
+              onChange={(e) => handleInputChange('cin', e.target.value.toUpperCase())}
+              maxLength={21}
+              className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                errors.cin ? 'border-red-300' : 'border-gray-300'
+              }`}
+              placeholder="U12345AB2021PLC123456"
+              disabled={isSubmitting}
+            />
+            {errors.cin && (
+              <p className="mt-1 text-sm text-red-600">{errors.cin}</p>
+            )}
+            <p className="mt-1 text-xs text-gray-500">
+              21-character Corporate Identification Number
+            </p>
+            </div>
           </div>
 
           {/* Submit Button */}

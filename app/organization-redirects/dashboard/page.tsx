@@ -13,7 +13,8 @@ import {
   Phone,
   Calendar,
   Settings,
-  Plus
+  Plus,
+  LogOut
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useOrganizationStore } from '../../store/organizationStore';
@@ -56,7 +57,7 @@ interface DashboardStats {
 
 export default function OrganizationDashboard() {
   const router = useRouter();
-  const { currentOrg, getCurrentOrgId } = useOrganizationStore();
+  const { currentOrg, getCurrentOrgId, clearCurrentOrg } = useOrganizationStore();
   const { token } = useAuthStore();
   
   const [stats, setStats] = useState<DashboardStats>({ total_employees: 0, total_departments: 0 });
@@ -71,7 +72,9 @@ export default function OrganizationDashboard() {
   // Check organization access
   useEffect(() => {
     const orgId = getCurrentOrgId();
-    console.log('🔍 ORG DASHBOARD: Checking access', { orgId, currentOrg, hasToken: !!token });
+    const orgToken = localStorage.getItem('orgToken');
+    
+    console.log('🔍 ORG DASHBOARD: Checking access', { orgId, currentOrg, hasOrgToken: !!orgToken });
     
     if (!orgId || !currentOrg) {
       console.log('⚠️ ORG DASHBOARD: No org ID or currentOrg, redirecting to login');
@@ -79,12 +82,12 @@ export default function OrganizationDashboard() {
       return;
     }
     
-    if (!token) {
-      console.log('⏳ ORG DASHBOARD: Waiting for token to load...');
+    if (!orgToken) {
+      console.log('⏳ ORG DASHBOARD: Waiting for org token to load...');
       // Give it a moment for the token to hydrate from localStorage
       const timeout = setTimeout(() => {
-        if (!token) {
-          console.log('❌ ORG DASHBOARD: No token after timeout, redirecting to login');
+        if (!localStorage.getItem('orgToken')) {
+          console.log('❌ ORG DASHBOARD: No org token after timeout, redirecting to login');
           router.push('/org-login');
         }
       }, 2000);
@@ -94,7 +97,7 @@ export default function OrganizationDashboard() {
     console.log('✅ ORG DASHBOARD: All checks passed, fetching data');
     fetchDashboardData();
     fetchGlobalRoles();
-  }, [currentOrg, getCurrentOrgId, router, token]);
+  }, [currentOrg, getCurrentOrgId, router]);
 
   const fetchGlobalRoles = async () => {
     try {
@@ -170,13 +173,14 @@ export default function OrganizationDashboard() {
 
   const fetchDashboardData = async () => {
     const orgId = getCurrentOrgId();
-    if (!orgId || !token) return;
+    const orgToken = localStorage.getItem('orgToken');
+    if (!orgId || !orgToken) return;
 
     setLoading(true);
     try {
       // Fetch dashboard stats and employees with authorization header
       const headers = {
-        'Authorization': `Bearer ${token}`
+        'Authorization': `Bearer ${orgToken}`
       };
 
       const [statsResponse, employeesResponse] = await Promise.all([
@@ -261,6 +265,17 @@ export default function OrganizationDashboard() {
               >
                 <UserCheck className="w-4 h-4 mr-2" />
                 Re-assign Departments
+              </button>
+              <button
+                onClick={() => {
+                  localStorage.removeItem('orgToken');
+                  clearCurrentOrg();
+                  router.push('/org-login');
+                }}
+                className="inline-flex items-center px-4 py-2 border border-red-300 rounded-md shadow-sm text-sm font-medium text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+              >
+                <LogOut className="w-4 h-4 mr-2" />
+                Logout
               </button>
             </div>
           </div>

@@ -14,6 +14,11 @@ interface OnboardingRequest {
   password: string;
   mobileNumber?: string;
   selectedDepartments?: string[]; // Array of department IDs
+  logoUrl?: string;
+  address?: string;
+  taxPercentage?: number;
+  gstNumber?: string;
+  cin?: string;
 }
 
 export async function POST(req: NextRequest) {
@@ -27,7 +32,12 @@ export async function POST(req: NextRequest) {
       orgEmail,
       password,
       mobileNumber,
-      selectedDepartments = []
+      selectedDepartments = [],
+      logoUrl,
+      address,
+      taxPercentage,
+      gstNumber,
+      cin
     } = body;
 
     // Validate required fields
@@ -96,6 +106,11 @@ export async function POST(req: NextRequest) {
       passwordHash,
       mobileNumber,
       selectedDepartments,
+      logoUrl,
+      address,
+      taxPercentage,
+      gstNumber,
+      cin,
       otp: emailOtp,
       otpExpiresAt,
       createdAt: new Date()

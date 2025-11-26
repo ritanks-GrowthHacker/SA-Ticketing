@@ -96,6 +96,11 @@ export async function POST(request: NextRequest) {
         org_email: pendingReg.orgEmail,
         mobile_number: pendingReg.mobileNumber,
         associated_departments: pendingReg.selectedDepartments,
+        logo_url: pendingReg.logoUrl,
+        address: pendingReg.address,
+        tax_percentage: pendingReg.taxPercentage,
+        gst_number: pendingReg.gstNumber,
+        cin: pendingReg.cin,
         otp_verified: true,  // Already verified
         is_active: true,     // Activate immediately
         onboarded_at: new Date().toISOString()

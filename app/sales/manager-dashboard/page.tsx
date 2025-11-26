@@ -273,14 +273,14 @@ export default function SalesManagerDashboard() {
           </Select>
           <Dialog open={isAddClientOpen} onOpenChange={setIsAddClientOpen}>
             <DialogTrigger asChild>
-              <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2">
+              <button className="px-4 py-2 bg-green-600 text-white rounded-lg cursor-pointer hover:bg-green-700 transition-colors flex items-center gap-2">
                 <Plus className="h-4 w-4" />
                 Add Client
               </button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Register New Client</DialogTitle>
+                <DialogTitle className='cursor-pointer'>Register New Client</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleAddClient} className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
@@ -353,13 +353,13 @@ export default function SalesManagerDashboard() {
                   <button
                     type="button"
                     onClick={() => setIsAddClientOpen(false)}
-                    className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                    className="px-4 py-2 border cursor-pointer border-gray-300 rounded-lg hover:bg-gray-50"
                   >
                     Cancel
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    className="px-4 py-2 bg-blue-600  cursor-pointer text-white rounded-lg hover:bg-blue-700"
                   >
                     Register Client
                   </button>
@@ -369,7 +369,7 @@ export default function SalesManagerDashboard() {
           </Dialog>
           <button 
             onClick={() => router.push('/sales/all-clients')}
-            className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+            className="px-4 py-2 cursor-pointer bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
           >
             All Clients
           </button>
@@ -442,7 +442,7 @@ export default function SalesManagerDashboard() {
             <CardTitle>My Clients ({clients.length})</CardTitle>
             <button 
               onClick={() => setIsAddClientOpen(true)}
-              className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+              className="px-3 py-1.5 text-sm cursor-pointer bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
             >
               + Add Client
             </button>
@@ -455,7 +455,7 @@ export default function SalesManagerDashboard() {
               <p>No clients onboarded yet</p>
               <button 
                 onClick={() => setIsAddClientOpen(true)}
-                className="mt-4 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                className="mt-4 px-4 py-2 cursor-pointer bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
               >
                 Add Your First Client
               </button>
@@ -511,7 +511,7 @@ export default function SalesManagerDashboard() {
             <CardTitle>Recent Transactions ({transactions.length})</CardTitle>
             <button 
               onClick={() => router.push('/sales/transactions')}
-              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+              className="px-3 py-1.5 text-sm cursor-pointer bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
             >
               View All
             </button>

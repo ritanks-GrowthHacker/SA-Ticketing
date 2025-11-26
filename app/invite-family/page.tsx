@@ -163,7 +163,6 @@ export default function InviteFamilyPage() {
           {currentOrg && (
             <div className="text-sm text-gray-500 mt-2">
               <p><strong>{currentOrg.name}</strong></p>
-              <p>ID: {currentOrg.id}</p>
             </div>
           )}
         </div>
@@ -301,7 +300,7 @@ export default function InviteFamilyPage() {
             ) : (
               <>
                 <Send className="w-5 h-5 mr-2" />
-                Invite My Team! 💌
+                Invite My Team! 
               </>
             )}
           </button>

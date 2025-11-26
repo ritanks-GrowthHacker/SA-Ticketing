@@ -31,6 +31,14 @@ export default function AuthPage() {
 
   // Simple redirect to dashboard on authentication
   useEffect(() => {
+    // Check if user is logged in as organization - redirect to org dashboard
+    const orgToken = localStorage.getItem('orgToken');
+    if (orgToken) {
+      console.log('🏢 User has org token, redirecting to organization dashboard');
+      router.push('/organization-redirects/dashboard');
+      return;
+    }
+    
     const redirectUser = async () => {
       if (isAuthenticated && !isRedirecting) {
         setIsRedirecting(true);
