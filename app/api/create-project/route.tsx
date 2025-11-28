@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from 'next/server';
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+import { db, users, organizations, userOrganizationRoles, userDepartmentRoles, globalRoles, projects, projectStatuses, projectDepartment, userProject, departments, eq, and, or, desc, sql } from '@/lib/db-helper';
 
 interface ProjectRequestBody {
   name: string;
@@ -8,18 +8,26 @@ interface ProjectRequestBody {
 }
 
 interface JWTPayload {
-  sub: string;        // user ID
-  org_id: string;     // organization ID
-  org_name: string;   // organization name
-  org_domain: string; // organization domain
-  role: string;       // user role
-  roles: string[];    // all user roles
-  department_id?: string; // current department ID
+  sub: string;
+  org_id: string;
+  org_name: string;
+  org_domain: string;
+  org_role?: string;
+  role: string;
+  roles: string[];
+  department_id?: string;
+  department_name?: string;
+  department_role?: string;
+  departments?: Array<{
+    id: string;
+    name: string;
+    role: string;
+  }>;
   iat?: number;
   exp?: number;
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
     // Get JWT token from authorization header
     const authHeader = req.headers.get("authorization");
@@ -55,10 +63,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { 
-      name, 
-      description
-    } = requestBody;
+    const { name, description } = requestBody;
 
     // Validate required fields
     if (!name || name.trim().length === 0) {
@@ -68,220 +73,238 @@ export async function POST(req: Request) {
       );
     }
 
-    // Check if user belongs to the organization (org-level OR dept-level)
-    const { data: userOrg, error: userOrgError } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        user_id,
-        organization_id,
-        role_id,
-        organizations(id, name, domain),
-        global_roles!user_organization_roles_role_id_fkey(id, name, description)
-      `)
-      .eq("user_id", decodedToken.sub)
-      .eq("organization_id", decodedToken.org_id)
-      .maybeSingle();
-
-    // Also check department roles if no org-level role
-    const { data: deptRoles, error: deptRoleError } = await supabase
-      .from("user_department_roles")
-      .select(`
-        user_id,
-        organization_id,
-        department_id,
-        role_id,
-        departments(id, name),
-        global_roles(id, name, description)
-      `)
-      .eq("user_id", decodedToken.sub)
-      .eq("organization_id", decodedToken.org_id);
-
-    if ((userOrgError || !userOrg) && (deptRoleError || !deptRoles || deptRoles.length === 0)) {
-      console.error("User organization validation error:", userOrgError, deptRoleError);
-      return NextResponse.json(
-        { error: "User not found or unauthorized" }, 
-        { status: 403 }
-      );
-    }
-
     // Get user basic info
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, name, email")
-      .eq("id", decodedToken.sub)
-      .maybeSingle();
+    const user = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email
+      })
+      .from(users)
+      .where(eq(users.id, decodedToken.sub))
+      .limit(1);
 
-    if (userError || !user) {
-      console.error("User validation error:", userError);
+    if (!user.length) {
+      console.error("User validation error - user not found");
       return NextResponse.json(
         { error: "User not found" }, 
         { status: 403 }
       );
     }
 
-    // Determine effective role - prioritize org role, then dept role
+    // Determine effective role - PRIORITIZE DEPARTMENT ROLE over org role
     let effectiveRole = null;
-    let effectiveRoleId = null;
     
-    if (userOrg && (userOrg as any).global_roles) {
-      effectiveRole = (userOrg as any).global_roles.name;
-      effectiveRoleId = (userOrg as any).global_roles.id;
-    } else if (deptRoles && deptRoles.length > 0) {
-      // Use first department role if no org role
-      effectiveRole = (deptRoles[0] as any).global_roles?.name;
-      effectiveRoleId = (deptRoles[0] as any).global_roles?.id;
+    // First check if user has a department role (from JWT)
+    if (decodedToken.department_role) {
+      effectiveRole = decodedToken.department_role;
+      console.log("✅ Using department role from JWT:", effectiveRole);
+    } 
+    // Fallback to org role
+    else if (decodedToken.org_role) {
+      effectiveRole = decodedToken.org_role;
+      console.log("✅ Using org role from JWT:", effectiveRole);
+    }
+    // Last resort: check database
+    else {
+      // Check org-level role
+      const userOrg = await db
+        .select({
+          roleName: globalRoles.name
+        })
+        .from(userOrganizationRoles)
+        .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+        .where(
+          and(
+            eq(userOrganizationRoles.userId, decodedToken.sub),
+            eq(userOrganizationRoles.organizationId, decodedToken.org_id)
+          )
+        )
+        .limit(1);
+
+      // Check department role if current department is set
+      let deptRole = null;
+      if (decodedToken.department_id) {
+        deptRole = await db
+          .select({
+            roleName: globalRoles.name
+          })
+          .from(userDepartmentRoles)
+          .leftJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+          .where(
+            and(
+              eq(userDepartmentRoles.userId, decodedToken.sub),
+              eq(userDepartmentRoles.departmentId, decodedToken.department_id),
+              eq(userDepartmentRoles.organizationId, decodedToken.org_id)
+            )
+          )
+          .limit(1);
+      }
+
+      // Prioritize department role for project creation
+      if (deptRole?.[0]?.roleName) {
+        effectiveRole = deptRole[0].roleName;
+      } else if (userOrg?.[0]?.roleName) {
+        effectiveRole = userOrg[0].roleName;
+      }
     }
 
     console.log("🔍 CREATE PROJECT - Role check:", {
       userId: decodedToken.sub,
-      hasOrgRole: !!userOrg,
-      hasDeptRoles: deptRoles?.length || 0,
+      departmentRole: decodedToken.department_role,
+      orgRole: decodedToken.org_role,
       effectiveRole,
-      effectiveRoleId
+      departmentId: decodedToken.department_id
     });
 
     // Check if the user has permission to create projects (Admin or Manager)
     if (!effectiveRole || !["Admin", "Manager"].includes(effectiveRole)) {
       return NextResponse.json(
-        { error: "Insufficient permissions. Only Admins and Managers can create projects" }, 
+        { 
+          error: "Insufficient permissions. Only Admins and Managers can create projects",
+          debug: {
+            effectiveRole,
+            departmentRole: decodedToken.department_role,
+            orgRole: decodedToken.org_role
+          }
+        }, 
         { status: 403 }
       );
     }
 
     // Use user's organization for the project
-    let targetOrganizationId = decodedToken.org_id;
+    const targetOrganizationId = decodedToken.org_id;
 
-    // Just use the hardcoded Active status ID since you confirmed it exists
-    const activeStatusId = "d05ef4b9-63be-42e2-b4a2-3d85537b9b7d"; // Active status ID
-    
-    console.log("🔧 DEBUG: Using hardcoded Active status ID:", activeStatusId);
+    // 1️⃣ Fetch ACTIVE status for this organization
+    let status = await db
+      .select()
+      .from(projectStatuses)
+      .where(
+        and(
+          eq(projectStatuses.organizationId, targetOrganizationId),
+          eq(projectStatuses.name, "Active")
+        )
+      )
+      .limit(1);
+
+    // 2️⃣ If no Active status exists → create one automatically
+    if (!status.length) {
+      const inserted = await db
+        .insert(projectStatuses)
+        .values({
+          name: "Active",
+          description: "Default active project state",
+          organizationId: targetOrganizationId,
+          createdBy: decodedToken.sub,
+          colorCode: "#22c55e",
+          sortOrder: 1,
+        })
+        .returning();
+
+      status = inserted;
+      console.log("✅ Created Active project status:", status[0].id);
+    }
+
+    const activeStatusId = status[0].id;
 
     // Check if project with same name already exists in the target organization
-    const { data: existingProject } = await supabase
-      .from("projects")
-      .select("id, name")
-      .eq("name", name.trim())
-      .eq("organization_id", targetOrganizationId)
-      .maybeSingle();
+    const existingProject = await db
+      .select({ id: projects.id, name: projects.name })
+      .from(projects)
+      .where(
+        and(
+          eq(projects.name, name.trim()),
+          eq(projects.organizationId, targetOrganizationId)
+        )
+      )
+      .limit(1);
 
-    if (existingProject) {
+    if (existingProject.length) {
       return NextResponse.json(
         { error: "A project with this name already exists in the target organization" }, 
         { status: 409 }
       );
     }
 
-    // Create the project (matching exact schema) with Active status
+    // 3️⃣ Create the project
     const projectData = {
       name: name.trim(),
       description: description?.trim() || null,
-      organization_id: targetOrganizationId,
-      status_id: activeStatusId,
-      created_by: decodedToken.sub,
-      updated_by: decodedToken.sub
+      organizationId: targetOrganizationId,
+      statusId: activeStatusId,
+      createdBy: decodedToken.sub,
+      updatedBy: decodedToken.sub
     };
 
-    const { data: project, error: projectError } = await supabase
-      .from("projects")
-      .insert([projectData])
-      .select("*")
-      .single();
+    const [project] = await db
+      .insert(projects)
+      .values(projectData)
+      .returning();
 
-    if (projectError) {
-      console.error("Project creation error:", projectError);
-      
-      // Handle specific database constraints
-      if (projectError.code === "23505") {
-        return NextResponse.json(
-          { error: "A project with this name already exists" }, 
-          { status: 409 }
-        );
-      }
-      
-      return NextResponse.json(
-        { error: "Failed to create project" }, 
-        { status: 500 }
-      );
-    }
+    console.log("✅ Project created successfully:", project.id);
 
     // Associate project with CURRENT department from JWT
     const departmentId = decodedToken.department_id;
     if (departmentId) {
-      const { error: deptAssignError } = await supabase
-        .from("project_department")
-        .insert({
-          project_id: project.id,
-          department_id: departmentId
+      try {
+        await db
+          .insert(projectDepartment)
+          .values({
+            projectId: project.id,
+            departmentId: departmentId
+          });
+
+        console.log("✅ Project assigned to department:", {
+          projectId: project.id,
+          departmentId
         });
-
-      console.log("✅ Project assigned to department:", {
-        projectId: project.id,
-        departmentId,
-        error: deptAssignError
-      });
-
-      if (deptAssignError) {
+      } catch (deptAssignError) {
         console.error("Department assignment error:", deptAssignError);
-        // Non-critical - project is already created, continue
       }
-    } else {
-      console.warn("⚠️ Project created WITHOUT department association:", {
-        projectId: project.id,
-        reason: "No department_id in JWT"
-      });
     }
 
-    // CRITICAL: Assign the creator to the project as Project Admin
-    // Project creator ALWAYS gets "Admin" role in the project (not their org/dept role)
-    const { data: creatorRoleData } = await supabase
-      .from("global_roles")
-      .select("id")
-      .eq("name", "Admin")
-      .single();
+    // Assign the creator to the project as Project Admin
+    const creatorRoleData = await db
+      .select({ id: globalRoles.id })
+      .from(globalRoles)
+      .where(eq(globalRoles.name, "Admin"))
+      .limit(1);
 
-    if (creatorRoleData) {
-      const { error: userProjectError } = await supabase
-        .from("user_project")
-        .insert({
-          user_id: decodedToken.sub,
-          project_id: project.id,
-          role_id: creatorRoleData.id
-        });
+    if (creatorRoleData.length) {
+      try {
+        await db
+          .insert(userProject)
+          .values({
+            userId: decodedToken.sub,
+            projectId: project.id,
+            roleId: creatorRoleData[0].id
+          });
 
-      console.log("✅ Creator assigned to project as Admin:", {
-        userId: decodedToken.sub,
-        projectId: project.id,
-        roleId: creatorRoleData.id,
-        roleName: "Admin",
-        error: userProjectError
-      });
-
-      if (userProjectError) {
+        console.log("✅ Creator assigned to project as Admin");
+      } catch (userProjectError) {
         console.error("❌ Failed to assign creator to project:", userProjectError);
       }
-    } else {
-      console.error("❌ Could not find Admin role for creator");
     }
 
-    // Fetch related data separately
+    // Fetch related data
     let createdBy = null;
-    if (project.created_by) {
-      const { data: creatorData } = await supabase
-        .from("users")
-        .select("id, name, email")
-        .eq("id", project.created_by)
-        .maybeSingle();
-      createdBy = creatorData;
+    if (project.createdBy) {
+      const createdByData = await db
+        .select({ id: users.id, name: users.name, email: users.email })
+        .from(users)
+        .where(eq(users.id, project.createdBy))
+        .limit(1);
+      createdBy = createdByData[0] || null;
     }
 
     let organization = null;
-    if (project.organization_id) {
-      const { data: orgData } = await supabase
-        .from("organizations")
-        .select("id, name, domain")
-        .eq("id", project.organization_id)
-        .maybeSingle();
-      organization = orgData;
+    if (project.organizationId) {
+      const orgData = await db
+        .select({ id: organizations.id, name: organizations.name, domain: organizations.domain })
+        .from(organizations)
+        .where(eq(organizations.id, project.organizationId))
+        .limit(1);
+      organization = orgData[0] || null;
     }
 
     return NextResponse.json(
@@ -291,8 +314,8 @@ export async function POST(req: Request) {
           id: project.id,
           name: project.name,
           description: project.description,
-          created_at: project.created_at,
-          updated_at: project.updated_at,
+          created_at: project.createdAt?.toISOString(),
+          updated_at: project.updatedAt?.toISOString(),
           created_by: createdBy,
           organization: organization
         }
@@ -300,19 +323,31 @@ export async function POST(req: Request) {
       { status: 201 }
     );
 
-  } catch (error) {
+  } catch (error: any) {
     console.error("Project creation error:", error);
+    
+    // Log detailed PostgreSQL error for debugging
+    if (error.code === '23503') {
+      console.error("Foreign key violation details:", {
+        code: error.code,
+        detail: error.detail,
+        table: error.table,
+        constraint: error.constraint
+      });
+    }
+    
     return NextResponse.json(
-      { error: "Internal Server Error" }, 
+      { 
+        error: "Internal Server Error", 
+        details: error.message 
+      }, 
       { status: 500 }
     );
   }
 }
 
-// GET method to retrieve projects for the organization
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   try {
-    // Get JWT token from authorization header
     const authHeader = req.headers.get("authorization");
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return NextResponse.json(
@@ -334,83 +369,103 @@ export async function GET(req: Request) {
       );
     }
 
-    // Parse query parameters
     const url = new URL(req.url);
     const page = parseInt(url.searchParams.get("page") || "1");
     const limit = parseInt(url.searchParams.get("limit") || "10");
     const search = url.searchParams.get("search");
 
-    // Validate pagination parameters
     if (page < 1 || limit < 1 || limit > 100) {
       return NextResponse.json(
-        { error: "Invalid pagination parameters. Page must be >= 1 and limit must be between 1 and 100" }, 
+        { error: "Invalid pagination parameters" }, 
         { status: 400 }
       );
     }
 
     const offset = (page - 1) * limit;
+    const targetOrganizationId = decodedToken.org_id;
 
-    // Use user's organization for querying projects
-    let targetOrganizationId = decodedToken.org_id;
-
-    // Build the query
-    let query = supabase
-      .from("projects")
-      .select("*", { count: 'exact' })
-      .eq("organization_id", targetOrganizationId)
-      .order("created_at", { ascending: false });
-
-    // Apply search filter if provided
+    let projectsData;
     if (search) {
-      query = query.or(`name.ilike.%${search}%,description.ilike.%${search}%`);
+      const searchPattern = `%${search}%`;
+      projectsData = await db
+        .select()
+        .from(projects)
+        .where(
+          and(
+            eq(projects.organizationId, targetOrganizationId),
+            or(
+              sql`${projects.name} ILIKE ${searchPattern}`,
+              sql`${projects.description} ILIKE ${searchPattern}`
+            )
+          )
+        )
+        .orderBy(desc(projects.createdAt))
+        .limit(limit)
+        .offset(offset);
+    } else {
+      projectsData = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.organizationId, targetOrganizationId))
+        .orderBy(desc(projects.createdAt))
+        .limit(limit)
+        .offset(offset);
     }
 
-    // Apply pagination
-    query = query.range(offset, offset + limit - 1);
-
-    const { data: projects, error: projectsError, count } = await query;
-
-    if (projectsError) {
-      console.error("Projects retrieval error:", projectsError);
-      return NextResponse.json(
-        { error: "Failed to retrieve projects" }, 
-        { status: 500 }
-      );
+    let totalCount;
+    if (search) {
+      const searchPattern = `%${search}%`;
+      const countResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(projects)
+        .where(
+          and(
+            eq(projects.organizationId, targetOrganizationId),
+            or(
+              sql`${projects.name} ILIKE ${searchPattern}`,
+              sql`${projects.description} ILIKE ${searchPattern}`
+            )
+          )
+        );
+      totalCount = Number(countResult[0]?.count || 0);
+    } else {
+      const countResult = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(projects)
+        .where(eq(projects.organizationId, targetOrganizationId));
+      totalCount = Number(countResult[0]?.count || 0);
     }
 
-    const totalPages = Math.ceil((count || 0) / limit);
+    const totalPages = Math.ceil(totalCount / limit);
 
-    // Fetch related data for each project
     const enrichedProjects = await Promise.all(
-      (projects || []).map(async (project: any) => {
-        // Fetch creator
+      (projectsData || []).map(async (project: any) => {
         let createdBy = null;
-        if (project.created_by) {
-          const { data: creatorData } = await supabase
-            .from("users")
-            .select("id, name, email")
-            .eq("id", project.created_by)
-            .maybeSingle();
-          createdBy = creatorData;
+        if (project.createdBy) {
+          const createdByData = await db
+            .select({ id: users.id, name: users.name, email: users.email })
+            .from(users)
+            .where(eq(users.id, project.createdBy))
+            .limit(1);
+          createdBy = createdByData[0] || null;
         }
 
-        // Fetch organization
         let organization = null;
-        if (project.organization_id) {
-          const { data: orgData } = await supabase
-            .from("organizations")
-            .select("id, name, domain")
-            .eq("id", project.organization_id)
-            .maybeSingle();
-          organization = orgData;
+        if (project.organizationId) {
+          const orgData = await db
+            .select({ id: organizations.id, name: organizations.name, domain: organizations.domain })
+            .from(organizations)
+            .where(eq(organizations.id, project.organizationId))
+            .limit(1);
+          organization = orgData[0] || null;
         }
 
         return {
           id: project.id,
           name: project.name,
           description: project.description,
-          created_at: project.created_at,
-          updated_at: project.updated_at,
+          created_at: project.createdAt?.toISOString(),
+          updated_at: project.updatedAt?.toISOString(),
           created_by: createdBy,
           organization: organization
         };
@@ -424,14 +479,12 @@ export async function GET(req: Request) {
         pagination: {
           current_page: page,
           total_pages: totalPages,
-          total_count: count || 0,
+          total_count: totalCount,
           limit: limit,
           has_next_page: page < totalPages,
           has_previous_page: page > 1
         },
-        filters: {
-          search
-        }
+        filters: { search }
       },
       { status: 200 }
     );

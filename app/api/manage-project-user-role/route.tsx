@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, userProject, users, projects, globalRoles, eq, and } from "@/lib/db-helper";
 
 // Helper function to verify JWT token and extract user info
 async function verifyToken(authHeader: string | null) {
@@ -26,14 +27,20 @@ async function canManageProjectRoles(userId: string, projectId: string, userOrgR
   }
 
   // Check if user is a Manager on this specific project
-  const { data: projectRole } = await supabase
-    .from('user_project')
-    .select('role:roles!inner(name)')
-    .eq('user_id', userId)
-    .eq('project_id', projectId)
-    .single();
+  const projectRole = await db
+    .select({
+      roleName: globalRoles.name
+    })
+    .from(userProject)
+    .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+    .where(and(
+      eq(userProject.userId, userId),
+      eq(userProject.projectId, projectId)
+    ))
+    .limit(1)
+    .then(rows => rows[0] || null);
 
-  return (projectRole?.role as any)?.name === 'Manager';
+  return projectRole?.roleName === 'Manager';
 }
 
 // PUT - Update user role in a specific project
@@ -82,44 +89,51 @@ export async function PUT(req: Request) {
       }, { status: 403 });
     }
 
-    // Verify the role exists in this organization
-    const { data: role, error: roleError } = await supabase
-      .from("roles")
-      .select("id, name")
-      .eq("id", role_id)
-      .eq("organization_id", tokenData.org_id)
-      .single();
+    // Verify the role exists (global roles)
+    const role = await db
+      .select({
+        id: globalRoles.id,
+        name: globalRoles.name
+      })
+      .from(globalRoles)
+      .where(eq(globalRoles.id, role_id))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (roleError || !role) {
-      console.log('🔧 Invalid role:', roleError);
-      return NextResponse.json({ error: "Invalid role for this organization" }, { status: 400 });
+    if (!role) {
+      console.log('🔧 Invalid role');
+      return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
     // Verify the project exists and user has access to it
-    const { data: project, error: projectError } = await supabase
-      .from("projects")
-      .select("id, name")
-      .eq("id", project_id)
-      .eq("organization_id", tokenData.org_id)
-      .single();
+    const project = await db
+      .select({
+        id: projects.id,
+        name: projects.name
+      })
+      .from(projects)
+      .where(and(
+        eq(projects.id, project_id),
+        eq(projects.organizationId, tokenData.org_id)
+      ))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (projectError || !project) {
-      console.log('🔧 Invalid project:', projectError);
+    if (!project) {
+      console.log('🔧 Invalid project');
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
     // Check if user is already assigned to this project
-    const { data: existingAssignment, error: assignmentError } = await supabase
-      .from("user_project")
-      .select("*")
-      .eq("user_id", user_id)
-      .eq("project_id", project_id)
-      .single();
-
-    if (assignmentError && assignmentError.code !== 'PGRST116') {
-      console.log('🔧 Error checking existing assignment:', assignmentError);
-      return NextResponse.json({ error: "Error checking user assignment" }, { status: 500 });
-    }
+    const existingAssignment = await db
+      .select()
+      .from(userProject)
+      .where(and(
+        eq(userProject.userId, user_id),
+        eq(userProject.projectId, project_id)
+      ))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (!existingAssignment) {
       console.log('🔧 User not assigned to project');
@@ -127,29 +141,35 @@ export async function PUT(req: Request) {
     }
 
     // Get the target user's CURRENT project role to enforce hierarchy
-    const { data: currentRoleData } = await supabase
-      .from("roles")
-      .select("name")
-      .eq("id", existingAssignment.role_id)
-      .single();
+    const currentRoleData = await db
+      .select({
+        name: globalRoles.name
+      })
+      .from(globalRoles)
+      .where(eq(globalRoles.id, existingAssignment.roleId))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     const currentRoleName = currentRoleData?.name;
     const newRoleName = role.name;
 
     // Get CURRENT USER's PROJECT ROLE (not org/dept role)
-    const { data: currentUserProjectRole } = await supabase
-      .from("user_project")
-      .select(`
-        user_id,
-        project_id,
-        global_roles!user_project_role_id_fkey(name)
-      `)
-      .eq("user_id", tokenData.sub)
-      .eq("project_id", project_id)
-      .single();
+    const currentUserProjectRole = await db
+      .select({
+        userId: userProject.userId,
+        projectId: userProject.projectId,
+        roleName: globalRoles.name
+      })
+      .from(userProject)
+      .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(and(
+        eq(userProject.userId, tokenData.sub),
+        eq(userProject.projectId, project_id)
+      ))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    const currentUserRoleName = currentUserProjectRole?.global_roles ? 
-      (currentUserProjectRole.global_roles as any)?.name : null;
+    const currentUserRoleName = currentUserProjectRole?.roleName || null;
 
     console.log('🔧 Current user PROJECT ROLE:', currentUserRoleName);
 
@@ -175,27 +195,28 @@ export async function PUT(req: Request) {
     }
 
     // Update user role in the project
-    const { error: updateError } = await supabase
-      .from("user_project")
-      .update({ 
-        role_id: role_id
+    await db
+      .update(userProject)
+      .set({ 
+        roleId: role_id
       })
-      .eq("user_id", user_id)
-      .eq("project_id", project_id);
-
-    if (updateError) {
-      console.error("🔧 Project role update error:", updateError);
-      return NextResponse.json({ error: "Failed to update user role in project" }, { status: 500 });
-    }
+      .where(and(
+        eq(userProject.userId, user_id),
+        eq(userProject.projectId, project_id)
+      ));
 
     console.log('🔧 Role update successful');
 
     // Get user details for response
-    const { data: userDetails } = await supabase
-      .from("users")
-      .select("name, email")
-      .eq("id", user_id)
-      .single();
+    const userDetails = await db
+      .select({
+        name: users.name,
+        email: users.email
+      })
+      .from(users)
+      .where(eq(users.id, user_id))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     return NextResponse.json({
       success: true,

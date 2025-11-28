@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, projects, userOrganizationRoles, userProject, globalRoles, projectDocs, users as usersTable, eq, and } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 interface JWTPayload {
@@ -81,15 +82,14 @@ export async function POST(request: NextRequest) {
     }
 
     // First check if project exists in user's organization
-    const { data: project, error: projectError } = await supabase
-      .from('projects')
-      .select('id, organization_id, name')
-      .eq('id', project_id)
-      .eq('organization_id', decodedToken.org_id)
-      .single();
+    const project = await db.select({ id: projects.id, organizationId: projects.organizationId, name: projects.name })
+      .from(projects)
+      .where(and(eq(projects.id, project_id), eq(projects.organizationId, decodedToken.org_id)))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (projectError || !project) {
-      console.log('❌ Project not found or not in user organization:', projectError);
+    if (!project) {
+      console.log('❌ Project not found or not in user organization');
       return NextResponse.json(
         { error: 'Project not found or access denied' },
         { status: 403 }
@@ -104,20 +104,20 @@ export async function POST(request: NextRequest) {
     // Check user's organization role first
     console.log('🔧 Checking organization role for user:', author_id, 'in org:', decodedToken.org_id);
     
-    const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization_roles')
-      .select(`
-        role_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq('user_id', author_id)
-      .eq('organization_id', decodedToken.org_id)
-      .single();
+    const userOrgRoleData = await db.select({
+      roleId: userOrganizationRoles.roleId,
+      roleName: globalRoles.name
+    })
+    .from(userOrganizationRoles)
+    .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+    .where(and(eq(userOrganizationRoles.userId, author_id), eq(userOrganizationRoles.organizationId, decodedToken.org_id)))
+    .limit(1);
 
-    console.log('🔧 User org role query result:', { userOrgRole, orgRoleError });
+    const userOrgRole = userOrgRoleData[0];
+    console.log('🔧 User org role query result:', { userOrgRole });
 
-    if (userOrgRole && userOrgRole.global_roles) {
-      userRole = (userOrgRole.global_roles as any).name;
+    if (userOrgRole && userOrgRole.roleName) {
+      userRole = userOrgRole.roleName;
       console.log('✅ User organization role:', userRole);
     } else {
       console.log('⚠️ No organization role found, using JWT role:', decodedToken.role);
@@ -133,23 +133,23 @@ export async function POST(request: NextRequest) {
       hasAccess = true;
     } else {
       // For non-admin users, check project team membership
-      const { data: userProject, error: userProjectError } = await supabase
-        .from('user_project')
-        .select(`
-          user_id,
-          project_id,
-          role_id,
-          global_roles!user_project_role_id_fkey(name)
-        `)
-        .eq('user_id', author_id)
-        .eq('project_id', project_id)
-        .single();
+      const userProjectData = await db.select({
+        userId: userProject.userId,
+        projectId: userProject.projectId,
+        roleId: userProject.roleId,
+        roleName: globalRoles.name
+      })
+      .from(userProject)
+      .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(and(eq(userProject.userId, author_id), eq(userProject.projectId, project_id)))
+      .limit(1);
 
-      if (!userProjectError && userProject) {
+      const userProjectEntry = userProjectData[0];
+      if (userProjectEntry) {
         hasAccess = true;
         console.log('✅ User is project team member - can create documents');
       } else {
-        console.log('❌ User not assigned to project and not Admin:', userProjectError);
+        console.log('❌ User not assigned to project and not Admin');
       }
     }
 
@@ -163,44 +163,52 @@ export async function POST(request: NextRequest) {
     console.log('✅ User has access to create documents in project');
 
     // Create the project document
-    const { data: newDoc, error: createError } = await supabase
-      .from('project_docs')
-      .insert({
-        project_id,
-        author_id,
+    const newDocs = await db.insert(projectDocs)
+      .values({
+        projectId: project_id,
+        authorId: author_id,
         title,
         content,
         visibility,
-        is_public,
-        file_url,
-        file_name,
-        file_type,
-        file_size,
-        has_file: !!file_url,
-        updated_by: author_id
+        isPublic: is_public,
+        fileUrl: file_url,
+        fileName: file_name,
+        fileType: file_type,
+        fileSize: file_size,
+        hasFile: !!file_url,
+        updatedBy: author_id
       })
-      .select(`
-        *,
-        author:users!author_id(id, name, email),
-        updater:users!updated_by(id, name, email),
-        projects!inner(id, name)
-      `)
-      .single();
+      .returning();
 
-    if (createError) {
-      console.error('❌ Error creating document:', createError);
+    const newDoc = newDocs[0];
+    if (!newDoc) {
+      console.error('❌ Error creating document: No doc returned');
       return NextResponse.json(
-        { error: 'Failed to create project document', details: createError.message },
+        { error: 'Failed to create project document' },
         { status: 500 }
       );
     }
+
+    // Fetch related data
+    const [author, updater, projectData] = await Promise.all([
+      db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email }).from(usersTable).where(eq(usersTable.id, newDoc.authorId)).limit(1).then(rows => rows[0] || null),
+      newDoc.updatedBy ? db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email }).from(usersTable).where(eq(usersTable.id, newDoc.updatedBy)).limit(1).then(rows => rows[0] || null) : Promise.resolve(null),
+      db.select({ id: projects.id, name: projects.name }).from(projects).where(eq(projects.id, newDoc.projectId)).limit(1).then(rows => rows[0] || null)
+    ]);
+
+    const formattedDoc = {
+      ...newDoc,
+      author,
+      updater,
+      projects: projectData
+    };
 
     console.log('✅ Document created successfully:', newDoc.id);
 
     return NextResponse.json({
       success: true,
       message: 'Project document created successfully',
-      document: newDoc
+      document: formattedDoc
     });
 
   } catch (error) {

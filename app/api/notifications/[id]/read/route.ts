@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, notifications, eq, and } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 export async function POST(
@@ -32,22 +33,20 @@ export async function POST(
     const userId = decoded.sub;
 
     // Mark notification as read
-    const { error } = await supabase
-      .from('notifications')
-      .update({ 
-        is_read: true,
-        read_at: new Date().toISOString()
+    await db
+      .update(notifications)
+      .set({ 
+        isRead: true,
+        readAt: new Date()
       })
-      .eq('id', notificationId)
-      .eq('user_id', userId); // Ensure user owns this notification
-
-    if (error) {
-      console.error('Error marking notification as read:', error);
-      return NextResponse.json(
-        { error: 'Failed to mark notification as read' },
-        { status: 500 }
+      .where(
+        and(
+          eq(notifications.id, notificationId),
+          eq(notifications.userId, userId)
+        )
       );
-    }
+
+    // No error handling needed - Drizzle will throw if update fails
 
     return NextResponse.json({
       success: true,

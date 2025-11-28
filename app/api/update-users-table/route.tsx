@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, sql } from '@/lib/db-helper';
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,24 +29,13 @@ export async function POST(request: NextRequest) {
       console.log(`⚡ Executing command ${i + 1}/${sqlCommands.length}...`);
       
       try {
-        const { error } = await supabase.rpc('exec_sql', { sql: command });
-        
-        if (error) {
-          console.error(`❌ Error executing command ${i + 1}:`, error);
-          results.push({ 
-            command: i + 1, 
-            status: 'error', 
-            error: error.message,
-            sql: command.substring(0, 100) + '...'
-          });
-        } else {
-          console.log(`✅ Command ${i + 1} executed successfully`);
-          results.push({ 
-            command: i + 1, 
-            status: 'success',
-            sql: command.substring(0, 100) + '...'
-          });
-        }
+        await db.execute(sql.raw(command));
+        console.log(`✅ Command ${i + 1} executed successfully`);
+        results.push({ 
+          command: i + 1, 
+          status: 'success',
+          sql: command.substring(0, 100) + '...'
+        });
       } catch (err) {
         console.error(`❌ Exception in command ${i + 1}:`, err);
         results.push({ 
@@ -60,13 +50,11 @@ export async function POST(request: NextRequest) {
     // Try to get table structure to verify
     let tableStructure = null;
     try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('*')
-        .limit(1);
-      
-      if (!error && data) {
-        tableStructure = data.length > 0 ? Object.keys(data[0]) : 'No data in table';
+      const result = await db.execute(sql`SELECT * FROM users LIMIT 1`);
+      if (result.rows && result.rows.length > 0) {
+        tableStructure = Object.keys(result.rows[0]);
+      } else {
+        tableStructure = 'No data in table';
       }
     } catch (err) {
       console.log('Could not fetch table structure for verification');

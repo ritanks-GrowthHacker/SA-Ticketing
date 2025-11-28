@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, userOrganizationRoles, globalRoles, organizations, eq, and } from '@/lib/db-helper';
 
 interface JWTPayload {
   sub: string;        // user ID
@@ -45,90 +46,36 @@ export async function GET(req: Request) {
       orgName: decodedToken.org_name
     });
 
-    // Get user profile from database (without organization_id filter for now)
-    const { data: userProfile, error: userError } = await supabase
-      .from("users")
-      .select(`
-        id,
-        name,
-        email,
-        profile_picture_url,
-        about,
-        phone,
-        location,
-        job_title,
-        department,
-        date_of_birth,
-        email_notifications_enabled,
-        dark_mode_enabled,
-        created_at,
-        updated_at,
-        profile_updated_at
-      `)
-      .eq("id", decodedToken.sub)
-      .single();
+    // Get user profile from database
+    const userProfile = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        profilePictureUrl: users.profilePictureUrl,
+        about: users.about,
+        phone: users.phone,
+        location: users.location,
+        jobTitle: users.jobTitle,
+        department: users.department,
+        dateOfBirth: users.dateOfBirth,
+        emailNotificationsEnabled: users.emailNotificationsEnabled,
+        darkModeEnabled: users.darkModeEnabled,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+        profileUpdatedAt: users.profileUpdatedAt
+      })
+      .from(users)
+      .where(eq(users.id, decodedToken.sub))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     console.log("📊 User Profile Query Result:", {
-      data: userProfile,
-      error: userError
+      data: userProfile
     });
 
-    if (userError || !userProfile) {
-      console.error("❌ User profile fetch error:", userError);
-      
-      // If it's a column doesn't exist error, let's try a simpler query
-      if (userError?.code === '42703') {
-        console.log("🔧 Trying basic user query without new profile fields...");
-        
-        const { data: basicUserProfile, error: basicError } = await supabase
-          .from("users")
-          .select(`
-            id,
-            name,
-            email,
-            created_at,
-            updated_at
-          `)
-          .eq("id", decodedToken.sub)
-          .single();
-          
-        console.log("📊 Basic User Query Result:", {
-          data: basicUserProfile,
-          error: basicError
-        });
-        
-        if (basicError || !basicUserProfile) {
-          return NextResponse.json(
-            { error: "User profile not found" }, 
-            { status: 404 }
-          );
-        }
-        
-        // Use basic profile data
-        const profile = {
-          id: basicUserProfile.id,
-          name: basicUserProfile.name,
-          email: basicUserProfile.email,
-          profilePicture: null,
-          about: null,
-          phone: null,
-          location: null,
-          jobTitle: null,
-          department: null,
-          dateOfBirth: null,
-          createdAt: basicUserProfile.created_at,
-          updatedAt: basicUserProfile.updated_at,
-          profileUpdatedAt: null,
-          organization: null,
-          role: 'Member'
-        };
-        
-        return NextResponse.json({
-          success: true,
-          profile
-        }, { status: 200 });
-      }
-      
+    if (!userProfile) {
+      console.error("❌ User profile fetch error - user not found");
       return NextResponse.json(
         { error: "User profile not found" }, 
         { status: 404 }
@@ -136,15 +83,23 @@ export async function GET(req: Request) {
     }
 
     // Get user role information - check BOTH org and department roles
-    const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        role_id,
-        global_roles!user_organization_roles_role_id_fkey(id, name, description)
-      `)
-      .eq("user_id", decodedToken.sub)
-      .eq("organization_id", decodedToken.org_id)
-      .maybeSingle();
+    const userOrgRole = await db
+      .select({
+        roleId: userOrganizationRoles.roleId,
+        globalRoleId: globalRoles.id,
+        globalRoleName: globalRoles.name,
+        globalRoleDescription: globalRoles.description
+      })
+      .from(userOrganizationRoles)
+      .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userOrganizationRoles.userId, decodedToken.sub),
+          eq(userOrganizationRoles.organizationId, decodedToken.org_id)
+        )
+      )
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     // Get department role from JWT (already decoded above)
     let displayRole = null;
@@ -153,41 +108,34 @@ export async function GET(req: Request) {
     if (decodedToken.department_role) {
       displayRole = decodedToken.department_role;
     } else if (userOrgRole) {
-      displayRole = (userOrgRole as any).global_roles?.name;
-    }
-
-    if (orgRoleError) {
-      console.error("User org role fetch error:", orgRoleError);
+      displayRole = userOrgRole.globalRoleName;
     }
 
     // Get organization info separately
-    const { data: organization, error: orgError } = await supabase
-      .from("organizations")
-      .select("id, name, domain")
-      .eq("id", decodedToken.org_id)
-      .single();
-
-    if (orgError) {
-      console.error("Organization fetch error:", orgError);
-    }
+    const organization = await db
+      .select({ id: organizations.id, name: organizations.name, domain: organizations.domain })
+      .from(organizations)
+      .where(eq(organizations.id, decodedToken.org_id))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     // Format the response
     const profile = {
       id: userProfile.id,
       name: userProfile.name,
       email: userProfile.email,
-      profilePicture: userProfile.profile_picture_url,
+      profilePicture: userProfile.profilePictureUrl,
       about: userProfile.about,
       phone: userProfile.phone,
       location: userProfile.location,
-      jobTitle: userProfile.job_title,
+      jobTitle: userProfile.jobTitle,
       department: userProfile.department,
-      dateOfBirth: userProfile.date_of_birth,
-      emailNotificationsEnabled: userProfile.email_notifications_enabled,
-      darkModeEnabled: userProfile.dark_mode_enabled,
-      createdAt: userProfile.created_at,
-      updatedAt: userProfile.updated_at,
-      profileUpdatedAt: userProfile.profile_updated_at,
+      dateOfBirth: userProfile.dateOfBirth || null,
+      emailNotificationsEnabled: userProfile.emailNotificationsEnabled,
+      darkModeEnabled: userProfile.darkModeEnabled,
+      createdAt: userProfile.createdAt?.toISOString(),
+      updatedAt: userProfile.updatedAt?.toISOString(),
+      profileUpdatedAt: userProfile.profileUpdatedAt?.toISOString() || null,
       organization: organization,
       role: displayRole || 'Member'
     };

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, eq } from "@/lib/db-helper";
 import bcrypt from "bcrypt";
 
 interface JWTPayload {
@@ -79,14 +80,19 @@ export async function POST(req: Request) {
     }
 
     // Get user with current password
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, email, password_hash")
-      .eq("id", decodedToken.sub)
-      .single();
+    const user = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        passwordHash: users.passwordHash
+      })
+      .from(users)
+      .where(eq(users.id, decodedToken.sub))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (userError || !user) {
-      console.error("User fetch error:", userError);
+    if (!user) {
+      console.error("User fetch error");
       return NextResponse.json(
         { error: "User not found" }, 
         { status: 404 }
@@ -94,8 +100,8 @@ export async function POST(req: Request) {
     }
 
     // Verify current password
-    if (user.password_hash) {
-      const isCurrentPasswordValid = await bcrypt.compare(body.currentPassword, user.password_hash);
+    if (user.passwordHash) {
+      const isCurrentPasswordValid = await bcrypt.compare(body.currentPassword, user.passwordHash);
       if (!isCurrentPasswordValid) {
         return NextResponse.json(
           { error: "Current password is incorrect" }, 
@@ -131,21 +137,13 @@ export async function POST(req: Request) {
     const hashedNewPassword = await bcrypt.hash(body.newPassword, saltRounds);
 
     // Update password in database
-    const { error: updateError } = await supabase
-      .from("users")
-      .update({
-        password_hash: hashedNewPassword,
-        updated_at: new Date().toISOString()
+    await db
+      .update(users)
+      .set({
+        passwordHash: hashedNewPassword,
+        updatedAt: new Date()
       })
-      .eq("id", user.id);
-
-    if (updateError) {
-      console.error("Password update error:", updateError);
-      return NextResponse.json(
-        { error: "Failed to update password" }, 
-        { status: 500 }
-      );
-    }
+      .where(eq(users.id, user.id));
 
     // TODO: Delete used OTP from database
     // await supabase

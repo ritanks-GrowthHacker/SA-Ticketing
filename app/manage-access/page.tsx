@@ -292,13 +292,12 @@ const ManageAccessPage = () => {
       if (response.ok) {
         const data = await response.json();
         
-        // Include eligible users + any users already in projects (even if from HR/Sales/Admin)
-        const allRelevantUsers = data.allUsers?.filter((user: any) => 
-          data.users.some((u: any) => u.id === user.id) || // Eligible user
-          assignedUserIds.has(user.id) // Already assigned to a project
-        ) || data.users || [];
+        // Use ONLY eligible users from the API
+        // Do NOT include users from restricted departments (HR/Sales/Admin)
+        // even if they're already assigned to projects
+        const allRelevantUsers = data.users || [];
         
-        console.log(`✅ MANAGE ACCESS: Loaded ${allRelevantUsers.length} users (${data.users.length} eligible + ${assignedUserIds.size} assigned)`);
+        console.log(`✅ MANAGE ACCESS: Loaded ${allRelevantUsers.length} eligible users (excludes HR/Sales/Admin)`);
         setUsers(allRelevantUsers);
       } else {
         const err = await response.json().catch(() => ({}));
@@ -318,14 +317,10 @@ const ManageAccessPage = () => {
     try {
       const url = new URL('/api/get-all-projects', window.location.origin);
       
-      // Only filter by department if a specific project is selected
-      // For "All Projects" view, we need to see all org projects to display user assignments correctly
-      if (currentDepartment?.id && selectedProject !== 'all') {
-        url.searchParams.append('department_id', currentDepartment.id);
-        console.log(`🔍 MANAGE ACCESS: Filtering projects by department ${currentDepartment.name} (${currentDepartment.id})`);
-      } else if (selectedProject === 'all') {
-        console.log(`🔍 MANAGE ACCESS: Loading all organization projects for "All Projects" view`);
-      }
+      // ALWAYS fetch ALL user's projects for Manage Access
+      // Do NOT filter by department - user may be assigned to projects from other departments
+      // (e.g., via resource requests from HR/Sales)
+      console.log(`🔍 MANAGE ACCESS: Loading all user's projects (including cross-department assignments)`);
       
       const response = await fetch(url.toString(), {
         headers: {
@@ -337,7 +332,7 @@ const ManageAccessPage = () => {
       if (response.ok) {
         const data = await response.json();
         console.log(`✅ MANAGE ACCESS: Loaded ${data.projects?.length || 0} projects`);
-        console.log('📋 MANAGE ACCESS: Sample project data:', data.projects?.[0]);
+        console.log('📋 MANAGE ACCESS: Projects:', data.projects?.map((p: any) => ({ id: p.id, name: p.name, userRole: p.user_role_in_project })));
         setProjects(data.projects || []);
       } else {
         console.error('Failed to fetch projects');
@@ -845,13 +840,10 @@ const ManageAccessPage = () => {
 
     if (!matchesSearch) return false;
 
-    // If 'all' selected -> show ALL users in the organization regardless of project assignments
-    if (selectedProject === 'all') {
-      return true;
-    }
-
-    // When a specific project is selected -> show users assigned to that project
-    return assignments.some(a => a.user_id === userItem.id && a.project_id === selectedProject);
+    // MANAGE ACCESS LOGIC: Always show ALL eligible users (not just assigned ones)
+    // This page is for ASSIGNING users to projects, so we need to see who's available
+    // Users already assigned will show their current assignment status in the UI
+    return true;
   }).sort((a, b) => {
     // Sort by created_at: newest first (descending order)
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();

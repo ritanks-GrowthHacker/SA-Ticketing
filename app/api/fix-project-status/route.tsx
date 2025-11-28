@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, projectStatuses, projects, eq, and, isNull } from '@/lib/db-helper';
 
 interface JWTPayload {
   sub: string;        // user ID
@@ -48,10 +49,9 @@ export async function POST(req: NextRequest) {
     console.log('🚀 Starting project status migration for org:', decodedToken.org_id);
 
     // First, let's check all statuses for debugging
-    const { data: allStatuses } = await supabase
-      .from('project_statuses')
-      .select('*')
-      .eq('organization_id', decodedToken.org_id);
+    const allStatuses = await db.select()
+      .from(projectStatuses)
+      .where(eq(projectStatuses.organizationId, decodedToken.org_id));
 
     console.log('🔍 All project statuses for org:', {
       orgId: decodedToken.org_id,
@@ -60,25 +60,34 @@ export async function POST(req: NextRequest) {
     });
 
     // Try to get the "Active" status for this organization
-    const { data: activeStatus, error: statusError } = await supabase
-      .from('project_statuses')
-      .select('id, name, organization_id')
-      .eq('organization_id', decodedToken.org_id)
-      .eq('name', 'Active')
-      .single();
+    const activeStatusResults = await db.select({
+      id: projectStatuses.id,
+      name: projectStatuses.name,
+      organizationId: projectStatuses.organizationId
+    })
+      .from(projectStatuses)
+      .where(and(
+        eq(projectStatuses.organizationId, decodedToken.org_id),
+        eq(projectStatuses.name, 'Active')
+      ))
+      .limit(1);
+    
+    const activeStatus = activeStatusResults[0] || null;
 
     console.log('🔍 Active status query result:', {
       activeStatus,
-      statusError,
       searchingForOrg: decodedToken.org_id
     });
 
-    if (statusError || !activeStatus) {
+    if (!activeStatus) {
       // Try to find any "Active" status and show available options
-      const { data: anyActiveStatus } = await supabase
-        .from('project_statuses')
-        .select('id, name, organization_id')
-        .eq('name', 'Active');
+      const anyActiveStatus = await db.select({
+        id: projectStatuses.id,
+        name: projectStatuses.name,
+        organizationId: projectStatuses.organizationId
+      })
+        .from(projectStatuses)
+        .where(eq(projectStatuses.name, 'Active'));
 
       console.error('❌ Active status not found for this org. Available Active statuses:', anyActiveStatus);
       
@@ -112,26 +121,23 @@ export async function POST(req: NextRequest) {
     console.log('✅ Found Active status:', activeStatus);
 
     // Get all projects without status_id in this organization
-    const { data: projectsToUpdate, error: projectsError } = await supabase
-      .from('projects')
-      .select('id, name, status_id, organization_id')
-      .eq('organization_id', decodedToken.org_id)
-      .is('status_id', null);
+    const projectsToUpdate = await db.select({
+      id: projects.id,
+      name: projects.name,
+      statusId: projects.statusId,
+      organizationId: projects.organizationId
+    })
+      .from(projects)
+      .where(and(
+        eq(projects.organizationId, decodedToken.org_id),
+        isNull(projects.statusId)
+      ));
 
     console.log('📊 Projects query result:', {
       orgId: decodedToken.org_id,
       projectCount: projectsToUpdate?.length || 0,
-      projects: projectsToUpdate,
-      error: projectsError
+      projects: projectsToUpdate
     });
-
-    if (projectsError) {
-      console.error('❌ Error fetching projects:', projectsError);
-      return NextResponse.json(
-        { error: "Failed to fetch projects" }, 
-        { status: 500 }
-      );
-    }
 
     console.log(`📊 Found ${projectsToUpdate?.length || 0} projects without status`);
 
@@ -144,23 +150,17 @@ export async function POST(req: NextRequest) {
     }
 
     // Update all projects to have Active status
-    const { data: updatedProjects, error: updateError } = await supabase
-      .from('projects')
-      .update({ 
-        status_id: activeStatus.id,
-        updated_at: new Date().toISOString()
+    const currentTime = new Date();
+    const updatedProjects = await db.update(projects)
+      .set({ 
+        statusId: activeStatus.id,
+        updatedAt: currentTime
       })
-      .eq('organization_id', decodedToken.org_id)
-      .is('status_id', null)
-      .select('id, name, status_id');
-
-    if (updateError) {
-      console.error('❌ Error updating projects:', updateError);
-      return NextResponse.json(
-        { error: "Failed to update project statuses" }, 
-        { status: 500 }
-      );
-    }
+      .where(and(
+        eq(projects.organizationId, decodedToken.org_id),
+        isNull(projects.statusId)
+      ))
+      .returning({ id: projects.id, name: projects.name, statusId: projects.statusId });
 
     console.log(`✅ Updated ${updatedProjects?.length || 0} projects to Active status`);
 

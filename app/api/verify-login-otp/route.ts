@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, userOrganizationRoles, userDepartmentRoles, organizations, departments, globalRoles, userProject, projects, projectDepartment, eq, and, asc } from '@/lib/db-helper';
 import { OTPService } from "@/lib/otpService";
 
 export async function POST(req: Request) {
@@ -12,24 +13,31 @@ export async function POST(req: Request) {
     }
 
     // Get user with OTP details
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, name, email, otp, otp_expires_at, created_at")
-      .eq("email", email.toLowerCase())
-      .single();
+    const user = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        otp: users.otp,
+        otpExpiresAt: users.otpExpiresAt,
+        createdAt: users.createdAt
+      })
+      .from(users)
+      .where(eq(users.email, email.toLowerCase()))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (userError || !user) {
+    if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
     // Debug logging
-    const expiryDate = new Date(user.otp_expires_at + (user.otp_expires_at.includes('Z') ? '' : 'Z'));
+    const expiryDate = user.otpExpiresAt || new Date();
     const currentTime = new Date();
     
     console.log('OTP Verification Debug:', {
       storedOTP: user.otp,
       providedOTP: otp,
-      expiryTimeRaw: user.otp_expires_at,
       expiryTimeParsed: expiryDate.toISOString(),
       currentTime: currentTime.toISOString(),
       isExpired: currentTime > expiryDate,
@@ -38,7 +46,7 @@ export async function POST(req: Request) {
 
     // Validate OTP
     const isValidOTP = OTPService.isOTPValid(
-      user.otp,
+      user.otp || '',
       otp,
       expiryDate
     );
@@ -50,59 +58,74 @@ export async function POST(req: Request) {
     }
 
     // Clear OTP after successful verification
-    await supabase
-      .from("users")
-      .update({
+    await db
+      .update(users)
+      .set({
         otp: null,
-        otp_expires_at: null
+        otpExpiresAt: null
       })
-      .eq("id", user.id);
+      .where(eq(users.id, user.id));
 
     // Get updated user info with organization_id and profile picture
-    const { data: fullUser, error: fullUserError } = await supabase
-      .from("users")
-      .select("id, name, email, organization_id, department_id, created_at, profile_picture_url, about, phone, location, job_title")
-      .eq("id", user.id)
-      .single();
+    const fullUser = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        organizationId: users.organizationId,
+        departmentId: users.departmentId,
+        createdAt: users.createdAt,
+        profilePictureUrl: users.profilePictureUrl,
+        about: users.about,
+        phone: users.phone,
+        location: users.location,
+        jobTitle: users.jobTitle
+      })
+      .from(users)
+      .where(eq(users.id, user.id))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (fullUserError || !fullUser) {
+    if (!fullUser) {
       return NextResponse.json({ error: "Failed to fetch user details" }, { status: 500 });
     }
 
     // Get user organizations from user_organization_roles (org-level roles)
-    const { data: userOrganizations, error: orgError } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        organization_id,
-        role_id,
-        organizations(id, name, domain),
-        global_roles!user_organization_roles_role_id_fkey(id, name, description)
-      `)
-      .eq("user_id", user.id);
-
-    if (orgError) {
-      console.error("Organization lookup error:", orgError);
-    }
+    const userOrganizations = await db
+      .select({
+        organizationId: userOrganizationRoles.organizationId,
+        roleId: userOrganizationRoles.roleId,
+        orgId: organizations.id,
+        orgName: organizations.name,
+        orgDomain: organizations.domain,
+        globalRoleId: globalRoles.id,
+        globalRoleName: globalRoles.name,
+        globalRoleDescription: globalRoles.description
+      })
+      .from(userOrganizationRoles)
+      .leftJoin(organizations, eq(userOrganizationRoles.organizationId, organizations.id))
+      .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(eq(userOrganizationRoles.userId, user.id));
 
     // Get user's department roles (department-level roles) ordered by created_at
-    const { data: departmentRoles, error: deptRoleError } = await supabase
-      .from("user_department_roles")
-      .select(`
-        department_id,
-        role_id,
-        organization_id,
-        created_at,
-        departments(id, name),
-        global_roles(id, name)
-      `)
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: true }); // First department = default
+    const departmentRoles = await db
+      .select({
+        departmentId: userDepartmentRoles.departmentId,
+        roleId: userDepartmentRoles.roleId,
+        organizationId: userDepartmentRoles.organizationId,
+        createdAt: userDepartmentRoles.createdAt,
+        deptId: departments.id,
+        deptName: departments.name,
+        globalRoleId: globalRoles.id,
+        globalRoleName: globalRoles.name
+      })
+      .from(userDepartmentRoles)
+      .leftJoin(departments, eq(userDepartmentRoles.departmentId, departments.id))
+      .leftJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+      .where(eq(userDepartmentRoles.userId, user.id))
+      .orderBy(asc(userDepartmentRoles.createdAt)); // First department = default
 
-    if (deptRoleError) {
-      console.error("Department role lookup error:", deptRoleError);
-    }
-
-    // Determine organization: prioritize org roles, fallback to department roles, then user.organization_id
+    // Determine organization: prioritize org roles, fallback to department roles, then user.organizationId
     let organization: any = null;
     let role: any = null;
     let allRoles: string[] = [];
@@ -111,48 +134,50 @@ export async function POST(req: Request) {
 
     if (userOrganizations && userOrganizations.length > 0) {
       // User has org-level role
-      const primaryOrg = userOrganizations[0] as any;
-      organization = primaryOrg.organizations;
-      role = primaryOrg.global_roles;
+      const primaryOrg = userOrganizations[0];
+      organization = { id: primaryOrg.orgId, name: primaryOrg.orgName, domain: primaryOrg.orgDomain };
+      role = { id: primaryOrg.globalRoleId, name: primaryOrg.globalRoleName, description: primaryOrg.globalRoleDescription };
       allRoles = userOrganizations
-        .map((uo: any) => uo.global_roles?.name)
+        .map((uo: any) => uo.globalRoleName)
         .filter(Boolean) as string[];
       
       // If user also has department roles, set first department as current
       if (departmentRoles && departmentRoles.length > 0) {
-        const firstDept = departmentRoles[0] as any;
-        currentDepartment = firstDept.departments;
-        currentDepartmentRole = firstDept.global_roles?.name || null;
+        const firstDept = departmentRoles[0];
+        currentDepartment = { id: firstDept.deptId, name: firstDept.deptName };
+        currentDepartmentRole = firstDept.globalRoleName || null;
       }
     } else if (departmentRoles && departmentRoles.length > 0) {
       // User only has department-level role, get org from department role
-      const primaryDeptRole = departmentRoles[0] as any;
-      const orgId = primaryDeptRole.organization_id || fullUser.organization_id;
+      const primaryDeptRole = departmentRoles[0];
+      const orgId = primaryDeptRole.organizationId || fullUser.organizationId;
       
       // Set first department as current
-      currentDepartment = primaryDeptRole.departments;
-      currentDepartmentRole = primaryDeptRole.global_roles?.name || null;
+      currentDepartment = { id: primaryDeptRole.deptId, name: primaryDeptRole.deptName };
+      currentDepartmentRole = primaryDeptRole.globalRoleName || null;
       
       if (orgId) {
-        const { data: orgData } = await supabase
-          .from("organizations")
-          .select("id, name, domain")
-          .eq("id", orgId)
-          .single();
+        const orgData = await db
+          .select({ id: organizations.id, name: organizations.name, domain: organizations.domain })
+          .from(organizations)
+          .where(eq(organizations.id, orgId))
+          .limit(1)
+          .then(rows => rows[0] || null);
         
         if (orgData) {
           organization = orgData;
-          role = primaryDeptRole.global_roles;
+          role = { id: primaryDeptRole.globalRoleId, name: primaryDeptRole.globalRoleName };
           allRoles = [role?.name || "Member"];
         }
       }
-    } else if (fullUser.organization_id) {
-      // Fallback to user's direct organization_id
-      const { data: orgData } = await supabase
-        .from("organizations")
-        .select("id, name, domain")
-        .eq("id", fullUser.organization_id)
-        .single();
+    } else if (fullUser.organizationId) {
+      // Fallback to user's direct organizationId
+      const orgData = await db
+        .select({ id: organizations.id, name: organizations.name, domain: organizations.domain })
+        .from(organizations)
+        .where(eq(organizations.id, fullUser.organizationId))
+        .limit(1)
+        .then(rows => rows[0] || null);
       
       if (orgData) {
         organization = orgData;
@@ -170,18 +195,18 @@ export async function POST(req: Request) {
 
     // Include department-level admin roles
     const departmentAdminRoles = (departmentRoles || [])
-      .filter((dr: any) => dr.global_roles?.name === 'Admin')
+      .filter((dr: any) => dr.globalRoleName === 'Admin')
       .map((dr: any) => ({
-        department_id: dr.department_id,
-        department_name: dr.departments?.name,
-        role: dr.global_roles?.name
+        department_id: dr.departmentId,
+        department_name: dr.deptName,
+        role: dr.globalRoleName
       }));
 
     // Get all departments user is part of
     const allDepartments = (departmentRoles || []).map((dr: any) => ({
-      id: dr.department_id,
-      name: dr.departments?.name,
-      role: dr.global_roles?.name
+      id: dr.departmentId,
+      name: dr.deptName,
+      role: dr.globalRoleName
     }));
 
     // Get default project: PRIORITIZE project assignment, not department
@@ -189,34 +214,46 @@ export async function POST(req: Request) {
     let defaultProjectRole: string = "Member";
     
     // First, try to get user's assigned projects (user_project table)
-    const { data: assignedProjects } = await supabase
-      .from('user_project')
-      .select(`
-        project_id,
-        projects!inner(id, name),
-        global_roles!user_project_role_id_fkey(id, name)
-      `)
-      .eq('user_id', user.id)
-      .eq('projects.organization_id', organization.id)
-      .order('created_at', { ascending: true })
+    const assignedProjects = await db
+      .select({
+        projectId: userProject.projectId,
+        projId: projects.id,
+        projName: projects.name,
+        roleId: globalRoles.id,
+        roleName: globalRoles.name
+      })
+      .from(userProject)
+      .innerJoin(projects, eq(userProject.projectId, projects.id))
+      .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userProject.userId, user.id),
+          eq(projects.organizationId, organization.id)
+        )
+      )
       .limit(1);
     
     if (assignedProjects && assignedProjects.length > 0) {
-      const firstAssignment = assignedProjects[0] as any;
-      defaultProject = firstAssignment.projects;
-      defaultProjectRole = firstAssignment.global_roles?.name || 'Member';
+      const firstAssignment = assignedProjects[0];
+      defaultProject = { id: firstAssignment.projId, name: firstAssignment.projName };
+      defaultProjectRole = firstAssignment.roleName || 'Member';
     } else if (currentDepartment?.id && currentDepartmentRole === 'Admin') {
       // Fallback: Department Admin sees first project in their department
-      const { data: deptProjects } = await supabase
-        .from('projects')
-        .select(`
-          id,
-          name,
-          project_department!inner(department_id)
-        `)
-        .eq('organization_id', organization.id)
-        .eq('project_department.department_id', currentDepartment.id)
-        .order('created_at', { ascending: true })
+      const deptProjects = await db
+        .select({
+          id: projects.id,
+          name: projects.name,
+          deptId: projectDepartment.departmentId
+        })
+        .from(projects)
+        .innerJoin(projectDepartment, eq(projects.id, projectDepartment.projectId))
+        .where(
+          and(
+            eq(projects.organizationId, organization.id),
+            eq(projectDepartment.departmentId, currentDepartment.id)
+          )
+        )
+        .orderBy(asc(projects.createdAt))
         .limit(1);
       
       if (deptProjects && deptProjects.length > 0) {
@@ -259,12 +296,12 @@ export async function POST(req: Request) {
         id: user.id,
         name: user.name,
         email: user.email,
-        created_at: user.created_at,
-        profile_picture_url: fullUser.profile_picture_url,
+        created_at: user.createdAt?.toISOString(),
+        profile_picture_url: fullUser.profilePictureUrl,
         about: fullUser.about,
         phone: fullUser.phone,
         location: fullUser.location,
-        job_title: fullUser.job_title
+        job_title: fullUser.jobTitle
       },
       organization: {
         id: organization.id,
@@ -288,10 +325,10 @@ export async function POST(req: Request) {
       token,
       hasMultipleDepartments: allDepartments.length > 1,
       organizations: (userOrganizations || []).map((uo: any) => ({
-        id: uo.organizations.id,
-        name: uo.organizations.name,
-        domain: uo.organizations.domain,
-        role: uo.global_roles?.name || "Member"
+        id: uo.orgId,
+        name: uo.orgName,
+        domain: uo.orgDomain,
+        role: uo.globalRoleName || "Member"
       }))
     };
 

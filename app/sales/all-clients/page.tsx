@@ -9,14 +9,14 @@ import { ArrowLeft, Users } from 'lucide-react';
 import { Pagination } from '@/app/sales/components/Pagination';
 
 interface Client {
-  client_id: string;
-  client_name: string;
-  contact_person: string;
+  clientId: string;
+  clientName: string;
+  contactPerson: string;
   email: string;
   phone: string;
   city: string;
   status: string;
-  created_at: string;
+  createdAt: string;
 }
 
 export default function AllClientsPage() {
@@ -119,12 +119,12 @@ export default function AllClientsPage() {
                 <TableBody>
                   {paginatedClients.map((client) => (
                     <TableRow 
-                      key={client.client_id} 
+                      key={client.clientId} 
                       className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => router.push(`/sales/client/${client.client_id}`)}
+                      onClick={() => router.push(`/sales/client/${client.clientId}`)}
                     >
-                      <TableCell className="font-medium">{client.client_name}</TableCell>
-                      <TableCell>{client.contact_person || '-'}</TableCell>
+                      <TableCell className="font-medium">{client.clientName}</TableCell>
+                      <TableCell>{client.contactPerson || '-'}</TableCell>
                       <TableCell>{client.email || '-'}</TableCell>
                       <TableCell>{client.phone || '-'}</TableCell>
                       <TableCell>{client.city || '-'}</TableCell>
@@ -135,7 +135,7 @@ export default function AllClientsPage() {
                           {client.status}
                         </span>
                       </TableCell>
-                      <TableCell>{new Date(client.created_at).toLocaleDateString()}</TableCell>
+                      <TableCell>{new Date(client.createdAt).toLocaleDateString()}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

@@ -14,19 +14,19 @@ import { useSalesRealtime } from '@/app/hooks/useSalesRealtime';
 import { Pagination } from '@/app/sales/components/Pagination';
 
 interface Manager {
-  user_id: string;
-  full_name: string;
+  userId: string;
+  fullName: string;
   email: string;
   phone: string;
   members: Member[];
 }
 
 interface Member {
-  user_id: string;
+  userId: string;
   full_name: string;
   email: string;
   phone: string;
-  manager_id: string;
+  managerId: string;
 }
 
 interface Analytics {
@@ -38,14 +38,14 @@ interface Analytics {
 }
 
 interface Client {
-  client_id: string;
-  client_name: string;
-  contact_person: string;
+  clientId: string;
+  clientName: string;
+  contactPerson: string;
   email: string;
   phone: string;
   city: string;
   status: string;
-  created_at: string;
+  createdAt: string;
 }
 
 export default function SalesAdminDashboard() {
@@ -378,12 +378,12 @@ export default function SalesAdminDashboard() {
                 <TableBody>
                   {paginatedClients.map((client) => (
                     <TableRow 
-                      key={client.client_id} 
-                      onClick={() => router.push(`/sales/client/${client.client_id}`)}
+                      key={client.clientId} 
+                      onClick={() => router.push(`/sales/client/${client.clientId}`)}
                       className="cursor-pointer hover:bg-muted/50"
                     >
-                      <TableCell className="font-medium">{client.client_name}</TableCell>
-                      <TableCell>{client.contact_person || '-'}</TableCell>
+                      <TableCell className="font-medium">{client.clientName}</TableCell>
+                      <TableCell>{client.contactPerson || '-'}</TableCell>
                       <TableCell>{client.email || '-'}</TableCell>
                       <TableCell>{client.phone || '-'}</TableCell>
                       <TableCell>{client.city || '-'}</TableCell>
@@ -394,7 +394,7 @@ export default function SalesAdminDashboard() {
                           {client.status}
                         </span>
                       </TableCell>
-                      <TableCell>{new Date(client.created_at).toLocaleDateString()}</TableCell>
+                      <TableCell>{new Date(client.createdAt).toLocaleDateString()}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -428,24 +428,24 @@ export default function SalesAdminDashboard() {
             </TableHeader>
             <TableBody>
               {paginatedManagers.map((manager) => (
-                <React.Fragment key={manager.user_id}>
-                  <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => toggleManager(manager.user_id)}>
+                <React.Fragment key={manager.userId}>
+                  <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => toggleManager(manager.userId)}>
                     <TableCell>
-                      {expandedManagers.has(manager.user_id) ? (
+                      {expandedManagers.has(manager.userId) ? (
                         <ChevronDown className="h-4 w-4" />
                       ) : (
                         <ChevronRight className="h-4 w-4" />
                       )}
                     </TableCell>
-                    <TableCell className="font-medium">{manager.full_name}</TableCell>
+                    <TableCell className="font-medium">{manager.fullName}</TableCell>
                     <TableCell>{manager.email}</TableCell>
                     <TableCell>{manager.phone || '-'}</TableCell>
                     <TableCell><span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">Manager</span></TableCell>
                     <TableCell className="text-right">{manager.members.length} members</TableCell>
                   </TableRow>
                   
-                  {expandedManagers.has(manager.user_id) && manager.members.map((member) => (
-                    <TableRow key={member.user_id} className="bg-muted/20">
+                  {expandedManagers.has(manager.userId) && manager.members.map((member) => (
+                    <TableRow key={member.userId} className="bg-muted/20">
                       <TableCell></TableCell>
                       <TableCell className="pl-8">{member.full_name}</TableCell>
                       <TableCell>{member.email}</TableCell>
@@ -465,7 +465,7 @@ export default function SalesAdminDashboard() {
                     </TableCell>
                   </TableRow>
                   {paginatedUnassigned.map((member) => (
-                    <TableRow key={member.user_id} className="bg-orange-50">
+                    <TableRow key={member.userId} className="bg-orange-50">
                       <TableCell></TableCell>
                       <TableCell>{member.full_name}</TableCell>
                       <TableCell>{member.email}</TableCell>

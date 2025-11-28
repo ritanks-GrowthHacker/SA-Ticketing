@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from '@/app/db/connections';
+
+// PostgreSQL with Drizzle ORM
+import { db, users, resourceRequests, projects, departments, globalRoles, eq, and } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 interface JWTPayload {
@@ -24,54 +28,70 @@ export async function GET(req: Request) {
     console.log('🔍 GET PENDING REQUESTS - User:', decoded.sub);
 
     // Get user's department
-    const { data: userData } = await supabase
-      .from('users')
-      .select('department_id')
-      .eq('id', decoded.sub)
-      .single();
+    // Supabase (commented out)
+    // const { data: userData } = await supabase.from('users').select('department_id').eq('id', decoded.sub).single();
+
+    // PostgreSQL with Drizzle
+    const userData = await db
+      .select({ departmentId: users.departmentId })
+      .from(users)
+      .where(eq(users.id, decoded.sub))
+      .limit(1);
 
     console.log('👤 User department data:', userData);
 
-    if (!userData?.department_id) {
+    if (!userData || userData.length === 0 || !userData[0]?.departmentId) {
       console.error('❌ User department not found');
       return NextResponse.json({ error: 'User department not found' }, { status: 404 });
     }
 
-    const userDepartmentId = userData.department_id;
+    const userDepartmentId = userData[0].departmentId;
     console.log('📂 Fetching requests for department:', userDepartmentId);
 
     // Get all pending resource requests where the requested user belongs to this department
-    const { data: requests, error } = await supabase
-      .from('resource_requests')
-      .select(`
-        id,
-        project_id,
-        requested_user_id,
-        user_department_id,
-        status,
-        message,
-        created_at,
-        updated_at,
-        reviewed_at,
-        review_notes,
-        projects(id, name, created_by),
-        requested_user:users!resource_requests_requested_user_id_fkey(id, name, email, job_title),
-        user_department:departments!resource_requests_user_department_id_fkey(id, name, color_code),
-        requester:users!resource_requests_requested_by_fkey(id, name, email, department_id),
-        reviewer:users!resource_requests_reviewed_by_fkey(name)
-      `)
-      .eq('user_department_id', userDepartmentId)
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false });
+    // Supabase (commented out)
+    // const { data: requests, error } = await supabase.from('resource_requests').select(`...`)
+
+    // PostgreSQL with Drizzle
+    const requests = await db
+      .select({
+        id: resourceRequests.id,
+        projectId: resourceRequests.projectId,
+        requestedUserId: resourceRequests.requestedUserId,
+        userDepartmentId: resourceRequests.userDepartmentId,
+        status: resourceRequests.status,
+        message: resourceRequests.message,
+        createdAt: resourceRequests.createdAt,
+        updatedAt: resourceRequests.updatedAt,
+        reviewedAt: resourceRequests.reviewedAt,
+        reviewNotes: resourceRequests.reviewNotes,
+        projectId2: projects.id,
+        projectName: projects.name,
+        projectCreatedBy: projects.createdBy,
+        requestedUserName: users.name,
+        requestedUserEmail: users.email,
+        requestedUserJobTitle: users.jobTitle,
+        deptId: departments.id,
+        deptName: departments.name,
+        deptColorCode: departments.colorCode
+      })
+      .from(resourceRequests)
+      .leftJoin(projects, eq(resourceRequests.projectId, projects.id))
+      .leftJoin(users, eq(resourceRequests.requestedUserId, users.id))
+      .leftJoin(departments, eq(resourceRequests.userDepartmentId, departments.id))
+      .where(and(
+        eq(resourceRequests.userDepartmentId, userDepartmentId),
+        eq(resourceRequests.status, 'pending')
+      ))
+      .orderBy(resourceRequests.createdAt);
 
     console.log('📊 Query result:', { 
-      requestCount: requests?.length || 0, 
-      error: error,
+      requestCount: requests?.length || 0,
       userDepartmentId 
     });
 
-    if (error) {
-      console.error('❌ Error fetching pending requests:', error);
+    if (!requests) {
+      console.error('❌ Error fetching pending requests');
       return NextResponse.json(
         { error: 'Failed to fetch pending requests' },
         { status: 500 }
@@ -82,29 +102,29 @@ export async function GET(req: Request) {
     const formattedRequests = (requests || []).map((req: any) => ({
       id: req.id,
       project: {
-        id: req.projects?.id,
-        name: req.projects?.name
+        id: req.projectId2,
+        name: req.projectName
       },
       requested_user: {
-        id: req.requested_user?.id,
-        name: req.requested_user?.name,
-        email: req.requested_user?.email,
-        job_title: req.requested_user?.job_title
+        id: req.requestedUserId,
+        name: req.requestedUserName,
+        email: req.requestedUserEmail,
+        job_title: req.requestedUserJobTitle
       },
       department: {
-        id: req.user_department?.id,
-        name: req.user_department?.name,
-        color_code: req.user_department?.color_code
+        id: req.deptId,
+        name: req.deptName,
+        color_code: req.deptColorCode
       },
       requester: {
-        id: req.requester?.id,
-        name: req.requester?.name,
-        email: req.requester?.email
+        id: req.requestedUserId,
+        name: req.requestedUserName,
+        email: req.requestedUserEmail
       },
       status: req.status,
       message: req.message,
-      created_at: req.created_at,
-      updated_at: req.updated_at
+      created_at: req.createdAt,
+      updated_at: req.updatedAt
     }));
 
     console.log(`✅ Found ${formattedRequests.length} pending requests for department ${userDepartmentId}`);

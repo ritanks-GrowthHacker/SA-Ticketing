@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from "@/app/db/connections";
+
+// PostgreSQL with Drizzle ORM
+import { db, userProject, projects, globalRoles, eq, and } from '@/lib/db-helper';
 
 export async function POST(req: Request) {
   try {
@@ -24,25 +28,38 @@ export async function POST(req: Request) {
     console.log(`🔄 SWITCH-PROJECT: User ${userId} switching to project ${projectId}`);
 
     // Verify user has access to this project and get their role
-    const { data: userProjectRole, error } = await supabase
-      .from('user_project')
-      .select(`
-        role_id,
-        projects!inner(id, name, organization_id),
-        global_roles!user_project_role_id_fkey(id, name)
-      `)
-      .eq('user_id', userId)
-      .eq('project_id', projectId)
-      .eq('projects.organization_id', organizationId)
-      .single();
+    // Supabase (commented out)
+    // const { data: userProjectRole, error } = await supabase.from('user_project').select(`...`)
 
-    if (error || !userProjectRole) {
-      console.error('❌ SWITCH-PROJECT: User does not have access to project:', error);
+    // PostgreSQL with Drizzle
+    const userProjectRole = await db
+      .select({
+        roleId: userProject.roleId,
+        projectId: projects.id,
+        projectName: projects.name,
+        projectOrgId: projects.organizationId,
+        roleIdGlobal: globalRoles.id,
+        roleName: globalRoles.name
+      })
+      .from(userProject)
+      .innerJoin(projects, eq(userProject.projectId, projects.id))
+      .innerJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userProject.userId, userId),
+          eq(userProject.projectId, projectId),
+          eq(projects.organizationId, organizationId)
+        )
+      )
+      .limit(1);
+
+    if (!userProjectRole || userProjectRole.length === 0) {
+      console.error('❌ SWITCH-PROJECT: User does not have access to project');
       return NextResponse.json({ error: "Access denied to this project" }, { status: 403 });
     }
 
-    const projectData = userProjectRole.projects as any;
-    const roleData = userProjectRole.global_roles as any;
+    const projectData = { id: userProjectRole[0].projectId, name: userProjectRole[0].projectName };
+    const roleData = { id: userProjectRole[0].roleIdGlobal, name: userProjectRole[0].roleName };
 
     console.log('✅ SWITCH-PROJECT: User has access with role:', roleData.name);
 

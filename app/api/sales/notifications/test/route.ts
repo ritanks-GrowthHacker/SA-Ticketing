@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, salesNotifications, eq, and, gt, desc } from '@/lib/sales-db-helper';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -18,45 +18,48 @@ export async function GET(request: NextRequest) {
     console.log('🧪 Testing notifications for user:', userId, 'Decoded token:', decoded);
 
     // Get all notifications for this user
-    const { data: allNotifications, error: allError } = await supabaseAdminSales
-      .from('sales_notifications')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
+    const allNotificationsList = await salesDb
+      .select()
+      .from(salesNotifications)
+      .where(eq(salesNotifications.userId, userId))
+      .orderBy(desc(salesNotifications.createdAt));
 
     // Get unread notifications
-    const { data: unreadNotifications, error: unreadError } = await supabaseAdminSales
-      .from('sales_notifications')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('is_read', false)
-      .order('created_at', { ascending: false });
+    const unreadNotificationsList = await salesDb
+      .select()
+      .from(salesNotifications)
+      .where(
+        and(
+          eq(salesNotifications.userId, userId),
+          eq(salesNotifications.isRead, false)
+        )
+      )
+      .orderBy(desc(salesNotifications.createdAt));
 
     // Get recent notifications (last 5 minutes)
     const fiveMinutesAgo = new Date();
     fiveMinutesAgo.setMinutes(fiveMinutesAgo.getMinutes() - 5);
 
-    const { data: recentNotifications, error: recentError } = await supabaseAdminSales
-      .from('sales_notifications')
-      .select('*')
-      .eq('user_id', userId)
-      .gt('created_at', fiveMinutesAgo.toISOString())
-      .order('created_at', { ascending: false });
+    const recentNotificationsList = await salesDb
+      .select()
+      .from(salesNotifications)
+      .where(
+        and(
+          eq(salesNotifications.userId, userId),
+          gt(salesNotifications.createdAt, fiveMinutesAgo)
+        )
+      )
+      .orderBy(desc(salesNotifications.createdAt));
 
     return NextResponse.json({
       userId,
       decodedToken: decoded,
-      total: allNotifications?.length || 0,
-      unread: unreadNotifications?.length || 0,
-      recent: recentNotifications?.length || 0,
-      allNotifications: allNotifications || [],
-      unreadNotifications: unreadNotifications || [],
-      recentNotifications: recentNotifications || [],
-      errors: {
-        all: allError?.message,
-        unread: unreadError?.message,
-        recent: recentError?.message
-      }
+      total: allNotificationsList?.length || 0,
+      unread: unreadNotificationsList?.length || 0,
+      recent: recentNotificationsList?.length || 0,
+      allNotifications: allNotificationsList || [],
+      unreadNotifications: unreadNotificationsList || [],
+      recentNotifications: recentNotificationsList || []
     });
   } catch (error) {
     console.error('❌ Test endpoint error:', error);

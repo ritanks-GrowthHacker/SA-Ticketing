@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, tickets, projects, users, statuses, priorities, userOrganizationRoles, globalRoles, userProject, projectDepartment, eq, and, or, inArray, ilike, sql, desc } from "@/lib/db-helper";
 
 // Helper function to verify JWT token and extract user info
 async function verifyToken(authHeader: string | null) {
@@ -34,19 +35,23 @@ export async function GET(request: NextRequest) {
     const departmentId = tokenData.department_id; // Get department from JWT
     
     // Get user's organization role using global roles system
-    const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization_roles')
-      .select(`
-        role_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId)
-      .single();
+    const userOrgRole = await db
+      .select({
+        roleId: userOrganizationRoles.roleId,
+        roleName: globalRoles.name
+      })
+      .from(userOrganizationRoles)
+      .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(and(
+        eq(userOrganizationRoles.userId, userId),
+        eq(userOrganizationRoles.organizationId, organizationId)
+      ))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     let actualUserRole = tokenData.role || 'Member'; // fallback to JWT role
-    if (userOrgRole && userOrgRole.global_roles) {
-      actualUserRole = (userOrgRole.global_roles as any).name;
+    if (userOrgRole && userOrgRole.roleName) {
+      actualUserRole = userOrgRole.roleName;
     }
 
     console.log('🔧 Search tickets - User role:', actualUserRole);
@@ -66,34 +71,24 @@ export async function GET(request: NextRequest) {
 
 
 
-    // Build base query with RBAC
-    let ticketsQuery = supabase
-      .from('tickets')
-      .select(`
-        id, title, description, created_at, updated_at, 
-        expected_closing_date, actual_closing_date,
-        status_id, priority_id, created_by, assigned_to, project_id,
-        projects!inner(name, organization_id),
-        creator:users!tickets_created_by_fkey(name, email),
-        assignee:users!tickets_assigned_to_fkey(name, email),
-        statuses!tickets_status_id_fkey(name, color_code),
-        priorities!tickets_priority_id_fkey(name, color_code)
-      `)
-      .eq('projects.organization_id', organizationId);
+    // Build base Drizzle query conditions
+    let whereConditions: any[] = [];
+    let projectIds: string[] = [];
 
     // Apply RBAC filtering
     if (actualUserRole !== 'Admin') {
-      // Get user's project assignments with roles for count query
-      const { data: userProjects } = await supabase
-        .from('user_project')
-        .select(`
-          project_id,
-          role_id,
-          global_roles!user_project_role_id_fkey(name)
-        `)
-        .eq('user_id', userId);
+      // Get user's project assignments with roles
+      const userProjectsData = await db
+        .select({
+          projectId: userProject.projectId,
+          roleId: userProject.roleId,
+          roleName: globalRoles.name
+        })
+        .from(userProject)
+        .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+        .where(eq(userProject.userId, userId));
 
-      if (!userProjects || userProjects.length === 0) {
+      if (!userProjectsData || userProjectsData.length === 0) {
         return NextResponse.json({
           tickets: [],
           totalCount: 0,
@@ -111,188 +106,195 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      const projectIds = userProjects.map(p => p.project_id);
+      projectIds = userProjectsData.map((p: any) => p.projectId);
       
-      console.log('🎯 User projects for tickets:', userProjects.map(p => ({
-        projectId: p.project_id,
-        role: (p.global_roles as any)?.name
+      console.log('🎯 User projects for tickets:', userProjectsData.map((p: any) => ({
+        projectId: p.projectId,
+        role: p.roleName
       })));
       
       // For Members: Only show tickets assigned to them OR created by them
       if (actualUserRole === 'Member') {
         console.log('👤 Member access: showing only assigned/created tickets');
-        ticketsQuery = ticketsQuery
-          .in('project_id', projectIds)
-          .or(`assigned_to.eq.${userId},created_by.eq.${userId}`);
+        whereConditions.push(
+          and(
+            inArray(tickets.projectId, projectIds),
+            or(
+              eq(tickets.assignedTo, userId),
+              eq(tickets.createdBy, userId)
+            )
+          )
+        );
       } else {
         console.log('👑 Manager/Admin access: showing all tickets in projects:', projectIds);
         // For Managers and other non-Admin roles: Show all tickets in assigned projects
         // Filter by role if specified
         if (roleFilter) {
-          const filteredProjects = userProjects
-            .filter(p => (p.global_roles as any)?.name === roleFilter)
-            .map(p => p.project_id);
-          ticketsQuery = ticketsQuery.in('project_id', filteredProjects);
+          const filteredProjects = userProjectsData
+            .filter((p: any) => p.roleName === roleFilter)
+            .map((p: any) => p.projectId);
+          whereConditions.push(inArray(tickets.projectId, filteredProjects));
         } else {
-          ticketsQuery = ticketsQuery.in('project_id', projectIds);
+          whereConditions.push(inArray(tickets.projectId, projectIds));
         }
       }
     }
 
     // Apply search query
     if (query) {
-      ticketsQuery = ticketsQuery.or(`title.ilike.%${query}%,description.ilike.%${query}%`);
+      whereConditions.push(
+        or(
+          ilike(tickets.title, `%${query}%`),
+          ilike(tickets.description, `%${query}%`)
+        )
+      );
     }
 
     // Apply filters
     if (statusFilter && statusFilter !== 'all') {
-      ticketsQuery = ticketsQuery.eq('status_id', statusFilter);
+      whereConditions.push(eq(tickets.statusId, statusFilter));
     }
 
     if (priorityFilter && priorityFilter !== 'all') {
-      ticketsQuery = ticketsQuery.eq('priority_id', priorityFilter);
+      whereConditions.push(eq(tickets.priorityId, priorityFilter));
     }
 
     if (projectFilter && projectFilter !== 'all') {
-      ticketsQuery = ticketsQuery.eq('project_id', projectFilter);
+      whereConditions.push(eq(tickets.projectId, projectFilter));
     }
 
-    // Get total count for pagination
-    let countQuery = supabase
-      .from('tickets')
-      .select('*, projects!inner(organization_id)', { count: 'exact', head: true })
-      .eq('projects.organization_id', organizationId);
+    // Get total count for pagination with same conditions
+    const combinedWhere = whereConditions.length > 0 ? and(...whereConditions) : undefined;
+    
+    // Count total matching tickets
+    const countResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(tickets)
+      .innerJoin(projects, eq(tickets.projectId, projects.id))
+      .where(and(
+        eq(projects.organizationId, organizationId),
+        combinedWhere
+      ));
+    
+    const totalCount = countResult[0]?.count || 0;
 
-    // Apply same RBAC to count query
-    if (actualUserRole !== 'Admin') {
-      const { data: userProjectsCount } = await supabase
-        .from('user_project')
-        .select(`
-          project_id,
-          role_id,
-          global_roles!user_project_role_id_fkey(name)
-        `)
-        .eq('user_id', userId);
+    // Execute main query with pagination and joins
+    const ticketsData = await db
+      .select({
+        id: tickets.id,
+        title: tickets.title,
+        description: tickets.description,
+        createdAt: tickets.createdAt,
+        updatedAt: tickets.updatedAt,
+        expectedClosingDate: tickets.expectedClosingDate,
+        actualClosingDate: tickets.actualClosingDate,
+        statusId: tickets.statusId,
+        priorityId: tickets.priorityId,
+        createdBy: tickets.createdBy,
+        assignedTo: tickets.assignedTo,
+        projectId: tickets.projectId,
+        projectName: projects.name,
+        projectOrganizationId: projects.organizationId,
+        statusName: statuses.name,
+        statusColorCode: statuses.colorCode,
+        priorityName: priorities.name,
+        priorityColorCode: priorities.colorCode
+      })
+      .from(tickets)
+      .innerJoin(projects, eq(tickets.projectId, projects.id))
+      .leftJoin(statuses, eq(tickets.statusId, statuses.id))
+      .leftJoin(priorities, eq(tickets.priorityId, priorities.id))
+      .where(and(
+        eq(projects.organizationId, organizationId),
+        combinedWhere
+      ))
+      .orderBy(desc(tickets.createdAt))
+      .limit(limit)
+      .offset(offset);
 
-      if (userProjectsCount && userProjectsCount.length > 0) {
-        const projectIds = userProjectsCount.map(p => p.project_id);
-        
-        // For Members: Only count tickets assigned to them OR created by them
-        if (actualUserRole === 'Member') {
-          countQuery = countQuery
-            .in('project_id', projectIds)
-            .or(`assigned_to.eq.${userId},created_by.eq.${userId}`);
-        } else {
-          // For Managers and other non-Admin roles: Count all tickets in assigned projects
-          const filteredProjectIds = roleFilter 
-            ? userProjectsCount.filter(p => (p.global_roles as any)?.name === roleFilter).map(p => p.project_id)
-            : projectIds;
-          countQuery = countQuery.in('project_id', filteredProjectIds);
-        }
-      }
-    }
-
-    // Apply same filters to count query
-    if (query) {
-      countQuery = countQuery.or(`title.ilike.%${query}%,description.ilike.%${query}%`);
-    }
-    if (statusFilter && statusFilter !== 'all') {
-      countQuery = countQuery.eq('status_id', statusFilter);
-    }
-    if (priorityFilter && priorityFilter !== 'all') {
-      countQuery = countQuery.eq('priority_id', priorityFilter);
-    }
-    if (projectFilter && projectFilter !== 'all') {
-      countQuery = countQuery.eq('project_id', projectFilter);
-    }
-
-    // Execute count query
-    const { count: totalCount } = await countQuery;
-
-    // Execute main query with pagination
-    const { data: tickets, error } = await ticketsQuery
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-
-    if (error) {
-      console.error('Error fetching tickets:', error);
+    if (!ticketsData) {
+      console.error('Error fetching tickets');
       return NextResponse.json({ error: 'Failed to fetch tickets' }, { status: 500 });
     }
 
-    // Manually fetch priorities and add to tickets
-    if (tickets && tickets.length > 0) {
-      const priorityIds = [...new Set(tickets.map(t => t.priority_id).filter(Boolean))];
+    // Fetch user details separately for creators and assignees
+    const creatorIds = [...new Set(ticketsData.map((t: any) => t.createdBy).filter(Boolean))];
+    const assigneeIds = [...new Set(ticketsData.map((t: any) => t.assignedTo).filter(Boolean))];
+    const allUserIds = [...new Set([...creatorIds, ...assigneeIds])];
+
+    let usersMap: { [key: string]: any } = {};
+    if (allUserIds.length > 0) {
+      const usersData = await db
+        .select({ id: users.id, name: users.name, email: users.email })
+        .from(users)
+        .where(inArray(users.id, allUserIds));
       
-      if (priorityIds.length > 0) {
-        // Try priorities table first, then fall back to statuses table with type='priority'
-        let { data: priorities } = await supabase
-          .from('priorities')
-          .select('id, name, color_code')
-          .in('id', priorityIds);
-
-        // If no priorities found, try statuses table with type='priority'
-        if (!priorities || priorities.length === 0) {
-          const { data: priorityStatuses } = await supabase
-            .from('statuses')
-            .select('id, name, color_code')
-            .eq('type', 'priority')
-            .in('id', priorityIds);
-          priorities = priorityStatuses;
-        }
-
-        // Add priority info to tickets
-        if (priorities && priorities.length > 0) {
-          tickets.forEach(ticket => {
-            const priority = priorities.find(p => p.id === ticket.priority_id);
-            if (priority) {
-              (ticket as any).priorities = priority;
-            }
-          });
-        }
-      }
+      usersData.forEach((u: any) => {
+        usersMap[u.id] = u;
+      });
     }
 
-    // Get available filter options based on user's access
-    let availableProjectsQuery = supabase
-      .from('projects')
-      .select('id, name')
-      .eq('organization_id', organizationId);
+    // Format tickets to match expected structure
+    const formattedTickets = ticketsData.map((t: any) => ({
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      created_at: t.createdAt?.toISOString(),
+      updated_at: t.updatedAt?.toISOString(),
+      expected_closing_date: t.expectedClosingDate,
+      actual_closing_date: t.actualClosingDate,
+      status_id: t.statusId,
+      priority_id: t.priorityId,
+      created_by: t.createdBy,
+      assigned_to: t.assignedTo,
+      project_id: t.projectId,
+      projects: { name: t.projectName, organization_id: t.projectOrganizationId },
+      creator: usersMap[t.createdBy] || { name: null, email: null },
+      assignee: usersMap[t.assignedTo] || { name: null, email: null },
+      statuses: { name: t.statusName, color_code: t.statusColorCode },
+      priorities: { name: t.priorityName, color_code: t.priorityColorCode }
+    }));
 
+    // Get available filter options based on user's access
     let availableRoles: string[] = [];
+    let availableProjects: any[] = [];
 
     if (actualUserRole !== 'Admin') {
       // Get only projects user has access to
-      const { data: userProjectsForFilter } = await supabase
-        .from('user_project')
-        .select(`
-          project_id,
-          role_id,
-          global_roles!user_project_role_id_fkey(name),
-          projects!inner(name)
-        `)
-        .eq('user_id', userId);
+      const userProjectsForFilter = await db
+        .select({
+          projectId: userProject.projectId,
+          roleId: userProject.roleId,
+          roleName: globalRoles.name,
+          projId: projects.id,
+          projName: projects.name
+        })
+        .from(userProject)
+        .innerJoin(projects, eq(userProject.projectId, projects.id))
+        .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+        .where(eq(userProject.userId, userId));
 
-      let availableProjects = userProjectsForFilter?.map(up => ({
-        id: up.project_id,
-        name: (up.projects as any)?.name || 'Unknown Project'
+      availableProjects = userProjectsForFilter?.map((up: any) => ({
+        id: up.projId,
+        name: up.projName || 'Unknown Project'
       })) || [];
 
       // Filter by department if selected
       if (departmentId && availableProjects.length > 0) {
-        const { data: deptProjects } = await supabase
-          .from('project_department')
-          .select('project_id')
-          .eq('department_id', departmentId);
+        const deptProjectsData = await db
+          .select({ projectId: projectDepartment.projectId })
+          .from(projectDepartment)
+          .where(eq(projectDepartment.departmentId, departmentId));
 
-        const deptProjectIds = deptProjects?.map(dp => dp.project_id) || [];
-        availableProjects = availableProjects.filter(p => deptProjectIds.includes(p.id));
+        const deptProjectIds = deptProjectsData?.map((dp: any) => dp.projectId) || [];
+        availableProjects = availableProjects.filter((p: any) => deptProjectIds.includes(p.id));
       }
 
       // Get available roles for this user
-      availableRoles = [...new Set(userProjectsForFilter?.map(p => (p.global_roles as any)?.name).filter(Boolean) || [])];
+      availableRoles = [...new Set(userProjectsForFilter?.map((p: any) => p.roleName).filter(Boolean) || [])] as string[];
 
       return NextResponse.json({
-        tickets: tickets || [],
+        tickets: formattedTickets || [],
         totalCount: totalCount || 0,
         pagination: {
           currentPage: page,
@@ -312,23 +314,32 @@ export async function GET(request: NextRequest) {
       });
     } else {
       // Admin can see all projects - BUT filter by department if selected
+      let projectsWhere: any = eq(projects.organizationId, organizationId);
+      
       if (departmentId) {
         // Get projects from this department
-        const { data: deptProjects } = await supabase
-          .from('project_department')
-          .select('project_id')
-          .eq('department_id', departmentId);
+        const deptProjectsData = await db
+          .select({ projectId: projectDepartment.projectId })
+          .from(projectDepartment)
+          .where(eq(projectDepartment.departmentId, departmentId));
 
-        const deptProjectIds = deptProjects?.map(dp => dp.project_id) || [];
+        const deptProjectIds = deptProjectsData?.map((dp: any) => dp.projectId) || [];
         
-        // Filter available projects by department
-        availableProjectsQuery = availableProjectsQuery.in('id', deptProjectIds);
+        if (deptProjectIds.length > 0) {
+          projectsWhere = and(
+            eq(projects.organizationId, organizationId),
+            inArray(projects.id, deptProjectIds)
+          );
+        }
       }
       
-      const { data: availableProjects } = await availableProjectsQuery;
+      const availableProjectsData = await db
+        .select({ id: projects.id, name: projects.name })
+        .from(projects)
+        .where(projectsWhere);
 
       return NextResponse.json({
-        tickets: tickets || [],
+        tickets: formattedTickets || [],
         totalCount: totalCount || 0,
         pagination: {
           currentPage: page,
@@ -338,7 +349,7 @@ export async function GET(request: NextRequest) {
           hasPreviousPage: page > 1
         },
         filters: {
-          availableProjects: availableProjects || [],
+          availableProjects: availableProjectsData || [],
           availableRoles: ['admin', 'manager', 'user'] // All roles for admin
         },
         userAccess: {

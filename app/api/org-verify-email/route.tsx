@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, eq } from '@/lib/db-helper';
 
 interface VerifyOTPRequest {
   orgEmail: string;
@@ -20,23 +21,29 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the organization by email
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('id, org_email, otp, otp_expires_at, otp_verified')
-      .eq('org_email', orgEmail)
-      .single();
+    const orgResults = await db.select({
+      id: organizations.id,
+      orgEmail: organizations.orgEmail,
+      otp: organizations.otp,
+      otpExpiresAt: organizations.otpExpiresAt,
+      otpVerified: organizations.otpVerified
+    })
+      .from(organizations)
+      .where(eq(organizations.orgEmail, orgEmail))
+      .limit(1);
+    
+    const organization = orgResults[0] || null;
 
-    console.log('Organization lookup:', { orgEmail, organization, orgError });
+    console.log('Organization lookup:', { orgEmail, organization });
 
-    if (orgError || !organization) {
-      console.error('Organization not found:', orgError);
+    if (!organization) {
+      console.error('Organization not found');
       return NextResponse.json(
         { 
           error: 'Organization not found',
           debug: {
             email: orgEmail,
-            dbError: orgError?.message || 'No error',
-            foundData: organization ? 'Found' : 'Not found'
+            foundData: 'Not found'
           }
         },
         { status: 404 }
@@ -44,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if already verified
-    if (organization.otp_verified) {
+    if (organization.otpVerified) {
       return NextResponse.json(
         { error: 'Organization email is already verified' },
         { status: 400 }
@@ -61,8 +68,8 @@ export async function POST(request: NextRequest) {
 
     // Check if OTP has expired
     const now = new Date();
-    if (organization.otp_expires_at) {
-      const otpExpiry = new Date(organization.otp_expires_at);
+    if (organization.otpExpiresAt) {
+      const otpExpiry = new Date(organization.otpExpiresAt);
       if (now > otpExpiry) {
         return NextResponse.json(
           { error: 'OTP has expired. Please request a new verification email.' },
@@ -72,17 +79,16 @@ export async function POST(request: NextRequest) {
     }
 
     // Update organization to mark as verified and clear OTP data
-    const { error: updateError } = await supabase
-      .from('organizations')
-      .update({
-        otp_verified: true,
-        otp: null,
-        otp_expires_at: null,
-        is_active: true  // Activate the organization
-      })
-      .eq('id', organization.id);
-
-    if (updateError) {
+    try {
+      await db.update(organizations)
+        .set({
+          otpVerified: true,
+          otp: null,
+          otpExpiresAt: null,
+          isActive: true  // Activate the organization
+        })
+        .where(eq(organizations.id, organization.id));
+    } catch (updateError) {
       console.error('Error updating organization:', updateError);
       return NextResponse.json(
         { error: 'Failed to verify organization. Please try again.' },

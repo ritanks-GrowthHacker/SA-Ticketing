@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase, supabaseAdmin } from '@/app/db/connections';
+// import { supabase, supabaseAdmin } from '@/app/db/connections';
+import { db, projects, userProject, users as usersTable, globalRoles, eq, and } from '@/lib/db-helper';
 import { bypassAuthInDev } from '@/lib/devAuth';
 
 interface JWTPayload {
@@ -59,12 +60,11 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     console.log('🔍 Updated API - removed id column from query');
 
     // Verify project exists and user has access
-    const { data: project } = await supabase
-      .from('projects')
-      .select('id, organization_id')
-      .eq('id', projectId)
-      .eq('organization_id', decodedToken.org_id)
-      .single();
+    const project = await db.select({ id: projects.id, organizationId: projects.organizationId })
+      .from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.organizationId, decodedToken.org_id)))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (!project) {
       return NextResponse.json(
@@ -78,14 +78,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     
     if (userRole !== 'Admin') {
       // For non-admins, check if they're assigned to this project
-      const { data: userProject } = await supabase
-        .from('user_project')
-        .select('user_id, project_id')
-        .eq('user_id', decodedToken.sub)
-        .eq('project_id', projectId)
-        .single();
+      const userProjectAssignment = await db.select({ userId: userProject.userId, projectId: userProject.projectId })
+        .from(userProject)
+        .where(and(eq(userProject.userId, decodedToken.sub), eq(userProject.projectId, projectId)))
+        .limit(1)
+        .then(rows => rows[0] || null);
 
-      if (!userProject) {
+      if (!userProjectAssignment) {
         return NextResponse.json(
           { error: "Access denied. You are not assigned to this project." }, 
           { status: 403 }
@@ -97,69 +96,47 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     console.log('🔍 User ID from token:', decodedToken.sub);
     console.log('🔍 User role from token:', decodedToken.role);
 
-    // Get team members using exact same pattern as working get-all-projects API
-    console.log('🔍 Fetching team members using working API pattern...');
-    const { data: members, error: membersError } = await supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        users!inner(
-          id,
-          name,
-          email,
-          profile_image,
-          profile_picture_url
-        ),
-        global_roles!user_project_role_id_fkey(
-          id,
-          name,
-          description
-        )
-      `)
-      .eq('project_id', projectId);
+    // Get team members using Drizzle with joins
+    console.log('🔍 Fetching team members using Drizzle...');
+    const members = await db.select({
+      userId: userProject.userId,
+      projectId: userProject.projectId,
+      userName: usersTable.name,
+      userEmail: usersTable.email,
+      userProfileImage: usersTable.profileImage,
+      userProfilePictureUrl: usersTable.profilePictureUrl,
+      roleId: globalRoles.id,
+      roleName: globalRoles.name,
+      roleDescription: globalRoles.description
+    })
+    .from(userProject)
+    .leftJoin(usersTable, eq(userProject.userId, usersTable.id))
+    .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+    .where(eq(userProject.projectId, projectId));
 
-    console.log('🔍 Supabase query result:', { data: members, error: membersError });
+    console.log('🔍 Drizzle query result:', { membersCount: members.length });
 
-    if (membersError) {
-      console.error('❌ Detailed Supabase error:', {
-        message: membersError.message,
-        code: membersError.code,
-        details: membersError.details,
-        hint: membersError.hint,
-        projectId: projectId
-      });
-      return NextResponse.json(
-        { 
-          error: "Failed to fetch project members", 
-          details: membersError.message,
-          code: membersError.code,
-          projectId: projectId
-        }, 
-        { status: 500 }
-      );
-    }
-
-    // Format the response using exact same pattern as working API
+    // Format the response
     console.log('🔍 Raw members data before formatting:', members);
     const formattedMembers = (members || []).map((member, index) => {
       console.log(`🔍 Processing member ${index}:`, member);
       return {
-        id: `${member.user_id}-${projectId}`, // Composite ID using projectId from params
-        user_id: member.user_id,
+        id: `${member.userId}-${projectId}`, // Composite ID using projectId from params
+        user_id: member.userId,
         project_id: projectId, // Use projectId from params
-        role_id: (member.global_roles as any)?.id || null,
-        assigned_at: new Date().toISOString(), // Use current timestamp as fallback
+        role_id: member.roleId || null,
+        assigned_at: new Date().toISOString(), // Default timestamp since schema doesn't have this field
         user: {
-          id: (member.users as any)?.id || member.user_id,
-          name: (member.users as any)?.name || null,
-          email: (member.users as any)?.email || null,
-          profile_image: (member.users as any)?.profile_image || null,
-          profile_picture_url: (member.users as any)?.profile_picture_url || null
+          id: member.userId,
+          name: member.userName || null,
+          email: member.userEmail || null,
+          profile_image: member.userProfileImage || null,
+          profile_picture_url: member.userProfilePictureUrl || null
         },
         role: {
-          id: (member.global_roles as any)?.id || null,
-          name: (member.global_roles as any)?.name || null,
-          description: (member.global_roles as any)?.description || null
+          id: member.roleId || null,
+          name: member.roleName || null,
+          description: member.roleDescription || null
         }
       };
     });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, projects, userProject, globalRoles, tickets, users as usersTable, statuses, priorities, projectDepartment, eq, and, or, inArray, ilike, desc, sql } from '@/lib/db-helper';
 
 // Helper function to format time ago
 const formatTimeAgo = (timestamp: string): string => {
@@ -82,42 +83,78 @@ export async function GET(request: NextRequest) {
     if (department_role === 'Admin' && department_id) {
       // Department Admin: can see all projects within the SELECTED department
       console.log('🔧 MEMBER: Dept Admin mode - filtering by department:', department_id);
-      const { data: deptProjects, error: deptProjectsError } = await supabase
-        .from('projects')
-        .select(`
-          id,
-          name,
-          description,
-          project_department!inner(department_id)
-        `)
-        .eq('organization_id', organization_id)
-        .eq('project_department.department_id', department_id)
-        .order('created_at', { ascending: true });
+      const deptProjects = await db.select({
+        id: projects.id,
+        name: projects.name,
+        description: projects.description,
+        departmentId: projectDepartment.departmentId
+      })
+      .from(projects)
+      .innerJoin(projectDepartment, eq(projects.id, projectDepartment.projectId))
+      .where(and(
+        eq(projects.organizationId, organization_id),
+        eq(projectDepartment.departmentId, department_id)
+      ))
+      .orderBy(projects.createdAt);
 
-      memberProjects = (deptProjects || []).map((p: any) => ({ project_id: p.id, projects: { id: p.id, name: p.name, description: p.description }, global_roles: { name: 'Admin' } }));
-      memberProjectsError = deptProjectsError;
+      memberProjects = (deptProjects || []).map((p: any) => ({ 
+        project_id: p.id, 
+        projects: { id: p.id, name: p.name, description: p.description }, 
+        global_roles: { name: 'Admin' } 
+      }));
+      memberProjectsError = null;
     } else {
       // Department Manager or Regular Member: Get assigned projects, filtered by selected department
-      const query = supabase
-        .from('user_project')
-        .select(`
-          project_id,
-          role_id,
-          projects!inner(id, name, description, project_department!inner(department_id)),
-          global_roles!user_project_role_id_fkey(id, name)
-        `)
-        .eq('user_id', userId)
-        .eq('projects.organization_id', organization_id);
+      let assignedProjectsQuery = db.select({
+        projectId: userProject.projectId,
+        roleId: userProject.roleId,
+        projectsId: projects.id,
+        projectsName: projects.name,
+        projectsDescription: projects.description,
+        departmentId: projectDepartment.departmentId,
+        globalRolesId: globalRoles.id,
+        globalRolesName: globalRoles.name
+      })
+      .from(userProject)
+      .innerJoin(projects, eq(userProject.projectId, projects.id))
+      .innerJoin(projectDepartment, eq(projects.id, projectDepartment.projectId))
+      .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(and(
+        eq(userProject.userId, userId),
+        eq(projects.organizationId, organization_id)
+      ));
 
       // Filter by department if selected in UI
       if (department_id) {
-        query.eq('projects.project_department.department_id', department_id);
+        assignedProjectsQuery = db.select({
+          projectId: userProject.projectId,
+          roleId: userProject.roleId,
+          projectsId: projects.id,
+          projectsName: projects.name,
+          projectsDescription: projects.description,
+          departmentId: projectDepartment.departmentId,
+          globalRolesId: globalRoles.id,
+          globalRolesName: globalRoles.name
+        })
+        .from(userProject)
+        .innerJoin(projects, eq(userProject.projectId, projects.id))
+        .innerJoin(projectDepartment, eq(projects.id, projectDepartment.projectId))
+        .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+        .where(and(
+          eq(userProject.userId, userId),
+          eq(projects.organizationId, organization_id),
+          eq(projectDepartment.departmentId, department_id)
+        ));
         console.log('🔧 MEMBER: Filtering projects by selected department:', department_id);
       }
 
-      const { data: assignedProjects, error: projectsError } = await query;
-      memberProjects = assignedProjects || [];
-      memberProjectsError = projectsError;
+      const assignedProjects = await assignedProjectsQuery;
+      memberProjects = (assignedProjects || []).map((ap: any) => ({
+        project_id: ap.projectId,
+        projects: { id: ap.projectsId, name: ap.projectsName, description: ap.projectsDescription },
+        global_roles: { id: ap.globalRolesId, name: ap.globalRolesName }
+      }));
+      memberProjectsError = null;
     }
 
     if (memberProjectsError) {
@@ -170,108 +207,174 @@ export async function GET(request: NextRequest) {
     }
 
     // Get tickets assigned to this member in their projects
-    const { data: memberTickets, error: ticketsError } = await supabase
-      .from('tickets')
-      .select(`
-        id,
-        title,
-        description,
-        status_id,
-        priority_id,
-        created_by,
-        assigned_to,
-        project_id,
-        created_at,
-        updated_at,
-        projects!inner(id, name),
-        creator:users!created_by(id, name, email),
-        assignee:users!assigned_to(id, name, email),
-        statuses!tickets_status_id_fkey(id, name, color_code)
-      `)
-      .in('project_id', targetProjectIds)
-      .or(`assigned_to.eq.${userId},created_by.eq.${userId}`)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+    const memberTicketsData = await db.select({
+      id: tickets.id,
+      title: tickets.title,
+      description: tickets.description,
+      statusId: tickets.statusId,
+      priorityId: tickets.priorityId,
+      createdBy: tickets.createdBy,
+      assignedTo: tickets.assignedTo,
+      projectId: tickets.projectId,
+      createdAt: tickets.createdAt,
+      updatedAt: tickets.updatedAt,
+      projectsId: projects.id,
+      projectsName: projects.name,
+      creatorId: sql<string>`${usersTable.id}`.as('creator_id'),
+      creatorName: sql<string>`${usersTable.name}`.as('creator_name'),
+      creatorEmail: sql<string>`${usersTable.email}`.as('creator_email'),
+      assigneeId: sql<string>`assignee.id`.as('assignee_id'),
+      assigneeName: sql<string>`assignee.name`.as('assignee_name'),
+      assigneeEmail: sql<string>`assignee.email`.as('assignee_email'),
+      statusesId: statuses.id,
+      statusesName: statuses.name,
+      statusesColorCode: statuses.colorCode
+    })
+    .from(tickets)
+    .innerJoin(projects, eq(tickets.projectId, projects.id))
+    .leftJoin(usersTable, eq(tickets.createdBy, usersTable.id))
+    .leftJoin(sql`users as assignee`, sql`tickets.assigned_to = assignee.id`)
+    .leftJoin(statuses, eq(tickets.statusId, statuses.id))
+    .where(and(
+      inArray(tickets.projectId, targetProjectIds),
+      or(
+        eq(tickets.assignedTo, userId),
+        eq(tickets.createdBy, userId)
+      )
+    ))
+    .orderBy(desc(tickets.createdAt))
+    .limit(limit)
+    .offset(offset);
 
-    if (ticketsError) {
-      console.error('❌ MEMBER: Error fetching tickets:', ticketsError);
-      return NextResponse.json({ success: false, error: 'Failed to fetch tickets' }, { status: 500 });
-    }
+    const memberTickets = memberTicketsData.map((t: any) => ({
+      id: t.id,
+      title: t.title,
+      description: t.description,
+      status_id: t.statusId,
+      priority_id: t.priorityId,
+      created_by: t.createdBy,
+      assigned_to: t.assignedTo,
+      project_id: t.projectId,
+      created_at: t.createdAt?.toISOString(),
+      updated_at: t.updatedAt?.toISOString(),
+      projects: { id: t.projectsId, name: t.projectsName },
+      creator: { id: t.creatorId, name: t.creatorName, email: t.creatorEmail },
+      assignee: { id: t.assigneeId, name: t.assigneeName, email: t.assigneeEmail },
+      statuses: { id: t.statusesId, name: t.statusesName, color_code: t.statusesColorCode }
+    }));
 
     console.log('🔧 MEMBER: Retrieved tickets:', memberTickets?.length || 0);
 
     // Fetch priorities separately and attach to tickets
     if (memberTickets && memberTickets.length > 0) {
       // Try priorities table first, then fall back to statuses table with type='priority'
-      let { data: priorities } = await supabase
-        .from('priorities')
-        .select('id, name, color_code')
-        .eq('organization_id', organization_id);
+      let prioritiesData = await db.select({
+        id: priorities.id,
+        name: priorities.name,
+        colorCode: priorities.colorCode
+      })
+      .from(priorities)
+      .where(eq(priorities.organizationId, organization_id));
 
       // If no priorities found, try statuses table with type='priority'
-      if (!priorities || priorities.length === 0) {
-        const { data: priorityStatuses } = await supabase
-          .from('statuses')
-          .select('id, name, color_code')
-          .eq('type', 'priority')
-          .eq('organization_id', organization_id);
-        priorities = priorityStatuses;
+      if (!prioritiesData || prioritiesData.length === 0) {
+        const priorityStatuses = await db.select({
+          id: statuses.id,
+          name: statuses.name,
+          colorCode: statuses.colorCode
+        })
+        .from(statuses)
+        .where(and(
+          eq(statuses.type, 'priority'),
+          eq(statuses.organizationId, organization_id)
+        ));
+        prioritiesData = priorityStatuses;
       }
 
       // Attach priorities to tickets
-      if (priorities && priorities.length > 0) {
-        memberTickets.forEach(ticket => {
-          const priority = priorities.find(p => p.id === ticket.priority_id);
+      if (prioritiesData && prioritiesData.length > 0) {
+        memberTickets.forEach((ticket: any) => {
+          const priority = prioritiesData.find((p: any) => p.id === ticket.priority_id);
           if (priority) {
-            (ticket as any).priorities = priority;
+            (ticket as any).priorities = { id: priority.id, name: priority.name, color_code: priority.colorCode };
           }
         });
       }
     }
 
     // Get total count for pagination (tickets assigned to or created by user)
-    const { count: totalAccessibleTickets } = await supabase
-      .from('tickets')
-      .select('*', { count: 'exact', head: true })
-      .in('project_id', targetProjectIds)
-      .or(`assigned_to.eq.${userId},created_by.eq.${userId}`);
+    const totalAccessibleTicketsData = await db.select({ count: sql<number>`count(*)` })
+      .from(tickets)
+      .where(and(
+        inArray(tickets.projectId, targetProjectIds),
+        or(
+          eq(tickets.assignedTo, userId),
+          eq(tickets.createdBy, userId)
+        )
+      ));
+    const totalAccessibleTickets = totalAccessibleTicketsData[0]?.count || 0;
 
     // Get created tickets count
-    const { count: totalCreatedTickets } = await supabase
-      .from('tickets')
-      .select('*', { count: 'exact', head: true })
-      .in('project_id', targetProjectIds)
-      .eq('created_by', userId);
+    const totalCreatedTicketsData = await db.select({ count: sql<number>`count(*)` })
+      .from(tickets)
+      .where(and(
+        inArray(tickets.projectId, targetProjectIds),
+        eq(tickets.createdBy, userId)
+      ));
+    const totalCreatedTickets = totalCreatedTicketsData[0]?.count || 0;
 
     // Get in-progress tickets count (assuming status names like 'In Progress', 'Working', etc.)
-    const { data: inProgressStatuses } = await supabase
-      .from('statuses')
-      .select('id')
-      .ilike('name', '%progress%')
-      .eq('type', 'ticket');
+    const inProgressStatuses = await db.select({ id: statuses.id })
+      .from(statuses)
+      .where(and(
+        ilike(statuses.name, '%progress%'),
+        eq(statuses.type, 'ticket')
+      ));
 
-    const inProgressStatusIds = inProgressStatuses?.map(s => s.id) || [];
-    const { count: inProgressCount } = await supabase
-      .from('tickets')
-      .select('*', { count: 'exact', head: true })
-      .in('project_id', targetProjectIds)
-      .or(`assigned_to.eq.${userId},created_by.eq.${userId}`)
-      .in('status_id', inProgressStatusIds);
+    const inProgressStatusIds = inProgressStatuses?.map((s: any) => s.id) || [];
+    let inProgressCount = 0;
+    if (inProgressStatusIds.length > 0) {
+      const inProgressCountData = await db.select({ count: sql<number>`count(*)` })
+        .from(tickets)
+        .where(and(
+          inArray(tickets.projectId, targetProjectIds),
+          or(
+            eq(tickets.assignedTo, userId),
+            eq(tickets.createdBy, userId)
+          ),
+          inArray(tickets.statusId, inProgressStatusIds)
+        ));
+      inProgressCount = inProgressCountData[0]?.count || 0;
+    }
 
     // Get completed tickets count (assuming status names like 'Completed', 'Done', 'Closed')
-    const { data: completedStatuses } = await supabase
-      .from('statuses')
-      .select('id')
-      .or('name.ilike.%complete%,name.ilike.%done%,name.ilike.%closed%,name.ilike.%resolved%')
-      .eq('type', 'ticket');
+    const completedStatuses = await db.select({ id: statuses.id })
+      .from(statuses)
+      .where(and(
+        or(
+          ilike(statuses.name, '%complete%'),
+          ilike(statuses.name, '%done%'),
+          ilike(statuses.name, '%closed%'),
+          ilike(statuses.name, '%resolved%')
+        ),
+        eq(statuses.type, 'ticket')
+      ));
 
-    const completedStatusIds = completedStatuses?.map(s => s.id) || [];
-    const { count: completedCount } = await supabase
-      .from('tickets')
-      .select('*', { count: 'exact', head: true })
-      .in('project_id', targetProjectIds)
-      .or(`assigned_to.eq.${userId},created_by.eq.${userId}`)
-      .in('status_id', completedStatusIds);
+    const completedStatusIds = completedStatuses?.map((s: any) => s.id) || [];
+    let completedCount = 0;
+    if (completedStatusIds.length > 0) {
+      const completedCountData = await db.select({ count: sql<number>`count(*)` })
+        .from(tickets)
+        .where(and(
+          inArray(tickets.projectId, targetProjectIds),
+          or(
+            eq(tickets.assignedTo, userId),
+            eq(tickets.createdBy, userId)
+          ),
+          inArray(tickets.statusId, completedStatusIds)
+        ));
+      completedCount = completedCountData[0]?.count || 0;
+    }
 
     // Format tickets for dashboard display
     const recentActivity = (memberTickets || []).map((ticket: any) => ({

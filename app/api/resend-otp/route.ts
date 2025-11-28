@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, eq } from "@/lib/db-helper";
 import { OTPService } from "@/lib/otpService";
 
 export async function POST(req: Request) {
@@ -15,13 +16,17 @@ export async function POST(req: Request) {
     }
 
     // Get user
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, email")
-      .eq("email", email.toLowerCase())
-      .single();
+    const user = await db
+      .select({
+        id: users.id,
+        email: users.email
+      })
+      .from(users)
+      .where(eq(users.email, email.toLowerCase()))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (userError || !user) {
+    if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
@@ -30,50 +35,31 @@ export async function POST(req: Request) {
     const otpExpiresAt = OTPService.getExpiryTime();
 
     if (type === 'password-reset') {
-      // Handle password reset OTP differently
+      // Handle password reset OTP - store in users table
       try {
-        // Try to store in user_otps table first
-        const { error: otpError } = await supabase
-          .from("user_otps")
-          .upsert({
-            user_id: user.id,
+        await db
+          .update(users)
+          .set({
             otp: otp,
-            purpose: 'password_reset',
-            expires_at: otpExpiresAt.toISOString(),
-            created_at: new Date().toISOString()
-          });
-
-        if (otpError) {
-          // Fallback: store in users table
-          const { error: userUpdateError } = await supabase
-            .from("users")
-            .update({
-              reset_otp: otp,
-              reset_otp_expires: otpExpiresAt.toISOString(),
-              updated_at: new Date().toISOString()
-            })
-            .eq("id", user.id);
-
-          if (userUpdateError) {
-            console.error("Failed to store password reset OTP:", userUpdateError);
-            return NextResponse.json({ error: "Failed to generate new OTP" }, { status: 500 });
-          }
-        }
+            otpExpiresAt: otpExpiresAt,
+            updatedAt: new Date()
+          })
+          .where(eq(users.id, user.id));
       } catch (e) {
         console.error("Error storing password reset OTP:", e);
         return NextResponse.json({ error: "Failed to generate new OTP" }, { status: 500 });
       }
     } else {
       // Handle login/registration OTP
-      const { error: updateError } = await supabase
-        .from("users")
-        .update({
-          otp,
-          otp_expires_at: otpExpiresAt.toISOString()
-        })
-        .eq("id", user.id);
-
-      if (updateError) {
+      try {
+        await db
+          .update(users)
+          .set({
+            otp,
+            otpExpiresAt: otpExpiresAt
+          })
+          .where(eq(users.id, user.id));
+      } catch (updateError) {
         console.error("OTP update error:", updateError);
         return NextResponse.json({ error: "Failed to generate new OTP" }, { status: 500 });
       }

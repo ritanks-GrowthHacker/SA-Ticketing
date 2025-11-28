@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, users, eq, sql } from '@/lib/db-helper';
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,43 +15,32 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (!supabase) {
-      return NextResponse.json(
-        { error: 'Database configuration error' },
-        { status: 500 }
-      );
-    }
-
     // Get organization's departments count
-    const { data: orgData, error: orgError } = await supabase
-      .from('organizations')
-      .select('associated_departments')
-      .eq('id', orgId)
-      .single();
+    const orgResults = await db.select({
+      associatedDepartments: organizations.associatedDepartments
+    })
+      .from(organizations)
+      .where(eq(organizations.id, orgId))
+      .limit(1);
+    
+    const orgData = orgResults[0];
 
-    if (orgError || !orgData) {
+    if (!orgData) {
       return NextResponse.json(
         { error: 'Organization not found' },
         { status: 404 }
       );
     }
 
-    const departmentIds = orgData.associated_departments || [];
+    const departmentIds = orgData.associatedDepartments || [];
     const total_departments = departmentIds.length;
 
     // Get total employees count for this organization
-    const { count: total_employees, error: employeeCountError } = await supabase
-      .from('users')
-      .select('*', { count: 'exact', head: true })
-      .eq('organization_id', orgId);
-
-    if (employeeCountError) {
-      console.error('Error counting employees:', employeeCountError);
-      return NextResponse.json(
-        { error: 'Failed to count employees' },
-        { status: 500 }
-      );
-    }
+    const employeeCountResult = await db.select({ count: sql<number>`count(*)::int` })
+      .from(users)
+      .where(eq(users.organizationId, orgId));
+    
+    const total_employees = employeeCountResult[0]?.count || 0;
 
     // Return stats
     return NextResponse.json({

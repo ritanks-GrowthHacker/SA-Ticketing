@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, organizations, globalRoles, users, userOrganizationRoles, projects } from '@/lib/db-helper';
 
 export async function GET(req: Request) {
   try {
@@ -13,92 +14,55 @@ export async function GET(req: Request) {
 
     // Test organizations table and is_master column
     try {
-      const { data: orgs, error: orgError } = await supabase
-        .from("organizations")
-        .select("id, name, domain, is_master")
-        .limit(1);
+      const orgs = await db.select().from(organizations).limit(1);
 
-      if (orgError && orgError.message.includes("is_master does not exist")) {
+      results.organizations = {
+        status: "✅ OK",
+        details: `Found ${orgs?.length || 0} organizations`,
+        has_is_master: true
+      };
+    } catch (error: any) {
+      if (error?.message?.includes("is_master does not exist")) {
         results.organizations = {
           status: "⚠️ MISSING COLUMN",
           details: "is_master column missing",
           has_is_master: false
         };
-      } else if (orgError) {
-        results.organizations = { status: "❌ ERROR", details: orgError.message, has_is_master: false };
       } else {
-        results.organizations = {
-          status: "✅ OK",
-          details: `Found ${orgs?.length || 0} organizations`,
-          has_is_master: true
-        };
+        results.organizations = { status: "❌ ERROR", details: error?.message || "Table access failed", has_is_master: false };
       }
-    } catch (error) {
-      results.organizations = { status: "❌ ERROR", details: "Table access failed", has_is_master: false };
     }
 
     // Test roles table
     try {
-      const { data: roles, error: rolesError } = await supabase
-        .from("roles")
-        .select("id, name")
-        .limit(1);
-      
-      if (rolesError) {
-        results.roles = { status: "❌ ERROR", details: rolesError.message };
-      } else {
-        results.roles = { status: "✅ OK", details: `Found ${roles?.length || 0} roles` };
-      }
-    } catch (error) {
-      results.roles = { status: "❌ ERROR", details: "Table access failed" };
+      const roles = await db.select().from(globalRoles).limit(1);
+      results.roles = { status: "✅ OK", details: `Found ${roles?.length || 0} roles` };
+    } catch (error: any) {
+      results.roles = { status: "❌ ERROR", details: error?.message || "Table access failed" };
     }
 
     // Test users table
     try {
-      const { data: users, error: usersError } = await supabase
-        .from("users")
-        .select("id, name, email")
-        .limit(1);
-      
-      if (usersError) {
-        results.users = { status: "❌ ERROR", details: usersError.message };
-      } else {
-        results.users = { status: "✅ OK", details: `Found ${users?.length || 0} users` };
-      }
-    } catch (error) {
-      results.users = { status: "❌ ERROR", details: "Table access failed" };
+      const usersList = await db.select().from(users).limit(1);
+      results.users = { status: "✅ OK", details: `Found ${usersList?.length || 0} users` };
+    } catch (error: any) {
+      results.users = { status: "❌ ERROR", details: error?.message || "Table access failed" };
     }
 
     // Test user_organization junction table
     try {
-      const { data: userOrgs, error: userOrgError } = await supabase
-        .from("user_organization")
-        .select("user_id, organization_id, role_id")
-        .limit(1);
-      
-      if (userOrgError) {
-        results.user_organization = { status: "❌ ERROR", details: userOrgError.message };
-      } else {
-        results.user_organization = { status: "✅ OK", details: `Found ${userOrgs?.length || 0} user-org relationships` };
-      }
-    } catch (error) {
-      results.user_organization = { status: "❌ ERROR", details: "Table access failed" };
+      const userOrgs = await db.select().from(userOrganizationRoles).limit(1);
+      results.user_organization = { status: "✅ OK", details: `Found ${userOrgs?.length || 0} user-org relationships` };
+    } catch (error: any) {
+      results.user_organization = { status: "❌ ERROR", details: error?.message || "Table access failed" };
     }
 
     // Test projects table
     try {
-      const { data: projects, error: projectsError } = await supabase
-        .from("projects")
-        .select("id, name")
-        .limit(1);
-      
-      if (projectsError) {
-        results.projects = { status: "⚠️ MISSING TABLE", details: projectsError.message };
-      } else {
-        results.projects = { status: "✅ OK", details: `Found ${projects?.length || 0} projects` };
-      }
-    } catch (error) {
-      results.projects = { status: "❌ ERROR", details: "Table access failed" };
+      const projectsList = await db.select().from(projects).limit(1);
+      results.projects = { status: "✅ OK", details: `Found ${projectsList?.length || 0} projects` };
+    } catch (error: any) {
+      results.projects = { status: "❌ ERROR", details: error?.message || "Table access failed" };
     }
 
     // Determine overall status

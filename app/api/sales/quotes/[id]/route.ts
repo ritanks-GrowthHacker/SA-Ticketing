@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, quotes, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../../helpers';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -33,27 +33,31 @@ export async function PATCH(
       notes
     } = body;
 
-    const { data: quote, error } = await supabaseAdminSales
-      .from('quotes')
-      .update({
-        quote_title,
-        quote_amount,
-        tax_amount,
-        total_amount,
+    const quoteResult = await salesDb
+      .update(quotes)
+      .set({
+        quoteTitle: quote_title,
+        quoteAmount: quote_amount,
+        taxAmount: tax_amount,
+        totalAmount: total_amount,
         currency,
-        valid_until,
-        quote_items,
-        terms_conditions,
+        validUntil: valid_until ? new Date(valid_until) : null,
+        quoteItems: quote_items,
+        termsConditions: terms_conditions,
         notes,
-        updated_at: new Date().toISOString()
+        updatedAt: new Date()
       })
-      .eq('quote_id', id)
-      .eq('organization_id', organizationId)
-      .select()
-      .single();
+      .where(
+        and(
+          eq(quotes.quoteId, id),
+          eq(quotes.organizationId, organizationId)
+        )
+      )
+      .returning();
 
-    if (error) {
-      console.error('Error updating quote:', error);
+    const quote = quoteResult[0];
+    if (!quote) {
+      console.error('Error updating quote: not found');
       return NextResponse.json({ error: 'Failed to update quote' }, { status: 500 });
     }
 

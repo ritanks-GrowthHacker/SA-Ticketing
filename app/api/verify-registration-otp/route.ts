@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, globalRoles, userOrganizationRoles, organizations, eq } from "@/lib/db-helper";
 import { OTPService } from "@/lib/otpService";
 
 export async function POST(req: Request) {
@@ -12,24 +13,35 @@ export async function POST(req: Request) {
     }
 
     // Get user with OTP details
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, name, email, otp, otp_expires_at")
-      .eq("email", email)
-      .single();
+    const user = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        otp: users.otp,
+        otpExpiresAt: users.otpExpiresAt
+      })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (userError || !user) {
+    if (!user) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
+    if (!user.otp || !user.otpExpiresAt) {
+      return NextResponse.json({ error: "No OTP found for this user" }, { status: 400 });
+    }
+
     // Debug logging
-    const expiryDate = new Date(user.otp_expires_at + (user.otp_expires_at.includes('Z') ? '' : 'Z'));
+    const expiryDate = new Date(user.otpExpiresAt);
     const currentTime = new Date();
     
     console.log('Registration OTP Verification Debug:', {
       storedOTP: user.otp,
       providedOTP: otp,
-      expiryTimeRaw: user.otp_expires_at,
+      expiryTimeRaw: user.otpExpiresAt,
       expiryTimeParsed: expiryDate.toISOString(),
       currentTime: currentTime.toISOString(),
       isExpired: currentTime > expiryDate,
@@ -50,54 +62,62 @@ export async function POST(req: Request) {
     }
 
     // Clear OTP after verification
-    const { error: updateError } = await supabase
-      .from("users")
-      .update({
+    await db
+      .update(users)
+      .set({
         otp: null,
-        otp_expires_at: null
+        otpExpiresAt: null
       })
-      .eq("id", user.id);
-
-    if (updateError) {
-      return NextResponse.json({ error: "Failed to verify user" }, { status: 500 });
-    }
+      .where(eq(users.id, user.id));
 
     // Get organization from userData
     const { organization_id } = userData;
 
     // Get default Member role (global)
-    const { data: role } = await supabase
-      .from("global_roles")
-      .select("id, name")
-      .eq("name", "Member")
-      .maybeSingle();
+    const role = await db
+      .select({
+        id: globalRoles.id,
+        name: globalRoles.name
+      })
+      .from(globalRoles)
+      .where(eq(globalRoles.name, "Member"))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     // Create user-organization relationship with role
-    await supabase
-      .from("user_organization_roles")
-      .insert([{ 
-        user_id: user.id, 
-        organization_id, 
-        role_id: role?.id || null 
-      }]);
+    if (role?.id) {
+      await db
+        .insert(userOrganizationRoles)
+        .values({ 
+          userId: user.id, 
+          organizationId: organization_id, 
+          roleId: role.id
+        });
+    }
 
     // Get organization details for JWT token
-    const { data: organization } = await supabase
-      .from("organizations")
-      .select("id, name, domain")
-      .eq("id", organization_id)
-      .single();
+    const organization = await db
+      .select({
+        id: organizations.id,
+        name: organizations.name,
+        domain: organizations.domain
+      })
+      .from(organizations)
+      .where(eq(organizations.id, organization_id))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     // Get user roles for token
-    const { data: userOrgRoles } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        role_id,
-        global_roles!inner(name)
-      `)
-      .eq("user_id", user.id);
+    const userOrgRoles = await db
+      .select({
+        roleId: userOrganizationRoles.roleId,
+        roleName: globalRoles.name
+      })
+      .from(userOrganizationRoles)
+      .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(eq(userOrganizationRoles.userId, user.id));
 
-    const roleNames = userOrgRoles?.map((r: any) => r.global_roles.name) || [];
+    const roleNames = userOrgRoles?.map((r: any) => r.roleName) || [];
 
     // Generate JWT token
     const token = jwt.sign(

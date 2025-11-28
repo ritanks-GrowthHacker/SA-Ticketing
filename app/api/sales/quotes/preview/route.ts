@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, quotes, clients, eq, gt } from '@/lib/sales-db-helper';
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,42 +11,40 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch quote by magic link token
-    const { data: quote, error } = await supabaseAdminSales
-      .from('quotes')
-      .select(`
-        *,
-        clients (
-          client_name,
-          contact_person,
-          email,
-          phone,
-          address,
-          city,
-          state,
-          country
-        )
-      `)
-      .eq('magic_link_token', token)
-      .single();
+    const quoteResult = await salesDb
+      .select()
+      .from(quotes)
+      .where(eq(quotes.magicLinkToken, token))
+      .limit(1);
 
-    if (error || !quote) {
+    const quote = quoteResult[0];
+    if (!quote) {
       return NextResponse.json(
         { error: 'Quote not found or link is invalid' },
         { status: 404 }
       );
     }
 
+    // Fetch client info
+    const clientResult = await salesDb
+      .select()
+      .from(clients)
+      .where(eq(clients.clientId, quote.clientId))
+      .limit(1);
+    
+    const client = clientResult[0];
+
     // Check if link has expired
-    if (quote.magic_link_expires_at) {
-      const expiryDate = new Date(quote.magic_link_expires_at);
+    if (quote.magicLinkExpiresAt) {
+      const expiryDate = new Date(quote.magicLinkExpiresAt);
       const now = new Date();
       
       if (now > expiryDate && quote.status !== 'accepted') {
         // Update status to expired
-        await supabaseAdminSales
-          .from('quotes')
-          .update({ status: 'expired' })
-          .eq('quote_id', quote.quote_id);
+        await salesDb
+          .update(quotes)
+          .set({ status: 'expired' })
+          .where(eq(quotes.quoteId, quote.quoteId));
 
         return NextResponse.json(
           { error: 'This quote link has expired. Please contact the sender for a new link.' },
@@ -56,23 +54,21 @@ export async function GET(request: NextRequest) {
     }
 
     // Mark as viewed if not already (only if status is 'sent')
-    // Don't override hold, accepted, or rejected status
-    if (quote.status === 'sent' && !quote.viewed_at) {
-      await supabaseAdminSales
-        .from('quotes')
-        .update({ 
+    if (quote.status === 'sent' && !quote.viewedAt) {
+      await salesDb
+        .update(quotes)
+        .set({ 
           status: 'viewed',
-          viewed_at: new Date().toISOString()
+          viewedAt: new Date()
         })
-        .eq('quote_id', quote.quote_id);
+        .where(eq(quotes.quoteId, quote.quoteId));
       
       // Update local quote object
       quote.status = 'viewed';
-      quote.viewed_at = new Date().toISOString();
+      quote.viewedAt = new Date();
     }
 
     // TODO: Fetch organization details from main database
-    // For now, using placeholder data
     const organizationData = {
       organization_name: 'Your Company Name',
       organization_email: 'sales@yourcompany.com',
@@ -83,7 +79,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       quote: {
         ...quote,
-        client: quote.clients,
+        clients: client,
+        client,
         ...organizationData
       }
     });

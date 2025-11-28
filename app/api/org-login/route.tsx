@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, eq } from '@/lib/db-helper';
 import { OTPService } from '@/lib/otpService';
 
 interface LoginRequest {
@@ -24,13 +25,14 @@ export async function POST(req: NextRequest) {
     }
 
     // Find organization by username with password hash
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('*')
-      .eq('username', username)
-      .maybeSingle();
+    const orgResults = await db.select()
+      .from(organizations)
+      .where(eq(organizations.username, username))
+      .limit(1);
+    
+    const organization = orgResults[0] || null;
 
-    if (orgError || !organization) {
+    if (!organization) {
       return NextResponse.json(
         { error: 'Invalid username or password' },
         { status: 401 }
@@ -38,7 +40,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Check if organization is active
-    if (!organization.is_active) {
+    if (!organization.isActive) {
       return NextResponse.json(
         { error: 'Organization account is not active. Please contact support.' },
         { status: 401 }
@@ -46,7 +48,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Check if email is verified
-    if (!organization.otp_verified) {
+    if (!organization.otpVerified) {
       return NextResponse.json(
         { error: 'Please verify your organization email before logging in.' },
         { status: 401 }
@@ -54,7 +56,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Verify password
-    const passwordMatch = await bcrypt.compare(password, organization.password_hash);
+    const passwordMatch = await bcrypt.compare(password, organization.passwordHash || '');
     if (!passwordMatch) {
       return NextResponse.json(
         { error: 'Invalid username or password' },
@@ -77,7 +79,7 @@ export async function POST(req: NextRequest) {
       org_id: organization.id,
       org_name: organization.name,
       org_domain: organization.domain,
-      org_email: organization.org_email,
+      org_email: organization.orgEmail,
       username: organization.username,
       type: 'organization',
       iss: 'sa-ticketing-org',
@@ -92,20 +94,19 @@ export async function POST(req: NextRequest) {
     const otpExpiry = OTPService.getExpiryTime();
 
     // Update organization with OTP and last login timestamp
-    await supabase
-      .from('organizations')
-      .update({ 
+    await db.update(organizations)
+      .set({ 
         otp: otp,
-        otp_expires_at: otpExpiry.toISOString(),
-        updated_at: new Date().toISOString()
+        otpExpiresAt: otpExpiry,
+        updatedAt: new Date()
       })
-      .eq('id', organization.id);
+      .where(eq(organizations.id, organization.id));
 
     // Send OTP email to organization email
     try {
-      const emailSent = await OTPService.sendOTP(organization.org_email, otp, 'login');
+      const emailSent = await OTPService.sendOTP(organization.orgEmail || '', otp, 'login');
       if (!emailSent) {
-        console.error('Failed to send OTP email to organization:', organization.org_email);
+        console.error('Failed to send OTP email to organization:', organization.orgEmail);
       }
     } catch (emailError) {
       console.error('Error sending OTP email:', emailError);
@@ -121,10 +122,10 @@ export async function POST(req: NextRequest) {
         id: organization.id,
         name: organization.name,
         domain: organization.domain,
-        email: organization.org_email,
-        onboarding_completed: !!organization.onboarded_at, // true if onboarded_at is not null
-        has_departments: !!(organization.associated_departments && organization.associated_departments.length > 0),
-        created_at: organization.created_at
+        email: organization.orgEmail,
+        onboarding_completed: !!organization.onboardedAt, // true if onboarded_at is not null
+        has_departments: !!(organization.associatedDepartments && organization.associatedDepartments.length > 0),
+        created_at: organization.createdAt
       }
     }, { status: 200 });
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, departments, eq, inArray } from '@/lib/db-helper';
 import { OTPService } from '@/lib/otpService';
 
 interface OnboardingRequest {
@@ -63,13 +64,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Check if domain already exists
-    const { data: existingDomain } = await supabase
-      .from('organizations')
-      .select('id')
-      .eq('domain', domain)
-      .maybeSingle();
+    const existingDomainResults = await db.select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.domain, domain))
+      .limit(1);
 
-    if (existingDomain) {
+    if (existingDomainResults.length > 0) {
       return NextResponse.json(
         { error: 'An organization with this domain already exists' },
         { status: 409 }
@@ -77,13 +77,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Check if username already exists (now that column exists)
-    const { data: existingUsername } = await supabase
-      .from('organizations')
-      .select('id')
-      .eq('username', username)
-      .maybeSingle();
+    const existingUsernameResults = await db.select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.username, username))
+      .limit(1);
 
-    if (existingUsername) {
+    if (existingUsernameResults.length > 0) {
       return NextResponse.json(
         { error: 'This username is already taken' },
         { status: 409 }
@@ -91,13 +90,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Check if org email already exists
-    const { data: existingOrgEmail } = await supabase
-      .from('organizations')
-      .select('id')
-      .eq('org_email', orgEmail)
-      .maybeSingle();
+    const existingOrgEmailResults = await db.select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.orgEmail, orgEmail))
+      .limit(1);
 
-    if (existingOrgEmail) {
+    if (existingOrgEmailResults.length > 0) {
       return NextResponse.json(
         { error: 'An organization with this email already exists' },
         { status: 409 }
@@ -106,10 +104,9 @@ export async function POST(req: NextRequest) {
 
     // Validate selected departments if provided
     if (selectedDepartments.length > 0) {
-      const { data: validDepartments } = await supabase
-        .from('departments')
-        .select('id')
-        .in('id', selectedDepartments);
+      const validDepartments = await db.select({ id: departments.id })
+        .from(departments)
+        .where(inArray(departments.id, selectedDepartments));
       
       if (!validDepartments || validDepartments.length !== selectedDepartments.length) {
         return NextResponse.json(
@@ -134,32 +131,30 @@ export async function POST(req: NextRequest) {
     });
 
     // Create the organization with all required fields
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .insert([
-        {
+    let organization;
+    try {
+      const newOrgs = await db.insert(organizations)
+        .values({
           name: organizationName,
           domain: domain,
           username: username,
-          password_hash: passwordHash,
-          org_email: orgEmail,
-          mobile_number: mobileNumber || null,
+          passwordHash: passwordHash,
+          orgEmail: orgEmail,
+          mobileNumber: mobileNumber || null,
           otp: emailOtp,
-          otp_expires_at: otpExpiresAt.toISOString(),
-          otp_verified: false,
-          mobile_verified: false,
-          is_active: false,
-          associated_departments: selectedDepartments
-        }
-      ])
-      .select()
-      .single();
-
-    if (orgError) {
+          otpExpiresAt: otpExpiresAt,
+          otpVerified: false,
+          mobileVerified: false,
+          isActive: false,
+          associatedDepartments: selectedDepartments || []
+        })
+        .returning();
+      
+      organization = newOrgs[0];
+    } catch (orgError) {
       console.error('🔴 Organization creation error:', orgError);
-      console.error('🔴 Error details:', JSON.stringify(orgError, null, 2));
       return NextResponse.json(
-        { error: 'Failed to create organization. Database error: ' + orgError.message },
+        { error: 'Failed to create organization. Database error: ' + (orgError as Error).message },
         { status: 500 }
       );
     }
@@ -169,7 +164,7 @@ export async function POST(req: NextRequest) {
     
     if (!emailSent) {
       // Clean up organization if email fails
-      await supabase.from('organizations').delete().eq('id', organization.id);
+      await db.delete(organizations).where(eq(organizations.id, organization.id));
       return NextResponse.json({ 
         error: 'Failed to send verification email. Please try again.' 
       }, { status: 500 });

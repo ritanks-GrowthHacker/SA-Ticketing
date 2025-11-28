@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, eq } from '@/lib/db-helper';
 import { pendingRegistrations } from '../org-onboarding-new/route';
 
 interface VerifyOTPRequest {
@@ -59,26 +60,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Double-check that username and email are still available (race condition protection)
-    const { data: existingUsername } = await supabase
-      .from('organizations')
-      .select('username')
-      .eq('username', pendingReg.username)
-      .single();
+    const existingUsernameResults = await db.select({ username: organizations.username })
+      .from(organizations)
+      .where(eq(organizations.username, pendingReg.username))
+      .limit(1);
 
-    if (existingUsername) {
+    if (existingUsernameResults.length > 0) {
       pendingRegistrations.delete(registrationId);
       return NextResponse.json({ 
         error: 'Username was taken by another registration. Please start again with a different username.' 
       }, { status: 409 });
     }
 
-    const { data: existingEmail } = await supabase
-      .from('organizations')
-      .select('org_email')
-      .eq('org_email', pendingReg.orgEmail)
-      .single();
+    const existingEmailResults = await db.select({ orgEmail: organizations.orgEmail })
+      .from(organizations)
+      .where(eq(organizations.orgEmail, pendingReg.orgEmail))
+      .limit(1);
 
-    if (existingEmail) {
+    if (existingEmailResults.length > 0) {
       pendingRegistrations.delete(registrationId);
       return NextResponse.json({ 
         error: 'Email was taken by another registration. Please start again with a different email.' 
@@ -86,29 +85,31 @@ export async function POST(request: NextRequest) {
     }
 
     // Create the organization record
-    const { data: organization, error: createError } = await supabase
-      .from('organizations')
-      .insert({
-        name: pendingReg.organizationName,
-        domain: pendingReg.domain,
-        username: pendingReg.username,
-        password_hash: pendingReg.passwordHash,
-        org_email: pendingReg.orgEmail,
-        mobile_number: pendingReg.mobileNumber,
-        associated_departments: pendingReg.selectedDepartments,
-        logo_url: pendingReg.logoUrl,
-        address: pendingReg.address,
-        tax_percentage: pendingReg.taxPercentage,
-        gst_number: pendingReg.gstNumber,
-        cin: pendingReg.cin,
-        otp_verified: true,  // Already verified
-        is_active: true,     // Activate immediately
-        onboarded_at: new Date().toISOString()
-      })
-      .select('id, name, username, org_email')
-      .single();
-
-    if (createError) {
+    let organization;
+    try {
+      const currentTime = new Date();
+      const newOrgs = await db.insert(organizations)
+        .values({
+          name: pendingReg.organizationName,
+          domain: pendingReg.domain,
+          username: pendingReg.username,
+          passwordHash: pendingReg.passwordHash,
+          orgEmail: pendingReg.orgEmail,
+          mobileNumber: pendingReg.mobileNumber || null,
+          associatedDepartments: pendingReg.selectedDepartments,
+          logoUrl: pendingReg.logoUrl || null,
+          address: pendingReg.address || null,
+          taxPercentage: pendingReg.taxPercentage || '0.00',
+          gstNumber: pendingReg.gstNumber || null,
+          cin: pendingReg.cin || null,
+          otpVerified: true,  // Already verified
+          isActive: true,     // Activate immediately
+          onboardedAt: currentTime
+        })
+        .returning({ id: organizations.id, name: organizations.name, username: organizations.username, orgEmail: organizations.orgEmail });
+      
+      organization = newOrgs[0];
+    } catch (createError) {
       console.error('Error creating organization:', createError);
       return NextResponse.json(
         { error: 'Failed to create organization. Please try again.' },
@@ -126,7 +127,7 @@ export async function POST(request: NextRequest) {
         id: organization.id,
         name: organization.name,
         username: organization.username,
-        org_email: organization.org_email
+        org_email: organization.orgEmail
       },
       verified: true
     }, { status: 201 });

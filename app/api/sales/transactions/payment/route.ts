@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, transactions, clients, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../../helpers';
 import { createSalesNotification } from '@/lib/salesNotifications';
 
@@ -18,96 +18,147 @@ export async function PATCH(request: NextRequest) {
     const { userId, organizationId } = extractUserAndOrgId(decoded);
 
     const body = await request.json();
-    const {
-      transaction_id,
-      amount_paid,
-      payment_method,
-      payment_reference,
-      payment_date
-    } = body;
+    
+    // Accept both camelCase and snake_case
+    const transactionId = body.transactionId || body.transaction_id;
+    const rawAmountPaid = body.amountPaid || body.amount_paid;
+    const paymentMethod = body.paymentMethod || body.payment_method;
+    const paymentReference = body.paymentReference || body.payment_reference;
+    const paymentDate = body.paymentDate || body.payment_date;
 
-    if (!transaction_id || amount_paid === undefined) {
+    // Convert amount_paid to number and validate
+    const amount_paid = parseFloat(rawAmountPaid);
+    
+    if (!transactionId || !rawAmountPaid || isNaN(amount_paid) || amount_paid <= 0) {
       return NextResponse.json(
-        { error: 'transaction_id and amount_paid are required' },
+        { error: 'transaction_id and valid amount_paid are required' },
         { status: 400 }
       );
     }
 
-    // Fetch current transaction with client and sales member info
-    const { data: currentTxn, error: fetchError } = await supabaseAdminSales
-      .from('transactions')
-      .select('*, clients(client_name), invoice_number, sales_member_id')
-      .eq('transaction_id', transaction_id)
-      .eq('organization_id', organizationId)
-      .single();
+    console.log('🔍 Looking for transaction:', {
+      transactionId,
+      organizationId,
+      amount_paid
+    });
 
-    if (fetchError) {
-      return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
+    // Fetch current transaction with Drizzle
+    const txnResults = await salesDb
+      .select({
+        transactionId: transactions.transactionId,
+        organizationId: transactions.organizationId,
+        totalAmount: transactions.totalAmount,
+        amountPaid: transactions.amountPaid,
+        amountDue: transactions.amountDue,
+        paymentStatus: transactions.paymentStatus,
+        invoiceNumber: transactions.invoiceNumber,
+        salesMemberId: transactions.salesMemberId,
+        clientId: transactions.clientId,
+        clientName: clients.clientName
+      })
+      .from(transactions)
+      .leftJoin(clients, eq(transactions.clientId, clients.clientId))
+      .where(
+        and(
+          eq(transactions.transactionId, transactionId),
+          eq(transactions.organizationId, organizationId)
+        )
+      )
+      .limit(1);
+
+    if (!txnResults || txnResults.length === 0) {
+      console.error('❌ Transaction not found');
+      
+      // Debug query without org filter
+      const debugResults = await salesDb
+        .select({
+          transactionId: transactions.transactionId,
+          organizationId: transactions.organizationId
+        })
+        .from(transactions)
+        .where(eq(transactions.transactionId, transactionId));
+      
+      console.log('Debug - Transaction with matching ID:', debugResults);
+      
+      return NextResponse.json({ 
+        error: 'Transaction not found',
+        debug: debugResults,
+        searchedOrgId: organizationId
+      }, { status: 404 });
     }
 
+    const currentTxn = txnResults[0];
+
+    console.log('✅ Transaction found:', currentTxn);
+
     // Calculate new amounts
-    const newAmountPaid = (currentTxn.amount_paid || 0) + amount_paid;
-    const newAmountDue = currentTxn.total_amount - newAmountPaid;
+    const newAmountPaid = (parseFloat(currentTxn.amountPaid || '0')) + amount_paid;
+    const newAmountDue = parseFloat(currentTxn.totalAmount) - newAmountPaid;
 
     // Determine new payment status
-    let newStatus = 'pending';
-    if (newAmountPaid >= currentTxn.total_amount) {
+    let newStatus: 'pending' | 'partial' | 'paid' = 'pending';
+    if (newAmountPaid >= parseFloat(currentTxn.totalAmount)) {
       newStatus = 'paid';
     } else if (newAmountPaid > 0) {
       newStatus = 'partial';
     }
 
-    // Update transaction
-    const { data: updatedTxn, error: updateError } = await supabaseAdminSales
-      .from('transactions')
-      .update({
-        amount_paid: newAmountPaid,
-        amount_due: newAmountDue,
-        payment_status: newStatus,
-        payment_method,
-        payment_reference,
-        payment_date,
-        updated_at: new Date().toISOString()
+    // Update transaction with Drizzle
+    const updatedTxn = await salesDb
+      .update(transactions)
+      .set({
+        amountPaid: newAmountPaid.toString(),
+        amountDue: newAmountDue.toString(),
+        paymentStatus: newStatus,
+        paymentMethod,
+        paymentReference,
+        paymentDate: paymentDate || new Date().toISOString().split('T')[0],
+        updatedAt: new Date()
       })
-      .eq('transaction_id', transaction_id)
-      .eq('organization_id', organizationId)
-      .select()
-      .single();
+      .where(
+        and(
+          eq(transactions.transactionId, transactionId),
+          eq(transactions.organizationId, organizationId)
+        )
+      )
+      .returning();
 
-    if (updateError) {
-      console.error('Error updating transaction:', updateError);
+    
+
+    if (!updatedTxn || updatedTxn.length === 0) {
+      console.error('Error updating transaction');
       return NextResponse.json({ error: 'Failed to update transaction' }, { status: 500 });
     }
 
     // Send notification to sales member who created the transaction
     try {
-      const clientName = (currentTxn as any).clients?.client_name || 'Client';
-      const notificationUserId = currentTxn.sales_member_id || userId;
+      const clientName = currentTxn.clientName || 'Client';
+      const notificationUserId = currentTxn.salesMemberId || userId;
       
       console.log('🔔 Creating payment notification for:', {
         userId: notificationUserId,
         organizationId,
         entityType: 'payment',
-        entityId: transaction_id
+        entityId: transactionId
       });
       
       const notificationResult = await createSalesNotification({
         userId: notificationUserId,
         organizationId,
         entityType: 'payment',
-        entityId: transaction_id,
+        entityId: transactionId,
         title: '💰 Payment Received!',
-        message: `Payment of ₹${amount_paid.toLocaleString('en-IN')} received for Invoice ${currentTxn.invoice_number} from ${clientName}. Status: ${newStatus}`,
+        message: `Payment of ₹${amount_paid.toLocaleString('en-IN')} received for Invoice ${currentTxn.invoiceNumber} from ${clientName}. Status: ${newStatus}`,
         type: 'payment_received',
         metadata: {
-          invoice_number: currentTxn.invoice_number,
-          client_name: clientName,
-          amount_paid,
-          payment_method,
-          payment_reference,
-          payment_status: newStatus,
-          total_amount: currentTxn.total_amount,
-          amount_due: newAmountDue
+          invoiceNumber: currentTxn.invoiceNumber,
+          clientName: clientName,
+          amountPaid: amount_paid,
+          paymentMethod,
+          paymentReference,
+          paymentStatus: newStatus,
+          totalAmount: currentTxn.totalAmount,
+          amountDue: newAmountDue.toString()
         }
       });
       console.log('✅ Payment notification sent');
@@ -117,7 +168,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({
       message: 'Payment recorded successfully',
-      transaction: updatedTxn
+      transaction: updatedTxn[0]
     });
   } catch (error) {
     console.error('Error in PATCH /api/sales/transactions/payment:', error);

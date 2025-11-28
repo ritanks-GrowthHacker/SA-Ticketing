@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '../../db/connections';
+// import { supabase } from '../../db/connections';
+import { db, projects, users, userOrganizationRoles, userDepartmentRoles, statuses, priorities, tickets, activityLogs, notifications, globalRoles, projectDepartment, sharedProjects, userProject, eq, and, or, isNull, desc } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 import { emailService } from '../../../lib/emailService';
 
@@ -96,13 +97,17 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify project exists and belongs to user's organization
-    const { data: project, error: projectError } = await supabase
-      .from('projects')
-      .select('id, name, organization_id')
-      .eq('id', project_id)
-      .single();
+    const project = await db.select({
+      id: projects.id,
+      name: projects.name,
+      organizationId: projects.organizationId
+    })
+      .from(projects)
+      .where(eq(projects.id, project_id))
+      .limit(1)
+      .then(rows => rows[0]);
 
-    if (projectError || !project) {
+    if (!project) {
       return NextResponse.json(
         { error: 'Project not found' },
         { status: 404 }
@@ -110,7 +115,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if project belongs to user's organization
-    if (project.organization_id !== decoded.org_id) {
+    if (project.organizationId !== decoded.org_id) {
       return NextResponse.json(
         { error: 'Project does not belong to your organization' },
         { status: 403 }
@@ -131,16 +136,23 @@ export async function POST(request: NextRequest) {
       console.log('🔧 Validating assignee:', assigned_to, 'in organization:', decoded.org_id);
       
       // First check if user exists in the organization's users table
-      const { data: userExists, error: userError } = await supabase
-        .from('users')
-        .select('id, name, email, organization_id, department_id')
-        .eq('id', assigned_to)
-        .eq('organization_id', decoded.org_id)
-        .maybeSingle();
+      const userExists = await db.select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        organizationId: users.organizationId,
+        departmentId: users.departmentId
+      })
+        .from(users)
+        .where(and(
+          eq(users.id, assigned_to),
+          eq(users.organizationId, decoded.org_id)
+        ))
+        .limit(1)
+        .then(rows => rows[0]);
 
       console.log('🔧 User existence check:', { 
-        userExists: !!userExists, 
-        userError,
+        userExists: !!userExists,
         userData: userExists 
       });
 
@@ -152,19 +164,30 @@ export async function POST(request: NextRequest) {
       }
 
       // Check if user has any role (org-level or dept-level)
-      const { data: orgRole } = await supabase
-        .from('user_organization_roles')
-        .select('user_id, organization_id')
-        .eq('user_id', assigned_to)
-        .eq('organization_id', decoded.org_id)
-        .maybeSingle();
+      const orgRole = await db.select({
+        userId: userOrganizationRoles.userId,
+        organizationId: userOrganizationRoles.organizationId
+      })
+        .from(userOrganizationRoles)
+        .where(and(
+          eq(userOrganizationRoles.userId, assigned_to),
+          eq(userOrganizationRoles.organizationId, decoded.org_id)
+        ))
+        .limit(1)
+        .then(rows => rows[0]);
 
-      const { data: deptRole } = await supabase
-        .from('user_department_roles')
-        .select('user_id, organization_id, department_id')
-        .eq('user_id', assigned_to)
-        .eq('organization_id', decoded.org_id)
-        .maybeSingle();
+      const deptRole = await db.select({
+        userId: userDepartmentRoles.userId,
+        organizationId: userDepartmentRoles.organizationId,
+        departmentId: userDepartmentRoles.departmentId
+      })
+        .from(userDepartmentRoles)
+        .where(and(
+          eq(userDepartmentRoles.userId, assigned_to),
+          eq(userDepartmentRoles.organizationId, decoded.org_id)
+        ))
+        .limit(1)
+        .then(rows => rows[0]);
 
       console.log('🔧 Role validation result:', { 
         hasOrgRole: !!orgRole, 
@@ -198,19 +221,28 @@ export async function POST(request: NextRequest) {
     // Validate status_id if provided
     if (status_id) {
       console.log('🔧 Validating status_id:', status_id);
-      const { data: status, error: statusError } = await supabase
-        .from('statuses')
-        .select('id, name, type')
-        .eq('id', status_id)
-        .or(`organization_id.eq.${decoded.org_id},organization_id.is.null`)
-        .eq('type', 'ticket')
-        .eq('is_active', true)
-        .maybeSingle();
+      const status = await db.select({
+        id: statuses.id,
+        name: statuses.name,
+        type: statuses.type
+      })
+        .from(statuses)
+        .where(and(
+          eq(statuses.id, status_id),
+          or(
+            eq(statuses.organizationId, decoded.org_id),
+            isNull(statuses.organizationId)
+          ),
+          eq(statuses.type, 'ticket'),
+          eq(statuses.isActive, true)
+        ))
+        .limit(1)
+        .then(rows => rows[0]);
 
-      console.log('🔧 Status validation result:', { status, statusError });
+      console.log('🔧 Status validation result:', { status });
 
-      if (statusError || !status) {
-        console.log('❌ Invalid status_id:', statusError?.message || 'Status not found');
+      if (!status) {
+        console.log('❌ Invalid status_id:', 'Status not found');
         return NextResponse.json(
           { error: 'Invalid status_id for ticket' },
           { status: 400 }
@@ -223,26 +255,47 @@ export async function POST(request: NextRequest) {
       console.log('🔧 Validating priority_id:', priority_id);
 
       // First try the new `statuses` table where type='priority' (supports global NULL org_id)
-      const { data: priorityStatus } = await supabase
-        .from('statuses')
-        .select('id, name, type')
-        .eq('id', priority_id)
-        .or(`organization_id.eq.${decoded.org_id},organization_id.is.null`)
-        .eq('type', 'priority')
-        .eq('is_active', true)
-        .maybeSingle();
+      const priorityStatus = await db.select({
+        id: statuses.id,
+        name: statuses.name,
+        type: statuses.type
+      })
+        .from(statuses)
+        .where(and(
+          eq(statuses.id, priority_id),
+          or(
+            eq(statuses.organizationId, decoded.org_id),
+            isNull(statuses.organizationId)
+          ),
+          eq(statuses.type, 'priority'),
+          eq(statuses.isActive, true)
+        ))
+        .limit(1)
+        .then(rows => rows[0]);
 
       if (priorityStatus) {
         console.log('🔧 Priority found in `statuses` table:', priorityStatus);
       } else {
         // Backwards-compatible: check legacy `priorities` table
-        const { data: priorityRow } = await supabase
-          .from('priorities')
-          .select('id, name, description, color_code, sort_order, is_active')
-          .eq('id', priority_id)
-          .or(`organization_id.eq.${decoded.org_id},organization_id.is.null`)
-          .eq('is_active', true)
-          .maybeSingle();
+        const priorityRow = await db.select({
+          id: priorities.id,
+          name: priorities.name,
+          description: priorities.description,
+          colorCode: priorities.colorCode,
+          sortOrder: priorities.sortOrder,
+          isActive: priorities.isActive
+        })
+          .from(priorities)
+          .where(and(
+            eq(priorities.id, priority_id),
+            or(
+              eq(priorities.organizationId, decoded.org_id),
+              isNull(priorities.organizationId)
+            ),
+            eq(priorities.isActive, true)
+          ))
+          .limit(1)
+          .then(rows => rows[0]);
 
         console.log('🔧 Priority lookup in `priorities` table result:', priorityRow);
 
@@ -259,56 +312,43 @@ export async function POST(request: NextRequest) {
     // Get default status if not provided
     let finalStatusId = status_id;
     if (!finalStatusId) {
-      const { data: defaultStatus } = await supabase
-        .from('statuses')
-        .select('id')
-        .or(`organization_id.eq.${decoded.org_id},organization_id.is.null`)
-        .eq('type', 'ticket')
-        .eq('is_active', true)
-        .order('sort_order', { ascending: true })
+      const defaultStatus = await db.select({
+        id: statuses.id
+      })
+        .from(statuses)
+        .where(and(
+          or(
+            eq(statuses.organizationId, decoded.org_id),
+            isNull(statuses.organizationId)
+          ),
+          eq(statuses.type, 'ticket'),
+          eq(statuses.isActive, true)
+        ))
+        .orderBy(statuses.sortOrder)
         .limit(1)
-        .maybeSingle();
+        .then(rows => rows[0]);
 
       finalStatusId = defaultStatus?.id;
     }
 
     // Create the ticket
-    const { data: newTicket, error: createError } = await supabase
-      .from('tickets')
-      .insert({
-        project_id,
-        created_by: decoded.sub,
-        assigned_to: assigned_to || null,
+    const newTicket = await db.insert(tickets)
+      .values({
+        projectId: project_id,
+        createdBy: decoded.sub,
+        assignedTo: assigned_to || null,
         title: title.trim(),
         description: description?.trim() || null,
-        status_id: finalStatusId,
-        priority_id: priority_id || null,
-        expected_closing_date: expected_closing_date || null,
-        updated_by: decoded.sub
+        statusId: finalStatusId,
+        priorityId: priority_id || null,
+        expectedClosingDate: expected_closing_date ? new Date(expected_closing_date) : null,
+        updatedBy: decoded.sub
       })
-      .select(`
-        id,
-        project_id,
-        created_by,
-        assigned_to,
-        title,
-        description,
-        status_id,
-        priority_id,
-        expected_closing_date,
-        actual_closing_date,
-        created_at,
-        updated_at,
-        projects!inner(id, name),
-        creator:users!tickets_created_by_fkey(id, name, email),
-        assignee:users!tickets_assigned_to_fkey(id, name, email),
-        status:statuses!tickets_status_id_fkey(id, name, type, color_code),
-        priority:priorities!tickets_priority_id_fkey(id, name, description, color_code)
-      `)
-      .single();
+      .returning()
+      .then(rows => rows[0]);
 
-    if (createError) {
-      console.error('Error creating ticket:', createError);
+    if (!newTicket) {
+      console.error('Error creating ticket');
       return NextResponse.json(
         { error: 'Failed to create ticket' },
         { status: 500 }
@@ -316,30 +356,29 @@ export async function POST(request: NextRequest) {
     }
 
     // Log activity
-    await supabase
-      .from('activity_logs')
-      .insert({
-        user_id: decoded.sub,
-        entity_type: 'ticket',
-        entity_id: newTicket.id,
+    await db.insert(activityLogs)
+      .values({
+        userId: decoded.sub,
+        entityType: 'ticket',
+        entityId: newTicket.id,
         action: 'created',
         details: {
           ticket_title: title,
           project_name: project.name,
           assigned_to: assigned_to || null
         }
-      });
+      })
+      .catch(err => console.error('Activity log error:', err));
 
     // Send notifications (email + in-app) if ticket is assigned to someone other than creator
     if (assigned_to && assigned_to !== decoded.sub) {
       try {
         // Create in-app notification
-        await supabase
-          .from('notifications')
-          .insert({
-            user_id: assigned_to,
-            entity_type: 'ticket',
-            entity_id: newTicket.id,
+        await db.insert(notifications)
+          .values({
+            userId: assigned_to,
+            entityType: 'ticket',
+            entityId: newTicket.id,
             title: 'New Ticket Assigned',
             message: `You have been assigned to ticket "${title}" in project "${project.name}"`,
             type: 'info'
@@ -381,34 +420,43 @@ async function checkAssignmentPermission(
   console.log('🔧 Checking assignment permission:', { creatorId, assigneeId, projectId, orgId });
 
   // Get creator's role and department
-  const { data: creatorData } = await supabase
-    .from('users')
-    .select('department_id, organization_id')
-    .eq('id', creatorId)
-    .maybeSingle();
+  const creatorData = await db.select({
+    departmentId: users.departmentId,
+    organizationId: users.organizationId
+  })
+    .from(users)
+    .where(eq(users.id, creatorId))
+    .limit(1)
+    .then(rows => rows[0]);
 
-  const { data: creatorOrgRole } = await supabase
-    .from('user_organization_roles')
-    .select(`
-      role_id,
-      global_roles!user_organization_roles_role_id_fkey(name)
-    `)
-    .eq('user_id', creatorId)
-    .eq('organization_id', orgId)
-    .maybeSingle();
+  const creatorOrgRole = await db.select({
+    roleId: userOrganizationRoles.roleId,
+    roleName: globalRoles.name
+  })
+    .from(userOrganizationRoles)
+    .innerJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+    .where(and(
+      eq(userOrganizationRoles.userId, creatorId),
+      eq(userOrganizationRoles.organizationId, orgId)
+    ))
+    .limit(1)
+    .then(rows => rows[0]);
 
-  const { data: creatorDeptRole } = await supabase
-    .from('user_department_roles')
-    .select(`
-      role_id,
-      global_roles!user_department_roles_role_id_fkey(name)
-    `)
-    .eq('user_id', creatorId)
-    .eq('organization_id', orgId)
-    .maybeSingle();
+  const creatorDeptRole = await db.select({
+    roleId: userDepartmentRoles.roleId,
+    roleName: globalRoles.name
+  })
+    .from(userDepartmentRoles)
+    .innerJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+    .where(and(
+      eq(userDepartmentRoles.userId, creatorId),
+      eq(userDepartmentRoles.organizationId, orgId)
+    ))
+    .limit(1)
+    .then(rows => rows[0]);
 
-  const creatorRole = (creatorOrgRole?.global_roles as any)?.name || (creatorDeptRole?.global_roles as any)?.name || 'User';
-  console.log('🔧 Creator role:', creatorRole, 'department:', creatorData?.department_id);
+  const creatorRole = creatorOrgRole?.roleName || creatorDeptRole?.roleName || 'User';
+  console.log('🔧 Creator role:', creatorRole, 'department:', creatorData?.departmentId);
 
   // Org Admins can assign to anyone in the organization
   if (creatorRole === 'Admin') {
@@ -417,36 +465,44 @@ async function checkAssignmentPermission(
   }
 
   // Get assignee's organization and department
-  const { data: assigneeData } = await supabase
-    .from('users')
-    .select('department_id, organization_id')
-    .eq('id', assigneeId)
-    .maybeSingle();
+  const assigneeData = await db.select({
+    departmentId: users.departmentId,
+    organizationId: users.organizationId
+  })
+    .from(users)
+    .where(eq(users.id, assigneeId))
+    .limit(1)
+    .then(rows => rows[0]);
 
-  console.log('🔧 Assignee department:', assigneeData?.department_id);
+  console.log('🔧 Assignee department:', assigneeData?.departmentId);
 
   // If both users are in the same organization, allow assignment
-  if (creatorData?.organization_id === assigneeData?.organization_id) {
+  if (creatorData?.organizationId === assigneeData?.organizationId) {
     console.log('✅ Same organization - can assign');
     return true;
   }
 
   // Check if users are in the same department
-  if (creatorData?.department_id && assigneeData?.department_id) {
-    if (creatorData.department_id === assigneeData.department_id) {
+  if (creatorData?.departmentId && assigneeData?.departmentId) {
+    if (creatorData.departmentId === assigneeData.departmentId) {
       console.log('✅ Same department - can assign');
       return true;
     }
   }
 
   // Check if the project is shared with assignee's department
-  if (assigneeData?.department_id) {
-    const { data: sharedProject } = await supabase
-      .from('shared_projects')
-      .select('project_id, department_id')
-      .eq('project_id', projectId)
-      .eq('department_id', assigneeData.department_id)
-      .maybeSingle();
+  if (assigneeData?.departmentId) {
+    const sharedProject = await db.select({
+      projectId: sharedProjects.projectId,
+      departmentId: sharedProjects.departmentId
+    })
+      .from(sharedProjects)
+      .where(and(
+        eq(sharedProjects.projectId, projectId),
+        eq(sharedProjects.departmentId, assigneeData.departmentId)
+      ))
+      .limit(1)
+      .then(rows => rows[0]);
 
     if (sharedProject) {
       console.log('✅ Project shared with assignee department - can assign');
@@ -455,12 +511,16 @@ async function checkAssignmentPermission(
   }
 
   // Check if assignee has direct access to the project via user_project
-  const { data: assigneeProjectAccess } = await supabase
-    .from('user_project')
-    .select('user_id')
-    .eq('user_id', assigneeId)
-    .eq('project_id', projectId)
-    .maybeSingle();
+  const assigneeProjectAccess = await db.select({
+    userId: userProject.userId
+  })
+    .from(userProject)
+    .where(and(
+      eq(userProject.userId, assigneeId),
+      eq(userProject.projectId, projectId)
+    ))
+    .limit(1)
+    .then(rows => rows[0]);
 
   if (assigneeProjectAccess) {
     console.log('✅ Assignee has direct project access - can assign');
@@ -476,31 +536,37 @@ async function checkUserProjectPermission(userId: string, projectId: string, use
   console.log('🔧 Checking user project permission:', { userId, projectId, userRole, orgId });
 
   // Get user's organization role and department
-  const { data: userOrgRole } = await supabase
-    .from('user_organization_roles')
-    .select(`
-      role_id,
-      global_roles!user_organization_roles_role_id_fkey(name)
-    `)
-    .eq('user_id', userId)
-    .eq('organization_id', orgId)
-    .maybeSingle();
+  const userOrgRole = await db.select({
+    roleId: userOrganizationRoles.roleId,
+    roleName: globalRoles.name
+  })
+    .from(userOrganizationRoles)
+    .innerJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+    .where(and(
+      eq(userOrganizationRoles.userId, userId),
+      eq(userOrganizationRoles.organizationId, orgId)
+    ))
+    .limit(1)
+    .then(rows => rows[0]);
 
-  const { data: userDeptRole } = await supabase
-    .from('user_department_roles')
-    .select(`
-      role_id,
-      global_roles!user_department_roles_role_id_fkey(name)
-    `)
-    .eq('user_id', userId)
-    .eq('organization_id', orgId)
-    .maybeSingle();
+  const userDeptRole = await db.select({
+    roleId: userDepartmentRoles.roleId,
+    roleName: globalRoles.name
+  })
+    .from(userDepartmentRoles)
+    .innerJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+    .where(and(
+      eq(userDepartmentRoles.userId, userId),
+      eq(userDepartmentRoles.organizationId, orgId)
+    ))
+    .limit(1)
+    .then(rows => rows[0]);
 
   let actualUserRole = userRole; // fallback to JWT role
-  if (userOrgRole && userOrgRole.global_roles) {
-    actualUserRole = (userOrgRole.global_roles as any).name;
-  } else if (userDeptRole && userDeptRole.global_roles) {
-    actualUserRole = (userDeptRole.global_roles as any).name;
+  if (userOrgRole && userOrgRole.roleName) {
+    actualUserRole = userOrgRole.roleName;
+  } else if (userDeptRole && userDeptRole.roleName) {
+    actualUserRole = userDeptRole.roleName;
   }
 
   console.log('🔧 Actual user role:', actualUserRole);
@@ -512,22 +578,29 @@ async function checkUserProjectPermission(userId: string, projectId: string, use
   }
 
   // Get user's department
-  const { data: userData } = await supabase
-    .from('users')
-    .select('department_id')
-    .eq('id', userId)
-    .single();
+  const userData = await db.select({
+    departmentId: users.departmentId
+  })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1)
+    .then(rows => rows[0]);
 
-  console.log('🔧 User department:', userData?.department_id);
+  console.log('🔧 User department:', userData?.departmentId);
 
   // Check if project belongs to user's department
-  if (userData?.department_id) {
-    const { data: projectDept } = await supabase
-      .from('project_department')
-      .select('project_id, department_id')
-      .eq('project_id', projectId)
-      .eq('department_id', userData.department_id)
-      .single();
+  if (userData?.departmentId) {
+    const projectDept = await db.select({
+      projectId: projectDepartment.projectId,
+      departmentId: projectDepartment.departmentId
+    })
+      .from(projectDepartment)
+      .where(and(
+        eq(projectDepartment.projectId, projectId),
+        eq(projectDepartment.departmentId, userData.departmentId)
+      ))
+      .limit(1)
+      .then(rows => rows[0]);
 
     if (projectDept) {
       console.log('✅ Project belongs to user department - can create tickets');
@@ -535,12 +608,17 @@ async function checkUserProjectPermission(userId: string, projectId: string, use
     }
 
     // Check if project is shared with user's department
-    const { data: sharedProject } = await supabase
-      .from('shared_projects')
-      .select('project_id, department_id')
-      .eq('project_id', projectId)
-      .eq('department_id', userData.department_id)
-      .single();
+    const sharedProject = await db.select({
+      projectId: sharedProjects.projectId,
+      departmentId: sharedProjects.departmentId
+    })
+      .from(sharedProjects)
+      .where(and(
+        eq(sharedProjects.projectId, projectId),
+        eq(sharedProjects.departmentId, userData.departmentId)
+      ))
+      .limit(1)
+      .then(rows => rows[0]);
 
     if (sharedProject) {
       console.log('✅ Project shared with user department - can create tickets');
@@ -549,16 +627,21 @@ async function checkUserProjectPermission(userId: string, projectId: string, use
   }
 
   // For Managers and regular users, check if they are directly assigned to the project
-  const { data: userProject, error } = await supabase
-    .from('user_project')
-    .select('user_id, project_id')
-    .eq('user_id', userId)
-    .eq('project_id', projectId)
-    .single();
+  const userProjectData = await db.select({
+    userId: userProject.userId,
+    projectId: userProject.projectId
+  })
+    .from(userProject)
+    .where(and(
+      eq(userProject.userId, userId),
+      eq(userProject.projectId, projectId)
+    ))
+    .limit(1)
+    .then(rows => rows[0]);
 
-  console.log('🔧 User project assignment:', { userProject, error });
+  console.log('🔧 User project assignment:', { userProjectData });
 
-  if (error || !userProject) {
+  if (!userProjectData) {
     console.log('❌ User has no access to this project');
     return false;
   }
@@ -572,26 +655,31 @@ async function checkUserProjectPermission(userId: string, projectId: string, use
 async function sendTicketAssignmentNotification(assignedUserId: string, ticket: any, projectName: string, createdById: string): Promise<void> {
   try {
     // Get assignee user details
-    const { data: assignee, error: assigneeError } = await supabase
-      .from('users')
-      .select('name, email')
-      .eq('id', assignedUserId)
-      .single();
+    const assignee = await db.select({
+      name: users.name,
+      email: users.email
+    })
+      .from(users)
+      .where(eq(users.id, assignedUserId))
+      .limit(1)
+      .then(rows => rows[0]);
 
-    if (assigneeError || !assignee) {
-      console.error('Failed to fetch assignee details:', assigneeError);
+    if (!assignee) {
+      console.error('Failed to fetch assignee details');
       return;
     }
 
     // Get creator user details
-    const { data: creator, error: creatorError } = await supabase
-      .from('users')
-      .select('name')
-      .eq('id', createdById)
-      .single();
+    const creator = await db.select({
+      name: users.name
+    })
+      .from(users)
+      .where(eq(users.id, createdById))
+      .limit(1)
+      .then(rows => rows[0]);
 
-    if (creatorError || !creator) {
-      console.error('Failed to fetch creator details:', creatorError);
+    if (!creator) {
+      console.error('Failed to fetch creator details');
       return;
     }
 
@@ -600,20 +688,24 @@ async function sendTicketAssignmentNotification(assignedUserId: string, ticket: 
     let priorityName = '';
 
     if (ticket.status_id) {
-      const { data: status } = await supabase
-        .from('statuses')
-        .select('name')
-        .eq('id', ticket.status_id)
-        .single();
+      const status = await db.select({
+        name: statuses.name
+      })
+        .from(statuses)
+        .where(eq(statuses.id, ticket.status_id))
+        .limit(1)
+        .then(rows => rows[0]);
       statusName = status?.name || '';
     }
 
     if (ticket.priority_id) {
-      const { data: priority } = await supabase
-        .from('statuses')
-        .select('name')
-        .eq('id', ticket.priority_id)
-        .single();
+      const priority = await db.select({
+        name: statuses.name
+      })
+        .from(statuses)
+        .where(eq(statuses.id, ticket.priority_id))
+        .limit(1)
+        .then(rows => rows[0]);
       priorityName = priority?.name || '';
     }
 

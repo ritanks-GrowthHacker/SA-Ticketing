@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from "@/app/db/connections";
+
+// PostgreSQL with Drizzle ORM
+import { db, users, eq } from '@/lib/db-helper';
 
 export async function POST(req: Request) {
   try {
@@ -13,14 +17,18 @@ export async function POST(req: Request) {
     }
 
     // Update user department
-    const { data, error } = await supabase
-      .from('users')
-      .update({ department })
-      .eq('id', userId)
-      .select();
+    // Supabase (commented out)
+    // const { data, error } = await supabase.from('users').update({ department }).eq('id', userId).select();
 
-    if (error) {
-      console.error("Error updating user department:", error);
+    // PostgreSQL with Drizzle
+    const data = await db
+      .update(users)
+      .set({ department })
+      .where(eq(users.id, userId))
+      .returning();
+
+    if (!data || data.length === 0) {
+      console.error("Error updating user department");
       return NextResponse.json(
         { error: "Failed to update user department" },
         { status: 500 }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, userProject, projects, globalRoles, eq, and, sql } from '@/lib/db-helper';
 
 export async function GET(req: Request) {
   try {
@@ -18,27 +19,39 @@ export async function GET(req: Request) {
     console.log(`🔍 GET-DEFAULT-PROJECT: Getting first project for user ${userId}`);
 
     // Get user's projects ordered by creation date (first project in DB hierarchy)
-    const { data: userProjects, error } = await supabase
-      .from('user_project')
-      .select(`
-        project_id,
-        role_id,
-        projects!inner(id, name, organization_id, created_at),
-        global_roles!user_project_role_id_fkey(id, name)
-      `)
-      .eq('user_id', userId)
-      .eq('projects.organization_id', organizationId)
-      .limit(1)
+    const userProjects = await db
+      .select({
+        projectId: userProject.projectId,
+        roleId: userProject.roleId,
+        projectData: {
+          id: projects.id,
+          name: projects.name,
+          organizationId: projects.organizationId,
+          createdAt: projects.createdAt
+        },
+        roleData: {
+          id: globalRoles.id,
+          name: globalRoles.name
+        }
+      })
+      .from(userProject)
+      .innerJoin(projects, eq(userProject.projectId, projects.id))
+      .innerJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(and(
+        eq(userProject.userId, userId),
+        eq(projects.organizationId, organizationId)
+      ))
+      .limit(1);
 
-    if (error || !userProjects || userProjects.length === 0) {
-      console.error('❌ GET-DEFAULT-PROJECT: No projects found for user:', error);
+    if (!userProjects || userProjects.length === 0) {
+      console.error('❌ GET-DEFAULT-PROJECT: No projects found for user');
       return NextResponse.json({ error: "No projects found for user" }, { status: 404 });
     }
 
     // Get the first project (hierarchy order)
     const firstProject = userProjects[0];
-    const projectData = firstProject.projects as any;
-    const roleData = firstProject.global_roles as any;
+    const projectData = firstProject.projectData;
+    const roleData = firstProject.roleData;
 
     console.log('✅ GET-DEFAULT-PROJECT: First project found:', projectData.name, 'with role:', roleData.name);
 
@@ -65,9 +78,9 @@ export async function GET(req: Request) {
       },
       role: roleData.name,
       allProjects: userProjects.map(up => ({
-        id: (up.projects as any).id,
-        name: (up.projects as any).name,
-        role: (up.global_roles as any).name
+        id: up.projectData.id,
+        name: up.projectData.name,
+        role: up.roleData.name
       }))
     });
 

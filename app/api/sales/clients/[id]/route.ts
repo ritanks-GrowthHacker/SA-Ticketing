@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, clients, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../../helpers';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -20,15 +20,20 @@ export async function GET(
     const { userId, organizationId } = extractUserAndOrgId(decoded);
     const { id } = await params;
 
-    const { data: client, error } = await supabaseAdminSales
-      .from('clients')
-      .select('*')
-      .eq('client_id', id)
-      .eq('organization_id', organizationId)
-      .single();
+    const clientResult = await salesDb
+      .select()
+      .from(clients)
+      .where(
+        and(
+          eq(clients.clientId, id),
+          eq(clients.organizationId, organizationId)
+        )
+      )
+      .limit(1);
 
-    if (error) {
-      console.error('Error fetching client:', error);
+    const client = clientResult[0];
+    if (!client) {
+      console.error('Error fetching client: not found');
       return NextResponse.json({ error: 'Client not found' }, { status: 404 });
     }
 
@@ -56,20 +61,24 @@ export async function PATCH(
 
     const body = await request.json();
 
-    const { data, error } = await supabaseAdminSales
-      .from('clients')
-      .update(body)
-      .eq('client_id', id)
-      .eq('organization_id', organizationId)
-      .select()
-      .single();
+    const updatedResult = await salesDb
+      .update(clients)
+      .set(body)
+      .where(
+        and(
+          eq(clients.clientId, id),
+          eq(clients.organizationId, organizationId)
+        )
+      )
+      .returning();
 
-    if (error) {
-      console.error('Error updating client:', error);
+    const updatedClient = updatedResult[0];
+    if (!updatedClient) {
+      console.error('Error updating client: no result');
       return NextResponse.json({ error: 'Failed to update client' }, { status: 500 });
     }
 
-    return NextResponse.json({ client: data });
+    return NextResponse.json({ client: updatedClient });
   } catch (error) {
     console.error('Error in PATCH /api/sales/clients/[id]:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });

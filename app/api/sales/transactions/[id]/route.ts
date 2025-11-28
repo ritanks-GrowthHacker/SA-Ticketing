@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, transactions, clients, transactionLineItems, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../../helpers';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -20,32 +20,44 @@ export async function GET(
     const { userId, organizationId } = extractUserAndOrgId(decoded);
     const { id } = await params;
 
-    // Fetch transaction with line items and client info
-    const { data: transaction, error } = await supabaseAdminSales
-      .from('transactions')
-      .select(`
-        *,
-        clients (client_name, email, phone, address, city, state)
-      `)
-      .eq('transaction_id', id)
-      .eq('organization_id', organizationId)
-      .single();
+    // Fetch transaction
+    const transactionResult = await salesDb
+      .select()
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.transactionId, id),
+          eq(transactions.organizationId, organizationId)
+        )
+      )
+      .limit(1);
 
-    if (error) {
-      console.error('Error fetching transaction:', error);
+    const transaction = transactionResult[0];
+    if (!transaction) {
+      console.error('Error fetching transaction: not found');
       return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
     }
 
+    // Fetch client info
+    const clientResult = await salesDb
+      .select()
+      .from(clients)
+      .where(eq(clients.clientId, transaction.clientId))
+      .limit(1);
+
+    const client = clientResult[0];
+
     // Fetch line items
-    const { data: lineItems } = await supabaseAdminSales
-      .from('transaction_line_items')
-      .select('*')
-      .eq('transaction_id', id);
+    const lineItems = await salesDb
+      .select()
+      .from(transactionLineItems)
+      .where(eq(transactionLineItems.transactionId, id));
 
     return NextResponse.json({
       transaction: {
         ...transaction,
-        client_name: transaction.clients?.client_name,
+        clients: client,
+        client_name: client?.clientName,
         line_items: lineItems || []
       }
     });

@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, desc } from '@/lib/db-helper';
 
 export async function GET(request: NextRequest) {
   try {
     // Get all organizations (you might want to add pagination later)
-    const { data: organizations, error } = await supabase
-      .from('organizations')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const orgsData = await db.select().from(organizations)
+      .orderBy(desc(organizations.createdAt));
+    const error = null;
 
     if (error) {
       console.error('Error fetching organizations:', error);
@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      organizations: organizations || []
+      organizations: orgsData || []
     });
 
   } catch (error) {

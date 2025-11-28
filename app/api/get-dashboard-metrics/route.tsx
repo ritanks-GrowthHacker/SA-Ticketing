@@ -1,6 +1,13 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, sql, eq, and, gte, lt, inArray, isNull } from '@/lib/db-helper';
+import { 
+  tickets, projects, users, statuses, priorities,
+  userProject, userOrganizationRoles, userDepartmentRoles,
+  projectDepartment, sharedProjects, resourceRequests,
+  globalRoles
+} from '@/lib/db-helper';
 
 /**
  * DASHBOARD METRICS API - PROJECT-BASED SYSTEM
@@ -173,36 +180,49 @@ export async function GET(req: Request) {
     });
     
     // Get user's organization role using global roles system
-    const { data: userOrgRole, error: orgRoleError } = await supabase
-      .from('user_organization_roles')
-      .select(`
-        role_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId)
-      .single();
+    const userOrgRoleResult = await db.execute<{
+      role_id: string;
+      role_name: string;
+    }>(sql`
+      SELECT uor.role_id, gr.name as role_name
+      FROM user_organization_roles uor
+      INNER JOIN global_roles gr ON uor.role_id = gr.id
+      WHERE uor.user_id = ${userId}
+      AND uor.organization_id = ${organizationId}
+      LIMIT 1
+    `);
+    const userOrgRole = userOrgRoleResult.rows[0] ? {
+      role_id: userOrgRoleResult.rows[0].role_id,
+      global_roles: { name: userOrgRoleResult.rows[0].role_name }
+    } : null;
+    const orgRoleError = null;
 
     // Check if user has department roles
-    const { data: userDeptRoles } = await supabase
-      .from('user_department_roles')
-      .select(`
-        role_id,
-        department_id,
-        global_roles(name)
-      `)
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId);
+    const userDeptRolesResult = await db.execute<{
+      role_id: string;
+      department_id: string;
+      role_name: string;
+    }>(sql`
+      SELECT udr.role_id, udr.department_id, gr.name as role_name
+      FROM user_department_roles udr
+      INNER JOIN global_roles gr ON udr.role_id = gr.id
+      WHERE udr.user_id = ${userId}
+      AND udr.organization_id = ${organizationId}
+    `);
+    const userDeptRoles = userDeptRolesResult.rows.map((row: any) => ({
+      role_id: row.role_id,
+      department_id: row.department_id,
+      global_roles: { name: row.role_name }
+    }));
 
     // Use current department from JWT if available, then URL parameter, then fallback to users table
     let userDepartmentId = departmentId || currentDepartmentId; // Prioritize URL parameter
     if (!userDepartmentId) {
-      const { data: userData } = await supabase
-        .from('users')
-        .select('department_id')
-        .eq('id', userId)
-        .maybeSingle();
-      userDepartmentId = userData?.department_id;
+      const userDataResult = await db.select({ departmentId: users.departmentId })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      userDepartmentId = userDataResult[0]?.departmentId;
     }
     
     console.log('🔍 ADMIN API: Department resolution:', {
@@ -211,8 +231,9 @@ export async function GET(req: Request) {
       final: userDepartmentId
     });
 
-    // ROLE PRIORITY: project role > department role > org role (PROJECT-BASED SYSTEM)
-    let actualUserRole = projectRole || departmentRole || orgRole || tokenData.role || 'Member';
+    // ROLE PRIORITY: project role (if project assigned) > department role > org role (PROJECT-BASED SYSTEM)
+    // Only use project role if user is actually in a project context
+    let actualUserRole = (currentProjectId ? projectRole : null) || departmentRole || orgRole || tokenData.role || 'Member';
     
     console.log('🎯 DASHBOARD METRICS - Effective Role:', actualUserRole);
     
@@ -294,101 +315,178 @@ export async function GET(req: Request) {
       });
       
       // Build ticket queries with project filter (PROJECT-BASED SYSTEM)
-      let currentTicketsQuery = supabase
-        .from('tickets')
-        .select('id, created_at, status_id, priority_id, projects!inner(organization_id)')
-        .eq('projects.organization_id', organizationId)
-        .gte('created_at', dateRanges.currentMonthStart);
-
-      let previousTicketsQuery = supabase
-        .from('tickets')
-        .select('id, projects!inner(organization_id)')
-        .eq('projects.organization_id', organizationId)
-        .gte('created_at', dateRanges.previousMonthStart)
-        .lt('created_at', dateRanges.currentMonthStart);
+      let currentTicketsConditions = sql`
+        SELECT t.id, t.created_at, t.status_id, t.priority_id, t.project_id
+        FROM tickets t
+        INNER JOIN projects p ON t.project_id = p.id
+        WHERE p.organization_id = ${organizationId}
+        AND t.created_at >= ${dateRanges.currentMonthStart}
+      `;
+      let previousTicketsConditions = sql`
+        SELECT t.id, t.project_id
+        FROM tickets t
+        INNER JOIN projects p ON t.project_id = p.id
+        WHERE p.organization_id = ${organizationId}
+        AND t.created_at >= ${dateRanges.previousMonthStart}
+        AND t.created_at < ${dateRanges.currentMonthStart}
+      `;
 
       // PRIORITY 1: Filter by current project from JWT (if available)
       if (currentProjectId) {
         console.log('✅ Filtering by current project from JWT:', currentProjectId);
-        currentTicketsQuery = currentTicketsQuery.eq('project_id', currentProjectId);
-        previousTicketsQuery = previousTicketsQuery.eq('project_id', currentProjectId);
+        currentTicketsConditions = sql`
+          SELECT t.id, t.created_at, t.status_id, t.priority_id, t.project_id
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.created_at >= ${dateRanges.currentMonthStart}
+          AND t.project_id = ${currentProjectId}
+        `;
+        previousTicketsConditions = sql`
+          SELECT t.id, t.project_id
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.created_at >= ${dateRanges.previousMonthStart}
+          AND t.created_at < ${dateRanges.currentMonthStart}
+          AND t.project_id = ${currentProjectId}
+        `;
       }
       // PRIORITY 2: Filter by project query parameter (if provided and no JWT project)
       else if (projectId) {
         console.log('✅ Filtering by project from query param:', projectId);
-        currentTicketsQuery = currentTicketsQuery.eq('project_id', projectId);
-        previousTicketsQuery = previousTicketsQuery.eq('project_id', projectId);
+        currentTicketsConditions = sql`
+          SELECT t.id, t.created_at, t.status_id, t.priority_id, t.project_id
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.created_at >= ${dateRanges.currentMonthStart}
+          AND t.project_id = ${projectId}
+        `;
+        previousTicketsConditions = sql`
+          SELECT t.id, t.project_id
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.created_at >= ${dateRanges.previousMonthStart}
+          AND t.created_at < ${dateRanges.currentMonthStart}
+          AND t.project_id = ${projectId}
+        `;
       }
       // PRIORITY 3: Department fallback (only if no project context)
       else if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
         console.log('✅ Fallback: Filtering by department:', userDepartmentId);
-        const { data: deptProjectIds } = await supabase
-          .from('project_department')
-          .select('project_id')
-          .eq('department_id', userDepartmentId);
+        const deptProjectIdsResult = await db.execute<{ project_id: string }>(sql`
+          SELECT project_id FROM project_department
+          WHERE department_id = ${userDepartmentId}
+        `);
         
-        const projectIds = deptProjectIds?.map(p => p.project_id) || [];
+        const projectIds = deptProjectIdsResult.rows.map((p: any) => p.project_id) || [];
         
         if (projectIds.length > 0) {
-          currentTicketsQuery = currentTicketsQuery.in('project_id', projectIds);
-          previousTicketsQuery = previousTicketsQuery.in('project_id', projectIds);
+          currentTicketsConditions = sql`
+            SELECT t.id, t.created_at, t.status_id, t.priority_id, t.project_id
+            FROM tickets t
+            INNER JOIN projects p ON t.project_id = p.id
+            WHERE p.organization_id = ${organizationId}
+            AND t.created_at >= ${dateRanges.currentMonthStart}
+            AND t.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          `;
+          previousTicketsConditions = sql`
+            SELECT t.id, t.project_id
+            FROM tickets t
+            INNER JOIN projects p ON t.project_id = p.id
+            WHERE p.organization_id = ${organizationId}
+            AND t.created_at >= ${dateRanges.previousMonthStart}
+            AND t.created_at < ${dateRanges.currentMonthStart}
+            AND t.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          `;
         } else {
           // No projects, no tickets
-          currentTicketsQuery = currentTicketsQuery.eq('project_id', '00000000-0000-0000-0000-000000000000');
-          previousTicketsQuery = previousTicketsQuery.eq('project_id', '00000000-0000-0000-0000-000000000000');
+          currentTicketsConditions = sql`
+            SELECT t.id, t.created_at, t.status_id, t.priority_id, t.project_id
+            FROM tickets t WHERE t.project_id = '00000000-0000-0000-0000-000000000000'
+          `;
+          previousTicketsConditions = sql`
+            SELECT t.id, t.project_id
+            FROM tickets t WHERE t.project_id = '00000000-0000-0000-0000-000000000000'
+          `;
         }
       }
 
-      const { data: currentTickets } = await currentTicketsQuery;
-      const { data: previousTickets } = await previousTicketsQuery;
+      const currentTicketsResult = await db.execute<{ id: string; created_at: string; status_id: string; priority_id: string; project_id: string }>(currentTicketsConditions);
+      const currentTickets = currentTicketsResult.rows;
+      const previousTicketsResult = await db.execute<{ id: string; project_id: string }>(previousTicketsConditions);
+      const previousTickets = previousTicketsResult.rows;
 
       // Active Projects - PROJECT-BASED SYSTEM
-      let activeProjectsQuery = supabase
-        .from('projects')
-        .select('id, name, created_at')
-        .eq('organization_id', organizationId);
+      let activeProjectsConditions = sql`
+        SELECT id, name, created_at
+        FROM projects
+        WHERE organization_id = ${organizationId}
+      `;
       
       // If user has specific project in JWT, show only that project
       if (currentProjectId) {
         console.log('✅ Active Projects: Filtering by current project from JWT');
-        activeProjectsQuery = activeProjectsQuery.eq('id', currentProjectId);
+        activeProjectsConditions = sql`
+          SELECT id, name, created_at
+          FROM projects
+          WHERE organization_id = ${organizationId}
+          AND id = ${currentProjectId}
+        `;
       }
       // Department-level admin: filter by department (fallback only)
       else if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
         console.log('✅ Active Projects: Filtering by department (fallback)');
         // Get projects owned by current department OR shared with current department
-        const { data: ownedProjectIds } = await supabase
-          .from('project_department')
-          .select('project_id')
-          .eq('department_id', userDepartmentId);
+        const ownedProjectIdsResult = await db.execute<{ project_id: string }>(sql`
+          SELECT project_id FROM project_department
+          WHERE department_id = ${userDepartmentId}
+        `);
         
-        const { data: sharedProjectIds } = await supabase
-          .from('shared_projects')
-          .select('project_id')
-          .eq('department_id', userDepartmentId);
+        const sharedProjectIdsResult = await db.execute<{ project_id: string }>(sql`
+          SELECT project_id FROM shared_projects
+          WHERE department_id = ${userDepartmentId}
+        `);
         
         const projectIds = [
-          ...(ownedProjectIds?.map(p => p.project_id) || []),
-          ...(sharedProjectIds?.map(p => p.project_id) || [])
+          ...(ownedProjectIdsResult.rows.map((p: any) => p.project_id) || []),
+          ...(sharedProjectIdsResult.rows.map((p: any) => p.project_id) || [])
         ];
         
         if (projectIds.length > 0) {
-          activeProjectsQuery = activeProjectsQuery.in('id', projectIds);
+          activeProjectsConditions = sql`
+            SELECT id, name, created_at
+            FROM projects
+            WHERE organization_id = ${organizationId}
+            AND id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          `;
         } else {
           // No projects for this department
-          activeProjectsQuery = activeProjectsQuery.eq('id', '00000000-0000-0000-0000-000000000000');
+          activeProjectsConditions = sql`
+            SELECT id, name, created_at
+            FROM projects
+            WHERE id = '00000000-0000-0000-0000-000000000000'
+          `;
         }
       }
       
       // If project filter is applied, get only that specific project
       if (projectId) {
-        activeProjectsQuery = activeProjectsQuery.eq('id', projectId);
+        activeProjectsConditions = sql`
+          SELECT id, name, created_at
+          FROM projects
+          WHERE organization_id = ${organizationId}
+          AND id = ${projectId}
+        `;
       }
 
-      const { data: activeProjects } = await activeProjectsQuery;
+      const activeProjectsResult = await db.execute<{ id: string; name: string; created_at: string }>(activeProjectsConditions);
+      const activeProjects = activeProjectsResult.rows;
 
       // Team Members
-      let currentMembersQuery, previousMembersQuery;
+      let currentMembersResult, previousMembersResult;
       
       console.log('👥 TEAM MEMBERS QUERY - Parameters:', {
         hasProjectFilter: !!projectId,
@@ -398,52 +496,90 @@ export async function GET(req: Request) {
       
       if (projectId) {
         // If project filter is applied, get only members of that project
-        currentMembersQuery = supabase
-          .from('user_project')
-          .select('user_id, users!inner(id, name, email, created_at)')
-          .eq('project_id', projectId);
+        currentMembersResult = await db.execute<{
+          user_id: string;
+          id: string;
+          name: string;
+          email: string;
+          created_at: string;
+        }>(sql`
+          SELECT up.user_id, u.id, u.name, u.email, u.created_at
+          FROM user_project up
+          INNER JOIN users u ON up.user_id = u.id
+          WHERE up.project_id = ${projectId}
+        `);
 
-        previousMembersQuery = supabase
-          .from('user_project')
-          .select('user_id, users!inner(created_at)')
-          .eq('project_id', projectId)
-          .lt('users.created_at', dateRanges.currentMonthStart);
+        previousMembersResult = await db.execute<{
+          user_id: string;
+          created_at: string;
+        }>(sql`
+          SELECT up.user_id, u.created_at
+          FROM user_project up
+          INNER JOIN users u ON up.user_id = u.id
+          WHERE up.project_id = ${projectId}
+          AND u.created_at < ${dateRanges.currentMonthStart}
+        `);
       } else {
-        // Organization-wide members - get ALL users from ALL projects in organization
-        // First get all projects in the organization
-        const { data: orgProjects } = await supabase
-          .from('projects')
-          .select('id')
-          .eq('organization_id', organizationId);
+        // For department admins, get members from department projects only
+        // For org admins, get all organization members
+        let projectIdsToQuery = [];
         
-        const orgProjectIds = orgProjects?.map(p => p.id) || [];
-        
-        if (orgProjectIds.length > 0) {
-          currentMembersQuery = supabase
-            .from('user_project')
-            .select('user_id, users!inner(id, name, email, created_at)')
-            .in('project_id', orgProjectIds);
-
-          previousMembersQuery = supabase
-            .from('user_project')
-            .select('user_id, users!inner(created_at)')
-            .in('project_id', orgProjectIds)
-            .lt('users.created_at', dateRanges.currentMonthStart);
+        if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
+          // Department admin - get only department projects
+          const deptProjectsResult = await db.execute<{ id: string }>(sql`
+            SELECT project_id as id FROM project_department
+            WHERE department_id = ${userDepartmentId}
+          `);
+          projectIdsToQuery = deptProjectsResult.rows.map((p: any) => p.id) || [];
         } else {
-          // No projects, return empty
-          currentMembersQuery = Promise.resolve({ data: [], error: null });
-          previousMembersQuery = Promise.resolve({ data: [], error: null });
+          // Organization admin - get all projects in the organization
+          const orgProjectsResult = await db.execute<{ id: string }>(sql`
+            SELECT id FROM projects
+            WHERE organization_id = ${organizationId}
+          `);
+          projectIdsToQuery = orgProjectsResult.rows.map((p: any) => p.id) || [];
+        }
+        
+        if (projectIdsToQuery.length > 0) {
+          currentMembersResult = await db.execute<{
+            user_id: string;
+            id: string;
+            name: string;
+            email: string;
+            created_at: string;
+          }>(sql`
+            SELECT up.user_id, u.id, u.name, u.email, u.created_at
+            FROM user_project up
+            INNER JOIN users u ON up.user_id = u.id
+            WHERE up.project_id = ANY(ARRAY[${sql.join(projectIdsToQuery.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          `);
+
+          previousMembersResult = await db.execute<{
+            user_id: string;
+            created_at: string;
+          }>(sql`
+            SELECT up.user_id, u.created_at
+            FROM user_project up
+            INNER JOIN users u ON up.user_id = u.id
+            WHERE up.project_id = ANY(ARRAY[${sql.join(projectIdsToQuery.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+            AND u.created_at < ${dateRanges.currentMonthStart}
+          `);
+        } else {
+          // No projects - return empty
+          currentMembersResult = { rows: [] };
+          previousMembersResult = { rows: [] };
         }
       }
 
-      const { data: currentMembers, error: currentMembersError } = await currentMembersQuery;
-      const { data: previousMembers } = await previousMembersQuery;
+      const currentMembers = currentMembersResult.rows;
+      const currentMembersError = null;
+      const previousMembers = previousMembersResult.rows;
 
       // Deduplicate members by user_id (in case user is in multiple projects)
       const uniqueCurrentMembers = currentMembers ? 
-        Array.from(new Map(currentMembers.map(m => [m.user_id, m])).values()) : [];
+        Array.from(new Map(currentMembers.map((m: any) => [m.user_id, m])).values()) : [];
       const uniquePreviousMembers = previousMembers ?
-        Array.from(new Map(previousMembers.map(m => [m.user_id, m])).values()) : [];
+        Array.from(new Map(previousMembers.map((m: any) => [m.user_id, m])).values()) : [];
 
       if (currentMembersError) {
         console.error('❌ Error fetching current members:', currentMembersError);
@@ -458,37 +594,56 @@ export async function GET(req: Request) {
       });
 
       // Average Resolution Time (simplified calculation)
-      let resolvedTicketsQuery = supabase
-        .from('tickets')
-        .select('created_at, updated_at, projects!inner(organization_id)')
-        .eq('projects.organization_id', organizationId)
-        .gte('created_at', dateRanges.currentMonthStart)
-        .not('updated_at', 'is', null);
+      let resolvedTicketsConditions = sql`
+        SELECT t.created_at, t.updated_at
+        FROM tickets t
+        INNER JOIN projects p ON t.project_id = p.id
+        WHERE p.organization_id = ${organizationId}
+        AND t.created_at >= ${dateRanges.currentMonthStart}
+        AND t.updated_at IS NOT NULL
+      `;
       
       // Filter by department if department admin
       if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
-        const { data: deptProjectIds } = await supabase
-          .from('project_department')
-          .select('project_id')
-          .eq('department_id', userDepartmentId);
+        const deptProjectIdsResult = await db.execute<{ project_id: string }>(sql`
+          SELECT project_id FROM project_department
+          WHERE department_id = ${userDepartmentId}
+        `);
         
-        const projectIds = deptProjectIds?.map(p => p.project_id) || [];
+        const projectIds = deptProjectIdsResult.rows.map((p: any) => p.project_id) || [];
         if (projectIds.length > 0) {
-          resolvedTicketsQuery = resolvedTicketsQuery.in('project_id', projectIds);
+          resolvedTicketsConditions = sql`
+            SELECT t.created_at, t.updated_at
+            FROM tickets t
+            INNER JOIN projects p ON t.project_id = p.id
+            WHERE p.organization_id = ${organizationId}
+            AND t.created_at >= ${dateRanges.currentMonthStart}
+            AND t.updated_at IS NOT NULL
+            AND t.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          `;
         }
       }
       
       // Apply project filter if specified
       if (projectId) {
-        resolvedTicketsQuery = resolvedTicketsQuery.eq('project_id', projectId);
+        resolvedTicketsConditions = sql`
+          SELECT t.created_at, t.updated_at
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.created_at >= ${dateRanges.currentMonthStart}
+          AND t.updated_at IS NOT NULL
+          AND t.project_id = ${projectId}
+        `;
       }
 
-      const { data: resolvedTickets } = await resolvedTicketsQuery;
+      const resolvedTicketsResult = await db.execute<{ created_at: string; updated_at: string }>(resolvedTicketsConditions);
+      const resolvedTickets = resolvedTicketsResult.rows;
 
       // Calculate average resolution time
       let avgResolutionHours = 0;
       if (resolvedTickets && resolvedTickets.length > 0) {
-        const totalHours = resolvedTickets.reduce((sum, ticket) => {
+        const totalHours = resolvedTickets.reduce((sum: any, ticket: any) => {
           const created = new Date(ticket.created_at).getTime();
           const updated = new Date(ticket.updated_at).getTime();
           return sum + ((updated - created) / (1000 * 60 * 60)); // Convert to hours
@@ -497,78 +652,246 @@ export async function GET(req: Request) {
       }
 
       // Recent Activity - First get total count for pagination
-      let countQuery = supabase
-        .from('tickets')
-        .select('*, projects!inner(*)', { count: 'exact', head: true })
-        .eq('projects.organization_id', organizationId);
+      let countConditions = sql`
+        SELECT COUNT(*) as count
+        FROM tickets t
+        INNER JOIN projects p ON t.project_id = p.id
+        WHERE p.organization_id = ${organizationId}
+      `;
       
       // Filter by department if department admin
       if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
-        const { data: deptProjectIds } = await supabase
-          .from('project_department')
-          .select('project_id')
-          .eq('department_id', userDepartmentId);
+        const deptProjectIdsResult = await db.execute<{ project_id: string }>(sql`
+          SELECT project_id FROM project_department
+          WHERE department_id = ${userDepartmentId}
+        `);
         
-        const projectIds = deptProjectIds?.map(p => p.project_id) || [];
+        const projectIds = deptProjectIdsResult.rows.map((p: any) => p.project_id) || [];
         if (projectIds.length > 0) {
-          countQuery = countQuery.in('project_id', projectIds);
+          countConditions = sql`
+            SELECT COUNT(*) as count
+            FROM tickets t
+            INNER JOIN projects p ON t.project_id = p.id
+            WHERE p.organization_id = ${organizationId}
+            AND t.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          `;
+        } else {
+          // Department admin with no projects - return 0
+          countConditions = sql`
+            SELECT COUNT(*) as count
+            FROM tickets t
+            WHERE t.project_id = '00000000-0000-0000-0000-000000000000'
+          `;
         }
       }
       
       if (projectId) {
-        countQuery = countQuery.eq('project_id', projectId);
+        countConditions = sql`
+          SELECT COUNT(*) as count
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.project_id = ${projectId}
+        `;
       }
       if (statusId) {
-        countQuery = countQuery.eq('status_id', statusId);
+        // Add status filter to existing conditions - need to rebuild query
+        const baseWhere = projectId ? `p.organization_id = '${organizationId}' AND t.project_id = '${projectId}'` : `p.organization_id = '${organizationId}'`;
+        countConditions = sql.raw(`
+          SELECT COUNT(*) as count
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE ${baseWhere}
+          AND t.status_id = '${statusId}'
+        `);
       }
       if (priorityId) {
-        countQuery = countQuery.eq('priority_id', priorityId);
+        // Add priority filter - need to rebuild query
+        const baseWhere = projectId ? `p.organization_id = '${organizationId}' AND t.project_id = '${projectId}'` : `p.organization_id = '${organizationId}'`;
+        const statusWhere = statusId ? `AND t.status_id = '${statusId}'` : '';
+        countConditions = sql.raw(`
+          SELECT COUNT(*) as count
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE ${baseWhere}
+          ${statusWhere}
+          AND t.priority_id = '${priorityId}'
+        `);
       }
       
-      const { count: totalTickets } = await countQuery;
+      const countResult = await db.execute<{ count: number }>(countConditions);
+      const totalTickets = countResult.rows[0]?.count || 0;
       console.log('🔢 COUNT DEBUG:', { totalTickets, page, limit, offset, organizationId, userDepartmentId });
       
       // Then get paginated results
-      let recentTicketsQuery = supabase
-        .from('tickets')
-        .select(`
-          id, title, created_at, status_id, priority_id, 
-          created_by, assigned_to,
-          projects!inner(name, organization_id),
-          creator:users!tickets_created_by_fkey(name),
-          assignee:users!tickets_assigned_to_fkey(name),
-          statuses!tickets_status_id_fkey(name, color_code),
-          priorities!tickets_priority_id_fkey(name, color_code)
-        `)
-        .eq('projects.organization_id', organizationId)
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1);
+      let recentTicketsConditions = sql`
+        SELECT 
+          t.id, t.title, t.created_at, t.status_id, t.priority_id,
+          t.created_by, t.assigned_to,
+          p.name as project_name,
+          creator.name as creator_name,
+          assignee.name as assignee_name,
+          s.name as status_name, s.color_code as status_color,
+          pr.name as priority_name, pr.color_code as priority_color
+        FROM tickets t
+        INNER JOIN projects p ON t.project_id = p.id
+        LEFT JOIN users creator ON t.created_by = creator.id
+        LEFT JOIN users assignee ON t.assigned_to = assignee.id
+        LEFT JOIN statuses s ON t.status_id = s.id
+        LEFT JOIN priorities pr ON t.priority_id = pr.id
+        WHERE p.organization_id = ${organizationId}
+        ORDER BY t.created_at DESC
+        LIMIT ${limit}
+        OFFSET ${offset}
+      `;
       
       // Filter by department if department admin
       if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId) {
-        const { data: deptProjectIds } = await supabase
-          .from('project_department')
-          .select('project_id')
-          .eq('department_id', userDepartmentId);
+        const deptProjectIdsResult = await db.execute<{ project_id: string }>(sql`
+          SELECT project_id FROM project_department
+          WHERE department_id = ${userDepartmentId}
+        `);
         
-        const projectIds = deptProjectIds?.map(p => p.project_id) || [];
+        const projectIds = deptProjectIdsResult.rows.map((p: any) => p.project_id) || [];
         if (projectIds.length > 0) {
-          recentTicketsQuery = recentTicketsQuery.in('project_id', projectIds);
+          recentTicketsConditions = sql`
+            SELECT 
+              t.id, t.title, t.created_at, t.status_id, t.priority_id,
+              t.created_by, t.assigned_to,
+              p.name as project_name,
+              creator.name as creator_name,
+              assignee.name as assignee_name,
+              s.name as status_name, s.color_code as status_color,
+              pr.name as priority_name, pr.color_code as priority_color
+            FROM tickets t
+            INNER JOIN projects p ON t.project_id = p.id
+            LEFT JOIN users creator ON t.created_by = creator.id
+            LEFT JOIN users assignee ON t.assigned_to = assignee.id
+            LEFT JOIN statuses s ON t.status_id = s.id
+            LEFT JOIN priorities pr ON t.priority_id = pr.id
+            WHERE p.organization_id = ${organizationId}
+            AND t.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+            ORDER BY t.created_at DESC
+            LIMIT ${limit}
+            OFFSET ${offset}
+          `;
+        } else {
+          // Department admin with no projects - return empty result
+          recentTicketsConditions = sql`
+            SELECT 
+              t.id, t.title, t.created_at, t.status_id, t.priority_id,
+              t.created_by, t.assigned_to,
+              p.name as project_name,
+              creator.name as creator_name,
+              assignee.name as assignee_name,
+              s.name as status_name, s.color_code as status_color,
+              pr.name as priority_name, pr.color_code as priority_color
+            FROM tickets t
+            INNER JOIN projects p ON t.project_id = p.id
+            LEFT JOIN users creator ON t.created_by = creator.id
+            LEFT JOIN users assignee ON t.assigned_to = assignee.id
+            LEFT JOIN statuses s ON t.status_id = s.id
+            LEFT JOIN priorities pr ON t.priority_id = pr.id
+            WHERE t.project_id = '00000000-0000-0000-0000-000000000000'
+            ORDER BY t.created_at DESC
+            LIMIT ${limit}
+            OFFSET ${offset}
+          `;
         }
       }
       
       // Apply filters if specified
       if (projectId) {
-        recentTicketsQuery = recentTicketsQuery.eq('project_id', projectId);
+        recentTicketsConditions = sql`
+          SELECT 
+            t.id, t.title, t.created_at, t.status_id, t.priority_id,
+            t.created_by, t.assigned_to,
+            p.name as project_name,
+            creator.name as creator_name,
+            assignee.name as assignee_name,
+            s.name as status_name, s.color_code as status_color,
+            pr.name as priority_name, pr.color_code as priority_color
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          LEFT JOIN users creator ON t.created_by = creator.id
+          LEFT JOIN users assignee ON t.assigned_to = assignee.id
+          LEFT JOIN statuses s ON t.status_id = s.id
+          LEFT JOIN priorities pr ON t.priority_id = pr.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.project_id = ${projectId}
+          ORDER BY t.created_at DESC
+          LIMIT ${limit}
+          OFFSET ${offset}
+        `;
       }
-      if (statusId) {
-        recentTicketsQuery = recentTicketsQuery.eq('status_id', statusId);
+      if (statusId && projectId) {
+        recentTicketsConditions = sql`
+          SELECT 
+            t.id, t.title, t.created_at, t.status_id, t.priority_id,
+            t.created_by, t.assigned_to,
+            p.name as project_name,
+            creator.name as creator_name,
+            assignee.name as assignee_name,
+            s.name as status_name, s.color_code as status_color,
+            pr.name as priority_name, pr.color_code as priority_color
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          LEFT JOIN users creator ON t.created_by = creator.id
+          LEFT JOIN users assignee ON t.assigned_to = assignee.id
+          LEFT JOIN statuses s ON t.status_id = s.id
+          LEFT JOIN priorities pr ON t.priority_id = pr.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.project_id = ${projectId}
+          AND t.status_id = ${statusId}
+          ORDER BY t.created_at DESC
+          LIMIT ${limit}
+          OFFSET ${offset}
+        `;
       }
-      if (priorityId) {
-        recentTicketsQuery = recentTicketsQuery.eq('priority_id', priorityId);
+      if (priorityId && projectId) {
+        const statusFilter = statusId ? sql`AND t.status_id = ${statusId}` : sql``;
+        recentTicketsConditions = sql`
+          SELECT 
+            t.id, t.title, t.created_at, t.status_id, t.priority_id,
+            t.created_by, t.assigned_to,
+            p.name as project_name,
+            creator.name as creator_name,
+            assignee.name as assignee_name,
+            s.name as status_name, s.color_code as status_color,
+            pr.name as priority_name, pr.color_code as priority_color
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          LEFT JOIN users creator ON t.created_by = creator.id
+          LEFT JOIN users assignee ON t.assigned_to = assignee.id
+          LEFT JOIN statuses s ON t.status_id = s.id
+          LEFT JOIN priorities pr ON t.priority_id = pr.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.project_id = ${projectId}
+          ${statusFilter}
+          AND t.priority_id = ${priorityId}
+          ORDER BY t.created_at DESC
+          LIMIT ${limit}
+          OFFSET ${offset}
+        `;
       }
 
-      const { data: recentTickets } = await recentTicketsQuery;
+      const recentTicketsResult = await db.execute<{
+        id: string;
+        title: string;
+        created_at: string;
+        status_id: string;
+        priority_id: string;
+        created_by: string;
+        assigned_to: string;
+        project_name: string;
+        creator_name: string;
+        assignee_name: string;
+        status_name: string;
+        status_color: string;
+        priority_name: string;
+        priority_color: string;
+      }>(recentTicketsConditions);
+      const recentTickets = recentTicketsResult.rows;
       
       // Calculate pagination metadata
       const totalPages = Math.ceil((totalTickets || 0) / limit);
@@ -612,10 +935,11 @@ export async function GET(req: Request) {
 
       // Add shared projects count for department admins
       if (isDeptOnlyAdmin && userDepartmentId) {
-        const { data: sharedProjectsData } = await supabase
-          .from('shared_projects')
-          .select('project_id', { count: 'exact' })
-          .eq('department_id', userDepartmentId);
+        const sharedProjectsResult = await db.execute<{ project_id: string }>(sql`
+          SELECT project_id FROM shared_projects
+          WHERE department_id = ${userDepartmentId}
+        `);
+        const sharedProjectsData = sharedProjectsResult.rows;
 
         metrics.overview.sharedProjects = {
           value: sharedProjectsData?.length || 0,
@@ -624,11 +948,12 @@ export async function GET(req: Request) {
         };
 
         // Get pending requests count
-        const { data: pendingRequests } = await supabase
-          .from('resource_requests')
-          .select('id', { count: 'exact' })
-          .eq('user_department_id', userDepartmentId)
-          .eq('status', 'pending');
+        const pendingRequestsResult = await db.execute<{ id: string }>(sql`
+          SELECT id FROM resource_requests
+          WHERE user_department_id = ${userDepartmentId}
+          AND status = 'pending'
+        `);
+        const pendingRequests = pendingRequestsResult.rows;
 
         metrics.overview.pendingRequests = {
           value: pendingRequests?.length || 0,
@@ -637,18 +962,18 @@ export async function GET(req: Request) {
         };
       }
 
-      metrics.recentActivity = recentTickets?.map(ticket => ({
+      metrics.recentActivity = recentTickets?.map((ticket: any) => ({
         id: ticket.id,
         title: ticket.title,
-        status: (ticket as any).statuses?.name || 'Unknown',
+        status: ticket.status_name || 'Unknown',
         time: formatTimeAgo(ticket.created_at),
-        project: (ticket as any).projects?.name || 'Unknown Project',
-        priority: (ticket as any).priorities?.name || 'Medium',
-        priorityColor: (ticket as any).priorities?.color_code || '#6B7280',
-        assignedTo: (ticket as any).assignee?.name || 'Unassigned',
-        createdBy: (ticket as any).creator?.name || 'Unknown',
-        assigned_to: (ticket as any).assignee?.name || 'Unassigned', // Alternative field name
-        created_by: (ticket as any).creator?.name || 'Unknown' // Alternative field name
+        project: ticket.project_name || 'Unknown Project',
+        priority: ticket.priority_name || 'Medium',
+        priorityColor: ticket.priority_color || '#6B7280',
+        assignedTo: ticket.assignee_name || 'Unassigned',
+        createdBy: ticket.creator_name || 'Unknown',
+        assigned_to: ticket.assignee_name || 'Unassigned', // Alternative field name
+        created_by: ticket.creator_name || 'Unknown' // Alternative field name
       })) || [];
 
     } else if (isManager) {
@@ -663,34 +988,75 @@ export async function GET(req: Request) {
       });
       
       // Get projects managed by this user
-      let managedProjectsQuery = supabase
-        .from('user_project')
-        .select(`
-          project_id, role_id,
-          projects!inner(id, name, organization_id, project_department(department_id)),
-          global_roles!user_project_role_id_fkey(name)
-        `)
-        .eq('user_id', tokenData.sub)
-        .eq('projects.organization_id', organizationId)
-        .order('projects(created_at)', { ascending: true });
+      let managedProjectsConditions = sql`
+        SELECT 
+          up.project_id, up.role_id,
+          p.id as project_id, p.name as project_name, p.organization_id,
+          pd.department_id,
+          gr.name as role_name
+        FROM user_project up
+        INNER JOIN projects p ON up.project_id = p.id
+        LEFT JOIN project_department pd ON p.id = pd.project_id
+        LEFT JOIN global_roles gr ON up.role_id = gr.id
+        WHERE up.user_id = ${tokenData.sub}
+        AND p.organization_id = ${organizationId}
+        ORDER BY p.created_at ASC
+      `;
 
       // PRIORITY 1: If JWT has current project, show only that project
       if (currentProjectId) {
         console.log('✅ Manager: Filtering by current project from JWT');
-        managedProjectsQuery = managedProjectsQuery.eq('project_id', currentProjectId);
+        managedProjectsConditions = sql`
+          SELECT 
+            up.project_id, up.role_id,
+            p.id as project_id, p.name as project_name, p.organization_id,
+            pd.department_id,
+            gr.name as role_name
+          FROM user_project up
+          INNER JOIN projects p ON up.project_id = p.id
+          LEFT JOIN project_department pd ON p.id = pd.project_id
+          LEFT JOIN global_roles gr ON up.role_id = gr.id
+          WHERE up.user_id = ${tokenData.sub}
+          AND p.organization_id = ${organizationId}
+          AND up.project_id = ${currentProjectId}
+          ORDER BY p.created_at ASC
+        `;
       }
       // PRIORITY 2: Department filter (fallback only if no project in JWT)
       else if (currentDepartmentId) {
         console.log('✅ Manager: Filtering by department (fallback)');
         // Limit manager's project list to projects within the current department
-        managedProjectsQuery = managedProjectsQuery.filter('projects.project_department.department_id', 'eq', currentDepartmentId);
+        managedProjectsConditions = sql`
+          SELECT 
+            up.project_id, up.role_id,
+            p.id as project_id, p.name as project_name, p.organization_id,
+            pd.department_id,
+            gr.name as role_name
+          FROM user_project up
+          INNER JOIN projects p ON up.project_id = p.id
+          LEFT JOIN project_department pd ON p.id = pd.project_id
+          LEFT JOIN global_roles gr ON up.role_id = gr.id
+          WHERE up.user_id = ${tokenData.sub}
+          AND p.organization_id = ${organizationId}
+          AND pd.department_id = ${currentDepartmentId}
+          ORDER BY p.created_at ASC
+        `;
       }
 
-      const { data: managedProjects, error: managedProjectsError } = await managedProjectsQuery;
+      const managedProjectsResult = await db.execute<{
+        project_id: string;
+        role_id: string;
+        project_name: string;
+        organization_id: string;
+        department_id: string;
+        role_name: string;
+      }>(managedProjectsConditions);
+      const managedProjects = managedProjectsResult.rows;
+      const managedProjectsError = null;
 
       console.log('🔧 MANAGER PROJECTS QUERY:', { managedProjects, managedProjectsError, userId: tokenData.sub, organizationId });
 
-      const projectIds = managedProjects?.map(mp => mp.project_id) || [];
+      const projectIds = managedProjects?.map((mp: any) => mp.project_id) || [];
       console.log('🔧 MANAGER DEBUG: Managed projects:', projectIds, 'Selected project:', projectId);
 
       // Determine target project: JWT project > query param > first managed project
@@ -700,34 +1066,61 @@ export async function GET(req: Request) {
         console.log('✅ Manager: Using project ID:', targetProjectId);
         // SPECIFIC PROJECT METRICS
         // Project Tickets - Get all tickets for the project (not filtered by date for total count)
-        const { data: projectTickets } = await supabase
-          .from('tickets')
-          .select('id, created_at, status_id, priority_id')
-          .eq('project_id', targetProjectId);
+        const projectTicketsResult = await db.execute<{
+          id: string;
+          created_at: string;
+          status_id: string;
+          priority_id: string;
+        }>(sql`
+          SELECT id, created_at, status_id, priority_id
+          FROM tickets
+          WHERE project_id = ${targetProjectId}
+        `);
+        const projectTickets = projectTicketsResult.rows;
         
         // Project Tickets for current month (for comparison metrics)
-        const { data: currentMonthTickets } = await supabase
-          .from('tickets')
-          .select('id, created_at, status_id, priority_id')
-          .eq('project_id', targetProjectId)
-          .gte('created_at', dateRanges.currentMonthStart);
+        const currentMonthTicketsResult = await db.execute<{
+          id: string;
+          created_at: string;
+          status_id: string;
+          priority_id: string;
+        }>(sql`
+          SELECT id, created_at, status_id, priority_id
+          FROM tickets
+          WHERE project_id = ${targetProjectId}
+          AND created_at >= ${dateRanges.currentMonthStart}
+        `);
+        const currentMonthTickets = currentMonthTicketsResult.rows;
 
-        const { data: previousProjectTickets } = await supabase
-          .from('tickets')
-          .select('id')
-          .eq('project_id', targetProjectId)
-          .gte('created_at', dateRanges.previousMonthStart)
-          .lt('created_at', dateRanges.currentMonthStart);
+        const previousProjectTicketsResult = await db.execute<{ id: string }>(sql`
+          SELECT id
+          FROM tickets
+          WHERE project_id = ${targetProjectId}
+          AND created_at >= ${dateRanges.previousMonthStart}
+          AND created_at < ${dateRanges.currentMonthStart}
+        `);
+        const previousProjectTickets = previousProjectTicketsResult.rows;
 
         // Team Members in Project
-        const { data: projectTeamMembers, error: teamMembersError } = await supabase
-          .from('user_project')
-          .select(`
-            user_id, role_id,
-            users!inner(id, name, email),
-            global_roles!user_project_role_id_fkey(name)
-          `)
-          .eq('project_id', targetProjectId);
+        const projectTeamMembersResult = await db.execute<{
+          user_id: string;
+          role_id: string;
+          id: string;
+          name: string;
+          email: string;
+          role_name: string;
+        }>(sql`
+          SELECT 
+            up.user_id, up.role_id,
+            u.id, u.name, u.email,
+            gr.name as role_name
+          FROM user_project up
+          INNER JOIN users u ON up.user_id = u.id
+          LEFT JOIN global_roles gr ON up.role_id = gr.id
+          WHERE up.project_id = ${targetProjectId}
+        `);
+        const projectTeamMembers = projectTeamMembersResult.rows;
+        const teamMembersError = null;
 
         if (teamMembersError) {
           console.error('❌ Error fetching project team members:', teamMembersError);
@@ -741,37 +1134,64 @@ export async function GET(req: Request) {
         });
 
         // Completion Rate (tickets with 'completed' status) - for all project tickets
-        const { data: completedTickets } = await supabase
-          .from('tickets')
-          .select('id, statuses!inner(name)')
-          .eq('project_id', targetProjectId);
+        const completedTicketsResult = await db.execute<{
+          id: string;
+          status_name: string;
+        }>(sql`
+          SELECT t.id, s.name as status_name
+          FROM tickets t
+          INNER JOIN statuses s ON t.status_id = s.id
+          WHERE t.project_id = ${targetProjectId}
+        `);
+        const completedTickets = completedTicketsResult.rows;
 
         const completionRate = projectTickets?.length ? 
-          ((completedTickets?.filter(t => (t as any).statuses?.name?.toLowerCase().includes('complete') || 
-                                            (t as any).statuses?.name?.toLowerCase().includes('done')).length || 0) / 
+          ((completedTickets?.filter((t: any) => t.status_name?.toLowerCase().includes('complete') || 
+                                            t.status_name?.toLowerCase().includes('done')).length || 0) / 
            projectTickets.length * 100).toFixed(0) : 0;
 
         // Recent Project Activity - First get count for pagination
-        const { count: totalProjectTickets } = await supabase
-          .from('tickets')
-          .select('id', { count: 'exact', head: true })
-          .eq('project_id', targetProjectId);
+        const totalProjectTicketsCountResult = await db.execute<{ count: number }>(sql`
+          SELECT COUNT(*) as count
+          FROM tickets
+          WHERE project_id = ${targetProjectId}
+        `);
+        const totalProjectTickets = totalProjectTicketsCountResult.rows[0]?.count || 0;
         console.log('🔢 MANAGER COUNT DEBUG:', { totalProjectTickets, targetProjectId, page, limit });
         
         // Then get paginated results
-        const { data: recentProjectTickets } = await supabase
-          .from('tickets')
-          .select(`
-            id, title, created_at, status_id, 
-            created_by, assigned_to,
-            creator:users!tickets_created_by_fkey(name),
-            assignee:users!tickets_assigned_to_fkey(name),
-            statuses!tickets_status_id_fkey(name, color_code),
-            priorities!tickets_priority_id_fkey(name, color_code)
-          `)
-          .eq('project_id', targetProjectId)
-          .order('created_at', { ascending: false })
-          .range(offset, offset + limit - 1);
+        const recentProjectTicketsResult = await db.execute<{
+          id: string;
+          title: string;
+          created_at: string;
+          status_id: string;
+          created_by: string;
+          assigned_to: string;
+          creator_name: string;
+          assignee_name: string;
+          status_name: string;
+          status_color: string;
+          priority_name: string;
+          priority_color: string;
+        }>(sql`
+          SELECT 
+            t.id, t.title, t.created_at, t.status_id,
+            t.created_by, t.assigned_to,
+            creator.name as creator_name,
+            assignee.name as assignee_name,
+            s.name as status_name, s.color_code as status_color,
+            pr.name as priority_name, pr.color_code as priority_color
+          FROM tickets t
+          LEFT JOIN users creator ON t.created_by = creator.id
+          LEFT JOIN users assignee ON t.assigned_to = assignee.id
+          LEFT JOIN statuses s ON t.status_id = s.id
+          LEFT JOIN priorities pr ON t.priority_id = pr.id
+          WHERE t.project_id = ${targetProjectId}
+          ORDER BY t.created_at DESC
+          LIMIT ${limit}
+          OFFSET ${offset}
+        `);
+        const recentProjectTickets = recentProjectTicketsResult.rows;
         
         // Calculate pagination metadata for manager
         const totalPages = Math.ceil((totalProjectTickets || 0) / limit);
@@ -810,49 +1230,50 @@ export async function GET(req: Request) {
           }
         };
 
-        metrics.recentActivity = recentProjectTickets?.map(ticket => ({
+        metrics.recentActivity = recentProjectTickets?.map((ticket: any) => ({
           id: ticket.id,
           title: ticket.title,
-          status: (ticket as any).statuses?.name || 'Unknown',
+          status: ticket.status_name || 'Unknown',
           time: formatTimeAgo(ticket.created_at),
-          assignedTo: (ticket as any).assignee?.name || 'Unassigned',
-          createdBy: (ticket as any).creator?.name || 'Unknown',
-          assigned_to: (ticket as any).assignee?.name || 'Unassigned', // Alternative field name
-          created_by: (ticket as any).creator?.name || 'Unknown', // Alternative field name
-          priority: (ticket as any).priorities?.name || 'Medium',
-          priorityColor: (ticket as any).priorities?.color_code || '#6B7280'
+          assignedTo: ticket.assignee_name || 'Unassigned',
+          createdBy: ticket.creator_name || 'Unknown',
+          assigned_to: ticket.assignee_name || 'Unassigned', // Alternative field name
+          created_by: ticket.creator_name || 'Unknown', // Alternative field name
+          priority: ticket.priority_name || 'Medium',
+          priorityColor: ticket.priority_color || '#6B7280'
         })) || [];
 
         // Add project-specific data
         metrics.quickStats = {
-          projectInfo: managedProjects?.find(mp => mp.project_id === targetProjectId),
-          availableProjects: managedProjects?.map(mp => ({
+          projectInfo: managedProjects?.find((mp: any) => mp.project_id === targetProjectId),
+          availableProjects: managedProjects?.map((mp: any) => ({
             id: mp.project_id,
-            name: (mp as any).projects?.name,
-            role: (mp as any).global_roles?.name
+            name: mp.project_name,
+            role: mp.role_name
           })) || []
         };
 
         // Get ticket counts for each team member
         const teamMemberTicketCounts = projectTeamMembers ? await Promise.all(
-          projectTeamMembers.map(async (member) => {
-            const { count } = await supabase
-              .from('tickets')
-              .select('id', { count: 'exact', head: true })
-              .eq('project_id', targetProjectId)
-              .eq('assigned_to', (member as any).users?.id);
-            return { userId: (member as any).users?.id, ticketCount: count || 0 };
+          projectTeamMembers.map(async (member: any) => {
+            const countResult = await db.execute<{ count: number }>(sql`
+              SELECT COUNT(*) as count
+              FROM tickets
+              WHERE project_id = ${targetProjectId}
+              AND assigned_to = ${member.id}
+            `);
+            return { userId: member.id, ticketCount: countResult.rows[0]?.count || 0 };
           })
         ) : [];
 
         // Add team members data with ticket counts
-        (metrics as any).teamMembers = projectTeamMembers?.map(member => {
-          const ticketCount = teamMemberTicketCounts.find(tc => tc.userId === (member as any).users?.id)?.ticketCount || 0;
+        (metrics as any).teamMembers = projectTeamMembers?.map((member: any) => {
+          const ticketCount = teamMemberTicketCounts.find((tc: any) => tc.userId === member.id)?.ticketCount || 0;
           return {
-            id: (member as any).users?.id,
-            name: (member as any).users?.name,
-            email: (member as any).users?.email,
-            role: (member as any).global_roles?.name,
+            id: member.id,
+            name: member.name,
+            email: member.email,
+            role: member.role_name,
             tickets: ticketCount,
             status: 'Active' // Default status
           };
@@ -862,35 +1283,67 @@ export async function GET(req: Request) {
         console.log('🔧 MANAGER ALL PROJECTS: Aggregating metrics for projects:', projectIds);
 
         // Get all tickets from managed projects (all time for total count)
-        const { data: allProjectTickets } = await supabase
-          .from('tickets')
-          .select('id, created_at, status_id, priority_id, project_id')
-          .in('project_id', projectIds);
+        const allProjectTicketsResult = await db.execute<{
+          id: string;
+          created_at: string;
+          status_id: string;
+          priority_id: string;
+          project_id: string;
+        }>(sql`
+          SELECT id, created_at, status_id, priority_id, project_id
+          FROM tickets
+          WHERE project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+        `);
+        const allProjectTickets = allProjectTicketsResult.rows;
         
         // Get current month tickets for comparison metrics
-        const { data: currentMonthAllTickets } = await supabase
-          .from('tickets')
-          .select('id, created_at, status_id, priority_id, project_id')
-          .in('project_id', projectIds)
-          .gte('created_at', dateRanges.currentMonthStart);
+        const currentMonthAllTicketsResult = await db.execute<{
+          id: string;
+          created_at: string;
+          status_id: string;
+          priority_id: string;
+          project_id: string;
+        }>(sql`
+          SELECT id, created_at, status_id, priority_id, project_id
+          FROM tickets
+          WHERE project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          AND created_at >= ${dateRanges.currentMonthStart}
+        `);
+        const currentMonthAllTickets = currentMonthAllTicketsResult.rows;
 
-        const { data: previousAllProjectTickets } = await supabase
-          .from('tickets')
-          .select('id')
-          .in('project_id', projectIds)
-          .gte('created_at', dateRanges.previousMonthStart)
-          .lt('created_at', dateRanges.currentMonthStart);
+        const previousAllProjectTicketsResult = await db.execute<{ id: string }>(sql`
+          SELECT id
+          FROM tickets
+          WHERE project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          AND created_at >= ${dateRanges.previousMonthStart}
+          AND created_at < ${dateRanges.currentMonthStart}
+        `);
+        const previousAllProjectTickets = previousAllProjectTicketsResult.rows;
 
         // Get all team members across managed projects
-        const { data: allProjectTeamMembers, error: allTeamMembersError } = await supabase
-          .from('user_project')
-          .select(`
-            user_id, role_id, project_id,
-            users!inner(id, name, email),
-            projects!inner(id, name),
-            global_roles!user_project_role_id_fkey(name)
-          `)
-          .in('project_id', projectIds);
+        const allProjectTeamMembersResult = await db.execute<{
+          user_id: string;
+          role_id: string;
+          project_id: string;
+          id: string;
+          name: string;
+          email: string;
+          project_name: string;
+          role_name: string;
+        }>(sql`
+          SELECT 
+            up.user_id, up.role_id, up.project_id,
+            u.id, u.name, u.email,
+            p.name as project_name,
+            gr.name as role_name
+          FROM user_project up
+          INNER JOIN users u ON up.user_id = u.id
+          INNER JOIN projects p ON up.project_id = p.id
+          LEFT JOIN global_roles gr ON up.role_id = gr.id
+          WHERE up.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+        `);
+        const allProjectTeamMembers = allProjectTeamMembersResult.rows;
+        const allTeamMembersError = null;
 
         if (allTeamMembersError) {
           console.error('❌ Error fetching all team members:', allTeamMembersError);
@@ -904,37 +1357,64 @@ export async function GET(req: Request) {
         });
 
         // Get completed tickets across all projects (all time)
-        const { data: allCompletedTickets } = await supabase
-          .from('tickets')
-          .select('id, statuses!inner(name)')
-          .in('project_id', projectIds);
+        const allCompletedTicketsResult = await db.execute<{
+          id: string;
+          status_name: string;
+        }>(sql`
+          SELECT t.id, s.name as status_name
+          FROM tickets t
+          INNER JOIN statuses s ON t.status_id = s.id
+          WHERE t.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+        `);
+        const allCompletedTickets = allCompletedTicketsResult.rows;
 
         const completionRate = allProjectTickets?.length ? 
-          ((allCompletedTickets?.filter(t => (t as any).statuses?.name?.toLowerCase().includes('complete') || 
-                                             (t as any).statuses?.name?.toLowerCase().includes('done')).length || 0) / 
+          ((allCompletedTickets?.filter((t: any) => t.status_name?.toLowerCase().includes('complete') || 
+                                             t.status_name?.toLowerCase().includes('done')).length || 0) / 
            allProjectTickets.length * 100).toFixed(0) : 0;
 
         // Get recent activity across all managed projects with pagination
-        const { count: totalAllProjectTickets } = await supabase
-          .from('tickets')
-          .select('id', { count: 'exact', head: true })
-          .in('project_id', projectIds);
+        const totalAllProjectTicketsResult = await db.execute<{ count: number }>(sql`
+          SELECT COUNT(*) as count
+          FROM tickets
+          WHERE project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+        `);
+        const totalAllProjectTickets = totalAllProjectTicketsResult.rows[0]?.count || 0;
 
         console.log('🔢 MANAGER ALL PROJECTS COUNT DEBUG:', { totalAllProjectTickets, projectIds, page, limit });
         
-        const { data: recentAllProjectTickets } = await supabase
-          .from('tickets')
-          .select(`
-            id, title, created_at, status_id, project_id,
-            created_by, assigned_to,
-            creator:users!tickets_created_by_fkey(name),
-            assignee:users!tickets_assigned_to_fkey(name),
-            statuses!tickets_status_id_fkey(name, color_code),
-            projects!inner(name)
-          `)
-          .in('project_id', projectIds)
-          .order('created_at', { ascending: false })
-          .range(offset, offset + limit - 1);
+        const recentAllProjectTicketsResult = await db.execute<{
+          id: string;
+          title: string;
+          created_at: string;
+          status_id: string;
+          project_id: string;
+          created_by: string;
+          assigned_to: string;
+          creator_name: string;
+          assignee_name: string;
+          status_name: string;
+          status_color: string;
+          project_name: string;
+        }>(sql`
+          SELECT 
+            t.id, t.title, t.created_at, t.status_id, t.project_id,
+            t.created_by, t.assigned_to,
+            creator.name as creator_name,
+            assignee.name as assignee_name,
+            s.name as status_name, s.color_code as status_color,
+            p.name as project_name
+          FROM tickets t
+          LEFT JOIN users creator ON t.created_by = creator.id
+          LEFT JOIN users assignee ON t.assigned_to = assignee.id
+          LEFT JOIN statuses s ON t.status_id = s.id
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE t.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          ORDER BY t.created_at DESC
+          LIMIT ${limit}
+          OFFSET ${offset}
+        `);
+        const recentAllProjectTickets = recentAllProjectTicketsResult.rows;
         
         // Calculate pagination metadata for all projects
         const totalPages = Math.ceil((totalAllProjectTickets || 0) / limit);
@@ -949,7 +1429,7 @@ export async function GET(req: Request) {
 
         // Unique team members count (remove duplicates)
         const uniqueTeamMembers = allProjectTeamMembers ? 
-          Array.from(new Set(allProjectTeamMembers.map(tm => tm.user_id))) : [];
+          Array.from(new Set(allProjectTeamMembers.map((tm: any) => tm.user_id))) : [];
 
         metrics.overview = {
           totalTickets: {
@@ -977,51 +1457,52 @@ export async function GET(req: Request) {
           }
         };
 
-        metrics.recentActivity = recentAllProjectTickets?.map(ticket => ({
+        metrics.recentActivity = recentAllProjectTickets?.map((ticket: any) => ({
           id: ticket.id,
           title: ticket.title,
-          status: (ticket as any).statuses?.name || 'Unknown',
+          status: ticket.status_name || 'Unknown',
           time: formatTimeAgo(ticket.created_at),
-          assignedTo: (ticket as any).assignee?.name || 'Unassigned',
-          createdBy: (ticket as any).creator?.name || 'Unknown',
-          assigned_to: (ticket as any).assignee?.name || 'Unassigned',
-          created_by: (ticket as any).creator?.name || 'Unknown',
-          projectName: (ticket as any).projects?.name || 'Unknown Project',
+          assignedTo: ticket.assignee_name || 'Unassigned',
+          createdBy: ticket.creator_name || 'Unknown',
+          assigned_to: ticket.assignee_name || 'Unassigned',
+          created_by: ticket.creator_name || 'Unknown',
+          projectName: ticket.project_name || 'Unknown Project',
           priority: 'Normal'
         })) || [];
 
         // Add aggregated project data
         metrics.quickStats = {
           projectInfo: null, // No specific project when viewing all
-          availableProjects: managedProjects?.map(mp => ({
+          availableProjects: managedProjects?.map((mp: any) => ({
             id: mp.project_id,
-            name: (mp as any).projects?.name,
-            role: (mp as any).global_roles?.name
+            name: mp.project_name,
+            role: mp.role_name
           })) || []
         };
 
         // Get ticket counts for each team member across all projects
         const allTeamMemberTicketCounts = allProjectTeamMembers ? await Promise.all(
-          allProjectTeamMembers.map(async (member) => {
-            const { count } = await supabase
-              .from('tickets')
-              .select('id', { count: 'exact', head: true })
-              .in('project_id', projectIds)
-              .eq('assigned_to', (member as any).users?.id);
-            return { userId: (member as any).users?.id, ticketCount: count || 0 };
+          allProjectTeamMembers.map(async (member: any) => {
+            const countResult = await db.execute<{ count: number }>(sql`
+              SELECT COUNT(*) as count
+              FROM tickets
+              WHERE project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+              AND assigned_to = ${member.id}
+            `);
+            return { userId: member.id, ticketCount: countResult.rows[0]?.count || 0 };
           })
         ) : [];
 
         // Add aggregated team members data with ticket counts
-        (metrics as any).teamMembers = allProjectTeamMembers?.map(member => {
-          const ticketCount = allTeamMemberTicketCounts.find(tc => tc.userId === (member as any).users?.id)?.ticketCount || 0;
+        (metrics as any).teamMembers = allProjectTeamMembers?.map((member: any) => {
+          const ticketCount = allTeamMemberTicketCounts.find((tc: any) => tc.userId === member.id)?.ticketCount || 0;
           return {
-            id: (member as any).users?.id,
-            name: (member as any).users?.name,
-            email: (member as any).users?.email,
-            role: (member as any).global_roles?.name,
+            id: member.id,
+            name: member.name,
+            email: member.email,
+            role: member.role_name,
             projectId: member.project_id,
-            projectName: (member as any).projects?.name || 'Unknown Project',
+            projectName: member.project_name || 'Unknown Project',
             tickets: ticketCount,
             status: 'Active' // Default status
           };
@@ -1056,40 +1537,81 @@ export async function GET(req: Request) {
       });
       
       // Get projects where user is assigned as member
-      let memberProjectsQuery = supabase
-        .from('user_project')
-        .select(`
-          project_id, role_id,
-          projects!inner(id, name, organization_id, project_department(department_id)),
-          global_roles!user_project_role_id_fkey(name)
-        `)
-        .eq('user_id', userId)
-        .eq('projects.organization_id', organizationId)
-        .order('projects(created_at)', { ascending: true });
+      let memberProjectsConditions = sql`
+        SELECT 
+          up.project_id, up.role_id,
+          p.id as project_id, p.name as project_name, p.organization_id,
+          pd.department_id,
+          gr.name as role_name
+        FROM user_project up
+        INNER JOIN projects p ON up.project_id = p.id
+        LEFT JOIN project_department pd ON p.id = pd.project_id
+        LEFT JOIN global_roles gr ON up.role_id = gr.id
+        WHERE up.user_id = ${userId}
+        AND p.organization_id = ${organizationId}
+        ORDER BY p.created_at ASC
+      `;
 
       // PRIORITY 1: If JWT has current project, show only that project
       if (currentProjectId) {
         console.log('✅ Member: Filtering by current project from JWT');
-        memberProjectsQuery = memberProjectsQuery.eq('project_id', currentProjectId);
+        memberProjectsConditions = sql`
+          SELECT 
+            up.project_id, up.role_id,
+            p.id as project_id, p.name as project_name, p.organization_id,
+            pd.department_id,
+            gr.name as role_name
+          FROM user_project up
+          INNER JOIN projects p ON up.project_id = p.id
+          LEFT JOIN project_department pd ON p.id = pd.project_id
+          LEFT JOIN global_roles gr ON up.role_id = gr.id
+          WHERE up.user_id = ${userId}
+          AND p.organization_id = ${organizationId}
+          AND up.project_id = ${currentProjectId}
+          ORDER BY p.created_at ASC
+        `;
       }
       // PRIORITY 2: Department filter (fallback only if no project in JWT)
       else if (userDepartmentId) {
         console.log('✅ Member: Filtering by department (fallback)');
-        memberProjectsQuery = memberProjectsQuery.filter('projects.project_department.department_id', 'eq', userDepartmentId);
+        memberProjectsConditions = sql`
+          SELECT 
+            up.project_id, up.role_id,
+            p.id as project_id, p.name as project_name, p.organization_id,
+            pd.department_id,
+            gr.name as role_name
+          FROM user_project up
+          INNER JOIN projects p ON up.project_id = p.id
+          LEFT JOIN project_department pd ON p.id = pd.project_id
+          LEFT JOIN global_roles gr ON up.role_id = gr.id
+          WHERE up.user_id = ${userId}
+          AND p.organization_id = ${organizationId}
+          AND pd.department_id = ${userDepartmentId}
+          ORDER BY p.created_at ASC
+        `;
       }
 
-      const { data: memberProjects, error: memberProjectsError } = await memberProjectsQuery;
+      const memberProjectsResult = await db.execute<{
+        project_id: string;
+        role_id: string;
+        project_name: string;
+        organization_id: string;
+        department_id: string;
+        role_name: string;
+      }>(memberProjectsConditions);
+      const memberProjects = memberProjectsResult.rows;
+      const memberProjectsError = null;
 
       console.log('🔧 MEMBER PROJECTS QUERY:', { memberProjects, memberProjectsError, userId, organizationId });
 
-      const projectIds = memberProjects?.map(mp => mp.project_id) || [];
+      const projectIds = memberProjects?.map((mp: any) => mp.project_id) || [];
       console.log('🔧 MEMBER DEBUG: Assigned projects:', projectIds, 'Selected project:', projectId);
 
       // Determine project IDs to show: JWT project > query param > all assigned
       const filteredProjectIds = currentProjectId 
         ? [currentProjectId]
         : (projectId && projectId !== 'all' 
-          ? projectIds.filter(id => id === projectId)
+          ? projectIds.filter((id: any) => id === projectId)
           : projectIds);
 
       console.log('🔧 MEMBER DEBUG: Filtered project IDs:', filteredProjectIds);
@@ -1100,63 +1622,119 @@ export async function GET(req: Request) {
         // Get tickets from assigned/filtered projects only
         console.log('🎯 MEMBER: Checking all tickets in projects:', filteredProjectIds);
         
-        const { data: memberTickets, error: memberTicketsError } = await supabase
-          .from('tickets')
-          .select('id, created_at, status_id, priority_id')
-          .in('project_id', filteredProjectIds);
+      const memberTicketsResult = await db.execute<{
+  id: string;
+  created_at: string;
+  status_id: string;
+  priority_id: string;
+}>(sql`
+  SELECT id, created_at, status_id, priority_id
+  FROM tickets
+  WHERE project_id = ANY(ARRAY[${sql.join(filteredProjectIds.map((id: string) => sql`${id}::uuid`), sql`, `)}])
+`);
+        const memberTickets = memberTicketsResult.rows;
+        const memberTicketsError = null;
 
         console.log('🎯 MEMBER: All tickets in projects result:', { memberTickets, memberTicketsError, count: memberTickets?.length });
         
         // Current month tickets from assigned/filtered projects
-        const { data: currentMonthMemberTickets } = await supabase
-          .from('tickets')
-          .select('id, created_at, status_id, priority_id')
-          .in('project_id', filteredProjectIds)
-          .gte('created_at', dateRanges.currentMonthStart);
+        const currentMonthMemberTicketsResult = await db.execute<{
+          id: string;
+          created_at: string;
+          status_id: string;
+          priority_id: string;
+        }>(sql`
+          SELECT id, created_at, status_id, priority_id
+          FROM tickets
+          WHERE project_id = ANY(ARRAY[${sql.join(filteredProjectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          AND created_at >= ${dateRanges.currentMonthStart}
+        `);
+        const currentMonthMemberTickets = currentMonthMemberTicketsResult.rows;
 
         // Previous month tickets for comparison
-        const { data: previousMemberTickets } = await supabase
-          .from('tickets')
-          .select('id')
-          .in('project_id', filteredProjectIds)
-          .gte('created_at', dateRanges.previousMonthStart)
-          .lt('created_at', dateRanges.currentMonthStart);
+        const previousMemberTicketsResult = await db.execute<{ id: string }>(sql`
+          SELECT id
+          FROM tickets
+          WHERE project_id = ANY(ARRAY[${sql.join(filteredProjectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          AND created_at >= ${dateRanges.previousMonthStart}
+          AND created_at < ${dateRanges.currentMonthStart}
+        `);
+        const previousMemberTickets = previousMemberTicketsResult.rows;
 
         // My assigned tickets
-        const { data: myAssignedTickets } = await supabase
-          .from('tickets')
-          .select('id, created_at, status_id, priority_id')
-          .in('project_id', filteredProjectIds)
-          .eq('assigned_to', userId);
+        const myAssignedTicketsResult = await db.execute<{
+          id: string;
+          created_at: string;
+          status_id: string;
+          priority_id: string;
+        }>(sql`
+          SELECT id, created_at, status_id, priority_id
+          FROM tickets
+          WHERE project_id = ANY(ARRAY[${sql.join(filteredProjectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          AND assigned_to = ${userId}
+        `);
+        const myAssignedTickets = myAssignedTicketsResult.rows;
 
         // My created tickets  
-        const { data: myCreatedTickets } = await supabase
-          .from('tickets')
-          .select('id, created_at, status_id, priority_id')
-          .in('project_id', filteredProjectIds)
-          .eq('created_by', userId);
+        const myCreatedTicketsResult = await db.execute<{
+          id: string;
+          created_at: string;
+          status_id: string;
+          priority_id: string;
+        }>(sql`
+          SELECT id, created_at, status_id, priority_id
+          FROM tickets
+          WHERE project_id = ANY(ARRAY[${sql.join(filteredProjectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          AND created_by = ${userId}
+        `);
+        const myCreatedTickets = myCreatedTicketsResult.rows;
 
         // Recent tickets from my projects with details
         console.log('🎯 MEMBER: Querying tickets for projects:', filteredProjectIds, 'offset:', offset, 'limit:', limit);
         
-        const { data: recentMemberTickets, error: recentTicketsError } = await supabase
-          .from('tickets')
-          .select(`
-            id, title, created_at, status_id, priority_id, assigned_to, created_by,
-            projects(name),
-            creator:users!tickets_created_by_fkey(name, email),
-            assignee:users!tickets_assigned_to_fkey(name, email),
-            statuses!tickets_status_id_fkey(name, color_code),
-            priorities!tickets_priority_id_fkey(name, color_code)
-          `)
-          .in('project_id', filteredProjectIds)
-          .order('created_at', { ascending: false })
-          .limit(limit);
+        const recentMemberTicketsResult = await db.execute<{
+          id: string;
+          title: string;
+          created_at: string;
+          status_id: string;
+          priority_id: string;
+          assigned_to: string;
+          created_by: string;
+          project_name: string;
+          creator_name: string;
+          creator_email: string;
+          assignee_name: string;
+          assignee_email: string;
+          status_name: string;
+          status_color: string;
+          priority_name: string;
+          priority_color: string;
+        }>(sql`
+          SELECT 
+            t.id, t.title, t.created_at, t.status_id, t.priority_id,
+            t.assigned_to, t.created_by,
+            p.name as project_name,
+            creator.name as creator_name, creator.email as creator_email,
+            assignee.name as assignee_name, assignee.email as assignee_email,
+            s.name as status_name, s.color_code as status_color,
+            pr.name as priority_name, pr.color_code as priority_color
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          LEFT JOIN users creator ON t.created_by = creator.id
+          LEFT JOIN users assignee ON t.assigned_to = assignee.id
+          LEFT JOIN statuses s ON t.status_id = s.id
+          LEFT JOIN priorities pr ON t.priority_id = pr.id
+          WHERE t.project_id = ANY(ARRAY[${sql.join(filteredProjectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          ORDER BY t.created_at DESC
+          LIMIT ${limit}
+        `);
+        const recentMemberTickets = recentMemberTicketsResult.rows;
+        const recentTicketsError = null;
 
         console.log('🎯 MEMBER: Recent tickets query result:', { recentMemberTickets, recentTicketsError });
 
         // Calculate completion rate for member's tickets
-        const completedMemberTickets = myAssignedTickets?.filter(ticket => {
+        const completedMemberTickets = myAssignedTickets?.filter((ticket: any) => {
           // Assuming status_id check - you might need to adjust based on your statuses
           return (ticket as any).statuses?.name === 'Completed' || (ticket as any).statuses?.name === 'Closed';
         }) || [];
@@ -1190,18 +1768,18 @@ export async function GET(req: Request) {
 
         console.log('🎯 MEMBER: recentMemberTickets raw data:', recentMemberTickets);
 
-        metrics.recentActivity = recentMemberTickets?.map(ticket => ({
+        metrics.recentActivity = recentMemberTickets?.map((ticket: any) => ({
           id: ticket.id,
           title: ticket.title,
-          status: (ticket as any).statuses?.name || 'Unknown',
+          status: ticket.status_name || 'Unknown',
           time: formatTimeAgo(ticket.created_at),
-          project: (ticket as any).projects?.name || 'Unknown Project',
-          assignedTo: (ticket as any).assignee?.name || 'Unassigned',
-          createdBy: (ticket as any).creator?.name || 'Unknown',
-          assigned_to: (ticket as any).assignee?.name || 'Unassigned',
-          created_by: (ticket as any).creator?.name || 'Unknown',
-          priority: (ticket as any).priorities?.name || 'Medium',
-          priorityColor: (ticket as any).priorities?.color_code || '#6B7280'
+          project: ticket.project_name || 'Unknown Project',
+          assignedTo: ticket.assignee_name || 'Unassigned',
+          createdBy: ticket.creator_name || 'Unknown',
+          assigned_to: ticket.assignee_name || 'Unassigned',
+          created_by: ticket.creator_name || 'Unknown',
+          priority: ticket.priority_name || 'Medium',
+          priorityColor: ticket.priority_color || '#6B7280'
         })) || [];
 
         console.log('🎯 MEMBER: Formatted recentActivity:', metrics.recentActivity);
@@ -1209,10 +1787,10 @@ export async function GET(req: Request) {
         // Add member-specific data
         metrics.quickStats = {
           memberInfo: {
-            assignedProjects: memberProjects?.map(mp => ({
+            assignedProjects: memberProjects?.map((mp: any) => ({
               id: mp.project_id,
-              name: (mp as any).projects?.name,
-              role: (mp as any).global_roles?.name
+              name: mp.project_name,
+              role: mp.role_name
             })) || [],
             totalProjectTickets: memberTickets?.length || 0,
             myTicketRatio: myAssignedTickets?.length ? 
@@ -1260,15 +1838,52 @@ export async function GET(req: Request) {
     }
 
     // Chart data (simplified - could be more sophisticated)
-    const { data: weeklyTickets } = await supabase
-      .from('tickets')
-      .select('created_at, projects!inner(organization_id)')
-      .eq('projects.organization_id', organizationId)
-      .gte('created_at', dateRanges.currentWeekStart)
-      .order('created_at');
+    let weeklyTicketsConditions = sql`
+      SELECT t.created_at
+      FROM tickets t
+      INNER JOIN projects p ON t.project_id = p.id
+      WHERE p.organization_id = ${organizationId}
+      AND t.created_at >= ${dateRanges.currentWeekStart}
+      ORDER BY t.created_at
+    `;
+    
+    // Filter by department if department admin
+    if ((isDeptOnlyAdmin || departmentRole === 'Admin') && userDepartmentId && !currentProjectId && !projectId) {
+      const deptProjectIdsResult = await db.execute<{ project_id: string }>(sql`
+        SELECT project_id FROM project_department
+        WHERE department_id = ${userDepartmentId}
+      `);
+      
+      const projectIds = deptProjectIdsResult.rows.map((p: any) => p.project_id) || [];
+      if (projectIds.length > 0) {
+        weeklyTicketsConditions = sql`
+          SELECT t.created_at
+          FROM tickets t
+          INNER JOIN projects p ON t.project_id = p.id
+          WHERE p.organization_id = ${organizationId}
+          AND t.project_id = ANY(ARRAY[${sql.join(projectIds.map((id: any) => sql`${id}::uuid`), sql`, `)}])
+          AND t.created_at >= ${dateRanges.currentWeekStart}
+          ORDER BY t.created_at
+        `;
+      } else {
+        // Department admin with no projects - return empty
+        weeklyTicketsConditions = sql`
+          SELECT t.created_at
+          FROM tickets t
+          WHERE t.project_id = '00000000-0000-0000-0000-000000000000'
+          AND t.created_at >= ${dateRanges.currentWeekStart}
+          ORDER BY t.created_at
+        `;
+      }
+    }
+    
+    const weeklyTicketsResult = await db.execute<{
+      created_at: string;
+    }>(weeklyTicketsConditions);
+    const weeklyTickets = weeklyTicketsResult.rows;
 
     // Group by day for chart
-    const chartData = weeklyTickets?.reduce((acc: any, ticket) => {
+    const chartData = weeklyTickets?.reduce((acc: any, ticket: any) => {
       const day = new Date(ticket.created_at).toLocaleDateString('en-US', { weekday: 'short' });
       acc[day] = (acc[day] || 0) + 1;
       return acc;
@@ -1284,7 +1899,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       success: true,
       data: metrics,
-      userRole: isAdmin ? 'admin' : 'manager',
+      userRole: actualUserRole.toLowerCase(),
       organizationId
     }, { status: 200 });
 

@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, departments, users, globalRoles, userDepartmentRoles, invitations, eq, inArray, and, sql } from '@/lib/db-helper';
 import { InvitationEmailService } from '../../../lib/invitationEmailService';
+import crypto from 'crypto';
 
 const invitationService = new InvitationEmailService();
 
 interface TeamMember {
   email: string;
   department: string;
+  name?: string;
+  role?: string;
+  phone?: string;
 }
 
 export async function POST(request: NextRequest) {
@@ -33,22 +38,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!supabase) {
-      return NextResponse.json(
-        { error: 'Database configuration error' },
-        { status: 500 }
-      );
-    }
-
     // Get organization details
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('name, domain, associated_departments')
-      .eq('id', orgId)
-      .single();
+    const orgResults = await db.select({
+      name: organizations.name,
+      domain: organizations.domain,
+      associatedDepartments: organizations.associatedDepartments
+    })
+      .from(organizations)
+      .where(eq(organizations.id, orgId))
+      .limit(1);
+    
+    const organization = orgResults[0];
 
-    if (orgError || !organization) {
-      console.error('Error fetching organization:', orgError);
+    if (!organization) {
+      console.error('Error fetching organization');
       return NextResponse.json(
         { error: 'Organization not found' },
         { status: 404 }
@@ -77,14 +80,18 @@ export async function POST(request: NextRequest) {
 
     // Get department details for validation and email content
     const departmentIds = validMembers.map(m => m.department);
-    const { data: departments, error: deptError } = await supabase
-      .from('departments')
-      .select('id, name')
-      .in('id', departmentIds)
-      .eq('is_active', true);
+    const depts = await db.select({
+      id: departments.id,
+      name: departments.name
+    })
+      .from(departments)
+      .where(and(
+        inArray(departments.id, departmentIds),
+        eq(departments.isActive, true)
+      ));
 
-    if (deptError || !departments) {
-      console.error('Error fetching departments:', deptError);
+    if (!depts || depts.length === 0) {
+      console.error('Error fetching departments');
       return NextResponse.json(
         { error: 'Failed to validate departments' },
         { status: 500 }
@@ -92,57 +99,71 @@ export async function POST(request: NextRequest) {
     }
 
     // Create department lookup map
-    const departmentMap = departments.reduce((map: Record<string, string>, dept: any) => {
+    const departmentMap = depts.reduce((map: Record<string, string>, dept: any) => {
       map[dept.id] = dept.name;
       return map;
     }, {} as Record<string, string>);
 
     // Check for existing users WITH their department associations
     const emails = validMembers.map(m => m.email.toLowerCase());
-    const { data: existingUsers } = await supabase
-      .from('users')
-      .select('id, email, name, department_id')
-      .in('email', emails);
+    
+    // Fix: Use inArray helper or cast to array properly
+    const existingUsers = await db.select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      departmentId: users.departmentId
+    })
+      .from(users)
+      .where(sql`LOWER(${users.email}) = ANY(${sql.raw(`ARRAY[${emails.map(e => `'${e}'`).join(',')}]`)})`);
 
     // Create map of existing users: email -> user data
     const existingUserMap = new Map(
-      existingUsers?.map((u: any) => [u.email.toLowerCase(), u]) || []
+      existingUsers?.map((u) => [u.email.toLowerCase(), u]) || []
     );
 
     // Also check user_department_roles for all department associations
-    const userIds = existingUsers?.map((u: any) => u.id) || [];
-    const { data: userDeptRoles } = userIds.length > 0 ? await supabase
-      .from('user_department_roles')
-      .select('user_id, department_id')
-      .in('user_id', userIds)
-      .eq('organization_id', orgId)
-      : { data: [] };
+    const userIds = existingUsers?.map((u) => u.id) || [];
+    const userDeptRoles = userIds.length > 0 ? await db.select({
+      userId: userDepartmentRoles.userId,
+      departmentId: userDepartmentRoles.departmentId
+    })
+      .from(userDepartmentRoles)
+      .where(and(
+        inArray(userDepartmentRoles.userId, userIds),
+        eq(userDepartmentRoles.organizationId, orgId)
+      ))
+      : [];
 
     // Create map of user departments: userId -> Set of department IDs
     const userDepartmentsMap = new Map<string, Set<string>>();
-    userDeptRoles?.forEach((role: any) => {
-      if (!userDepartmentsMap.has(role.user_id)) {
-        userDepartmentsMap.set(role.user_id, new Set());
+    userDeptRoles?.forEach((role) => {
+      if (!userDepartmentsMap.has(role.userId)) {
+        userDepartmentsMap.set(role.userId, new Set());
       }
-      userDepartmentsMap.get(role.user_id)?.add(role.department_id);
+      userDepartmentsMap.get(role.userId)?.add(role.departmentId);
     });
 
     // Check for existing invitations
-    const { data: existingInvitations } = await supabase
-      .from('invitations')
-      .select('email, department_id')
-      .eq('organization_id', orgId)
-      .in('email', emails)
-      .eq('status', 'pending');
+    const existingInvs = await db.select({
+      email: invitations.email,
+      departmentId: invitations.departmentId
+    })
+      .from(invitations)
+      .where(and(
+        eq(invitations.organizationId, orgId),
+        inArray(invitations.email, emails),
+        eq(invitations.status, 'pending')
+      ));
 
     // Create map of pending invitations: email -> Set of department IDs
     const existingInvitationMap = new Map<string, Set<string>>();
-    existingInvitations?.forEach((inv: any) => {
+    existingInvs?.forEach((inv) => {
       const email = inv.email.toLowerCase();
       if (!existingInvitationMap.has(email)) {
         existingInvitationMap.set(email, new Set());
       }
-      existingInvitationMap.get(email)?.add(inv.department_id);
+      existingInvitationMap.get(email)?.add(inv.departmentId);
     });
     
     // Send invitations
@@ -173,24 +194,25 @@ export async function POST(request: NextRequest) {
           const departmentName = departmentMap[memberDeptId];
           
           // Get Member role for adding to new department
-          const { data: memberRole } = await supabase
-            .from("global_roles")
-            .select("id")
-            .eq("name", "Member")
-            .single();
+          const memberRoleResults = await db.select({
+            id: globalRoles.id
+          })
+            .from(globalRoles)
+            .where(eq(globalRoles.name, 'Member'))
+            .limit(1);
+          
+          const memberRole = memberRoleResults[0];
 
           if (memberRole) {
             // Add user to new department directly
-            const { error: deptRoleError } = await supabase
-              .from("user_department_roles")
-              .insert({
-                user_id: existingUser.id,
-                department_id: memberDeptId,
-                organization_id: orgId,
-                role_id: memberRole.id
+            try {
+              await db.insert(userDepartmentRoles).values({
+                userId: existingUser.id,
+                departmentId: memberDeptId,
+                organizationId: orgId,
+                roleId: memberRole.id
               });
-
-            if (deptRoleError) {
+            } catch (deptRoleError) {
               console.error("Failed to add existing user to department:", deptRoleError);
               results.push({
                 email: member.email,
@@ -248,21 +270,24 @@ export async function POST(request: NextRequest) {
         }
 
         // Save invitation to database first
-        const { data: invitation, error: inviteError } = await supabase
-          .from('invitations')
-          .insert({
-            organization_id: orgId,
-            department_id: member.department,
-            email: member.email.toLowerCase(),
-            name: member.name,
-            job_title: member.role,
-            phone: member.phone || null
-          })
-          .select()
-          .single();
+        const invitationToken = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
-        if (inviteError) {
-          console.error('Error saving invitation:', inviteError);
+        const invitationResults = await db.insert(invitations).values({
+          organizationId: orgId,
+          departmentId: member.department,
+          email: member.email.toLowerCase(),
+          name: member.name,
+          jobTitle: member.role,
+          phone: member.phone || null,
+          invitationToken: invitationToken,
+          expiresAt: expiresAt
+        }).returning();
+
+        const invitation = invitationResults[0];
+
+        if (!invitation) {
+          console.error('Error saving invitation');
           results.push({
             email: member.email,
             success: false,
@@ -280,7 +305,7 @@ export async function POST(request: NextRequest) {
           orgId: orgId,
           departmentId: member.department,
           jobTitle: member.role,
-          invitationToken: invitation.invitation_token
+          invitationToken: invitation.invitationToken
         });
 
         if (emailResult.success) {
@@ -291,10 +316,8 @@ export async function POST(request: NextRequest) {
           });
         } else {
           // If email fails, remove the invitation from database
-          await supabase
-            .from('invitations')
-            .delete()
-            .eq('id', invitation.id);
+          await db.delete(invitations)
+            .where(eq(invitations.id, invitation.id));
           
           results.push({
             email: member.email,

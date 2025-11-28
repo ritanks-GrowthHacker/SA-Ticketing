@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, statuses, priorities, globalRoles, departments, eq, or, sql, asc, and } from "@/lib/db-helper";
 
 export async function GET(req: Request) {
   try {
@@ -36,110 +37,113 @@ export async function GET(req: Request) {
     let responseData: any = {};
 
     if (entityType === 'statuses' || entityType === 'all') {
-      let statusQuery = supabase
-        .from("statuses")
-        .select("id, name, type, color_code, sort_order, is_active, created_at")
-        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true })
-        .order("name", { ascending: true });
+      let statusesData = await db
+        .select()
+        .from(statuses)
+        .where(and(
+          or(
+            eq(statuses.organizationId, organizationId),
+            sql`${statuses.organizationId} IS NULL`
+          ),
+          eq(statuses.isActive, true)
+        ))
+        .orderBy(asc(statuses.sortOrder), asc(statuses.name));
 
       if (type && (type === 'ticket' || type === 'priority')) {
-        statusQuery = statusQuery.eq("type", type);
-      }
-
-      const { data: statuses, error: statusError } = await statusQuery;
-
-      if (statusError) {
-        console.error("Status fetch error:", statusError);
-        return NextResponse.json(
-          { error: "Failed to fetch statuses" }, 
-          { status: 500 }
-        );
+        statusesData = statusesData.filter(s => s.type === type);
       }
 
       // Get priorities from priorities table for backward compatibility
-      const { data: prioritiesFromTable } = await supabase
-        .from("priorities")
-        .select("id, name, description, color_code, sort_order, is_active, created_at")
-        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true });
+      const prioritiesFromTable = await db
+        .select()
+        .from(priorities)
+        .where(and(
+          or(
+            eq(priorities.organizationId, organizationId),
+            sql`${priorities.organizationId} IS NULL`
+          ),
+          eq(priorities.isActive, true)
+        ))
+        .orderBy(asc(priorities.sortOrder));
 
       // Map priorities to match status structure
-      const prioritiesAsStatuses = (prioritiesFromTable || []).map((p: any) => ({
+      const prioritiesAsStatuses = prioritiesFromTable.map((p: any) => ({
         id: p.id,
         name: p.name,
         type: 'priority',
-        color_code: p.color_code,
-        sort_order: p.sort_order,
-        is_active: p.is_active,
-        created_at: p.created_at
+        color_code: p.colorCode,
+        sort_order: p.sortOrder,
+        is_active: p.isActive,
+        created_at: p.createdAt?.toISOString()
       }));
 
       responseData.statuses = {
-        ticket: statuses?.filter((s: any) => s.type === 'ticket') || [],
+        ticket: statusesData.filter((s: any) => s.type === 'ticket').map(s => ({
+          ...s,
+          color_code: s.colorCode,
+          sort_order: s.sortOrder,
+          is_active: s.isActive,
+          created_at: s.createdAt?.toISOString()
+        })),
         priority: prioritiesAsStatuses,
-        all: [...(statuses || []), ...prioritiesAsStatuses]
+        all: [...statusesData.map(s => ({
+          ...s,
+          color_code: s.colorCode,
+          sort_order: s.sortOrder,
+          is_active: s.isActive,
+          created_at: s.createdAt?.toISOString()
+        })), ...prioritiesAsStatuses]
       };
     }
 
     if (entityType === 'roles' || entityType === 'all') {
-      const { data: roles, error: rolesError } = await supabase
-        .from("global_roles")
-        .select("id, name, description, created_at")
-        .order("name", { ascending: true });
+      const roles = await db
+        .select()
+        .from(globalRoles)
+        .orderBy(asc(globalRoles.name));
 
-      if (rolesError) {
-        console.error("Global roles fetch error:", rolesError);
-        return NextResponse.json(
-          { error: "Failed to fetch global roles" }, 
-          { status: 500 }
-        );
-      }
-
-      responseData.roles = roles || [];
+      responseData.roles = roles.map(r => ({
+        ...r,
+        created_at: r.createdAt?.toISOString()
+      }));
     }
 
     if (entityType === 'departments' || entityType === 'all') {
-      // Fetch departments from departments table
-      const { data: departments, error: deptError } = await supabase
-        .from("departments")
-        .select("id, name, description, color_code, sort_order, is_active, created_at")
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true })
-        .order("name", { ascending: true });
+      const depts = await db
+        .select()
+        .from(departments)
+        .where(eq(departments.isActive, true))
+        .orderBy(asc(departments.sortOrder), asc(departments.name));
 
-      if (deptError) {
-        console.error("Departments fetch error:", deptError);
-        return NextResponse.json(
-          { error: "Failed to fetch departments" }, 
-          { status: 500 }
-        );
-      }
-
-      responseData.departments = departments || [];
+      responseData.departments = depts.map(d => ({
+        ...d,
+        color_code: d.colorCode,
+        sort_order: d.sortOrder,
+        is_active: d.isActive,
+        created_at: d.createdAt?.toISOString()
+      }));
     }
 
     if (entityType === 'priorities' || entityType === 'all') {
-      // Fetch priorities from priorities table
-      const { data: priorities, error: priorityError } = await supabase
-        .from("priorities")
-        .select("id, name, description, color_code, sort_order, is_active, created_at")
-        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
-        .eq("is_active", true)
-        .order("sort_order", { ascending: true })
-        .order("name", { ascending: true });
+      const prios = await db
+        .select()
+        .from(priorities)
+        .where(and(
+          or(
+            eq(priorities.organizationId, organizationId),
+            sql`${priorities.organizationId} IS NULL`
+          ),
+          eq(priorities.isActive, true)
+        ))
+        .orderBy(asc(priorities.sortOrder), asc(priorities.name));
 
-      if (priorityError) {
-        console.error("Priorities fetch error:", priorityError);
-        return NextResponse.json(
-          { error: "Failed to fetch priorities" }, 
-          { status: 500 }
-        );
-      }
-
-      responseData.priorities = priorities || [];
+      responseData.priorities = prios.map(p => ({
+        ...p,
+        color_code: p.colorCode,
+        sort_order: p.sortOrder,
+        is_active: p.isActive,
+        created_at: p.createdAt?.toISOString()
+      }));
     }
 
     const response = {
@@ -234,49 +238,64 @@ export async function POST(req: Request) {
           );
         }
 
-        const { data: newStatus, error: statusError } = await supabase
-          .from("statuses")
-          .insert([{
-            organization_id: userInfo.org_id,
+        const newStatus = await db
+          .insert(statuses)
+          .values({
+            organizationId: userInfo.org_id,
             name,
             type,
-            color_code: color_code || "#6B7280",
-            sort_order: sort_order || 0,
-            is_active: true
-          }])
-          .select("id, name, type, color_code, sort_order, is_active, created_at")
-          .single();
+            colorCode: color_code || "#6B7280",
+            sortOrder: sort_order || 0,
+            isActive: true,
+            createdAt: new Date()
+          })
+          .returning()
+          .then(rows => rows[0] || null);
 
-        newEntity = newStatus;
-        createError = statusError;
+        newEntity = newStatus ? {
+          ...newStatus,
+          color_code: newStatus.colorCode,
+          sort_order: newStatus.sortOrder,
+          is_active: newStatus.isActive,
+          created_at: newStatus.createdAt?.toISOString()
+        } : null;
+        createError = !newStatus;
         break;
 
       case 'role':
-        const { data: newRole, error: roleError } = await supabase
-          .from("global_roles")
-          .insert([{
+        const newRole = await db
+          .insert(globalRoles)
+          .values({
             name,
-            description: description || null
-          }])
-          .select("id, name, description, created_at")
-          .single();
+            description: description || null,
+            createdAt: new Date()
+          })
+          .returning()
+          .then(rows => rows[0] || null);
 
-        newEntity = newRole;
-        createError = roleError;
+        newEntity = newRole ? {
+          ...newRole,
+          created_at: newRole.createdAt?.toISOString()
+        } : null;
+        createError = !newRole;
         break;
 
       case 'department':
-        const { data: newDept, error: deptError } = await supabase
-          .from("departments")
-          .insert([{
-            organization_id: userInfo.org_id,
-            name
-          }])
-          .select("id, name, created_at, updated_at")
-          .single();
+        const newDept = await db
+          .insert(departments)
+          .values({
+            name,
+            createdAt: new Date()
+          })
+          .returning()
+          .then(rows => rows[0] || null);
 
-        newEntity = newDept;
-        createError = deptError;
+        newEntity = newDept ? {
+          ...newDept,
+          created_at: newDept.createdAt?.toISOString(),
+          updated_at: newDept.updatedAt?.toISOString()
+        } : null;
+        createError = !newDept;
         break;
 
       default:

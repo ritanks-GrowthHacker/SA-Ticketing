@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '../../db/connections';
+// import { supabase } from '../../db/connections';
+import { db, tickets, projects, userOrganizationRoles, userProject, globalRoles, ticketComments, notifications, activityLogs, eq, and } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -55,20 +56,22 @@ export async function DELETE(request: NextRequest) {
     console.log('🔧 Deleting ticket:', ticket_id);
 
     // Fetch the existing ticket to check permissions
-    const { data: existingTicket, error: fetchError } = await supabase
-      .from('tickets')
-      .select(`
-        id,
-        project_id,
-        created_by,
-        title,
-        projects!inner(id, name, organization_id)
-      `)
-      .eq('id', ticket_id)
-      .single();
+    const existingTicketData = await db.select({
+      id: tickets.id,
+      projectId: tickets.projectId,
+      createdBy: tickets.createdBy,
+      title: tickets.title,
+      projectName: projects.name,
+      projectOrgId: projects.organizationId
+    })
+      .from(tickets)
+      .innerJoin(projects, eq(tickets.projectId, projects.id))
+      .where(eq(tickets.id, ticket_id))
+      .limit(1)
+      .then(rows => rows[0]);
 
-    if (fetchError || !existingTicket) {
-      console.log('❌ Ticket not found:', fetchError);
+    if (!existingTicketData) {
+      console.log('❌ Ticket not found');
       return NextResponse.json(
         { error: 'Ticket not found' },
         { status: 404 }
@@ -76,8 +79,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Check if ticket belongs to user's organization
-    const project = (existingTicket as any).projects;
-    if (!project || project.organization_id !== decoded.org_id) {
+    if (existingTicketData.projectOrgId !== decoded.org_id) {
       return NextResponse.json(
         { error: 'Access denied - Ticket not found in your organization' },
         { status: 403 }
@@ -85,17 +87,20 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Get user's organization role
-    const { data: userOrgRole } = await supabase
-      .from('user_organization_roles')
-      .select(`
-        role_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq('user_id', decoded.sub)
-      .eq('organization_id', decoded.org_id)
-      .single();
+    const userOrgRole = await db.select({
+      roleId: userOrganizationRoles.roleId,
+      roleName: globalRoles.name
+    })
+      .from(userOrganizationRoles)
+      .innerJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(and(
+        eq(userOrganizationRoles.userId, decoded.sub),
+        eq(userOrganizationRoles.organizationId, decoded.org_id)
+      ))
+      .limit(1)
+      .then(rows => rows[0]);
 
-    const actualUserRole = (userOrgRole?.global_roles as any)?.name || decoded.role;
+    const actualUserRole = userOrgRole?.roleName || decoded.role;
     console.log('🔧 User role:', actualUserRole);
 
     // Check delete permissions
@@ -107,24 +112,28 @@ export async function DELETE(request: NextRequest) {
       canDelete = true;
     } else {
       // Check if user is the creator
-      const isCreator = existingTicket.created_by === decoded.sub;
+      const isCreator = existingTicketData.createdBy === decoded.sub;
       
       if (isCreator) {
         console.log('✅ User is ticket creator - can delete');
         canDelete = true;
       } else {
         // Check if user is a Manager in this project
-        const { data: userProjectRole } = await supabase
-          .from('user_project')
-          .select(`
-            project_id, role_id,
-            global_roles!user_project_role_id_fkey(name)
-          `)
-          .eq('user_id', decoded.sub)
-          .eq('project_id', existingTicket.project_id)
-          .single();
+        const userProjectRole = await db.select({
+          projectId: userProject.projectId,
+          roleId: userProject.roleId,
+          roleName: globalRoles.name
+        })
+          .from(userProject)
+          .innerJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+          .where(and(
+            eq(userProject.userId, decoded.sub),
+            eq(userProject.projectId, existingTicketData.projectId)
+          ))
+          .limit(1)
+          .then(rows => rows[0]);
 
-        if (userProjectRole && (userProjectRole as any).global_roles?.name === 'Manager') {
+        if (userProjectRole && userProjectRole.roleName === 'Manager') {
           console.log('✅ User is project Manager - can delete');
           canDelete = true;
         }
@@ -139,33 +148,27 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Delete related data first (due to foreign key constraints)
-    // Delete ticket activities
-    await supabase
-      .from('ticket_activities')
-      .delete()
-      .eq('ticket_id', ticket_id);
-
     // Delete ticket comments if any
-    await supabase
-      .from('ticket_comments')
-      .delete()
-      .eq('ticket_id', ticket_id);
+    await db.delete(ticketComments)
+      .where(eq(ticketComments.ticketId, ticket_id))
+      .catch(err => console.log('No comments to delete:', err));
 
     // Delete notifications related to this ticket
-    await supabase
-      .from('notifications')
-      .delete()
-      .eq('entity_type', 'ticket')
-      .eq('entity_id', ticket_id);
+    await db.delete(notifications)
+      .where(and(
+        eq(notifications.entityType, 'ticket'),
+        eq(notifications.entityId, ticket_id)
+      ))
+      .catch(err => console.log('No notifications to delete:', err));
 
     // Delete the ticket
-    const { error: deleteError } = await supabase
-      .from('tickets')
-      .delete()
-      .eq('id', ticket_id);
+    const deletedTicket = await db.delete(tickets)
+      .where(eq(tickets.id, ticket_id))
+      .returning()
+      .then(rows => rows[0]);
 
-    if (deleteError) {
-      console.error('Error deleting ticket:', deleteError);
+    if (!deletedTicket) {
+      console.error('Error deleting ticket');
       return NextResponse.json(
         { error: 'Failed to delete ticket' },
         { status: 500 }
@@ -173,18 +176,18 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Log activity
-    await supabase
-      .from('activity_logs')
-      .insert({
-        user_id: decoded.sub,
-        entity_type: 'ticket',
-        entity_id: ticket_id,
+    await db.insert(activityLogs)
+      .values({
+        userId: decoded.sub,
+        entityType: 'ticket',
+        entityId: ticket_id,
         action: 'deleted',
         details: {
-          ticket_title: existingTicket.title,
-          project_name: project.name
+          ticket_title: existingTicketData.title,
+          project_name: existingTicketData.projectName
         }
-      });
+      })
+      .catch(err => console.error('Activity log error:', err));
 
     console.log('✅ Ticket deleted successfully:', ticket_id);
 

@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, departments, eq, inArray } from '@/lib/db-helper';
 import { OTPService } from '@/lib/otpService';
 
 // Temporary storage for pending registrations (in production, use Redis or database temp table)
-const pendingRegistrations = new Map();
+// Use global to persist across hot reloads in development
+const globalForPendingRegs = global as typeof global & {
+  pendingRegistrations?: Map<string, any>;
+};
+
+if (!globalForPendingRegs.pendingRegistrations) {
+  globalForPendingRegs.pendingRegistrations = new Map();
+}
+
+const pendingRegistrations = globalForPendingRegs.pendingRegistrations;
 
 interface OnboardingRequest {
   organizationName: string;
@@ -49,26 +59,24 @@ export async function POST(req: NextRequest) {
     }
 
     // Check if username already exists in actual organizations table
-    const { data: existingUsername } = await supabase
-      .from('organizations')
-      .select('username')
-      .eq('username', username)
-      .single();
+    const existingUsernameResults = await db.select({ username: organizations.username })
+      .from(organizations)
+      .where(eq(organizations.username, username))
+      .limit(1);
 
-    if (existingUsername) {
+    if (existingUsernameResults.length > 0) {
       return NextResponse.json({ 
         error: 'Username already exists' 
       }, { status: 409 });
     }
 
     // Check if org email already exists in actual organizations table
-    const { data: existingEmail } = await supabase
-      .from('organizations')
-      .select('org_email')
-      .eq('org_email', orgEmail)
-      .single();
+    const existingEmailResults = await db.select({ orgEmail: organizations.orgEmail })
+      .from(organizations)
+      .where(eq(organizations.orgEmail, orgEmail))
+      .limit(1);
 
-    if (existingEmail) {
+    if (existingEmailResults.length > 0) {
       return NextResponse.json({ 
         error: 'Organization email already exists' 
       }, { status: 409 });
@@ -76,12 +84,11 @@ export async function POST(req: NextRequest) {
 
     // Validate selected departments exist (if any provided)
     if (selectedDepartments.length > 0) {
-      const { data: departments, error: deptError } = await supabase
-        .from('departments')
-        .select('id')
-        .in('id', selectedDepartments);
+      const deptResults = await db.select({ id: departments.id })
+        .from(departments)
+        .where(inArray(departments.id, selectedDepartments));
 
-      if (deptError || !departments || departments.length !== selectedDepartments.length) {
+      if (!deptResults || deptResults.length !== selectedDepartments.length) {
         return NextResponse.json({ 
           error: 'One or more selected departments do not exist' 
         }, { status: 400 });

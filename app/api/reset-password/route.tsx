@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, eq } from "@/lib/db-helper";
 import bcrypt from "bcrypt";
 
 interface ResetPasswordRequest {
@@ -48,13 +49,17 @@ export async function POST(req: Request) {
     console.log(`🔐 Resetting password for ${email}...`);
 
     // Get user
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, email")
-      .eq("email", email)
-      .single();
+    const user = await db
+      .select({
+        id: users.id,
+        email: users.email
+      })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (userError || !user) {
+    if (!user) {
       console.log(`❌ User not found for email: ${email}`);
       return NextResponse.json(
         { error: "User not found" }, 
@@ -69,22 +74,24 @@ export async function POST(req: Request) {
     console.log(`🔒 Generated password hash for ${email}`);
 
     // Update password in database
-    const { data: updatedUser, error: updateError } = await supabase
-      .from("users")
-      .update({
-        password_hash: hashedPassword,
-        updated_at: new Date().toISOString(),
+    const updatedUser = await db
+      .update(users)
+      .set({
+        passwordHash: hashedPassword,
+        updatedAt: new Date(),
         // Clear the OTP fields after successful password reset
         otp: null,
-        otp_expires_at: null,
-        otp_verified: false
+        otpExpiresAt: null
       })
-      .eq("id", user.id)
-      .select("id, email")
-      .single();
+      .where(eq(users.id, user.id))
+      .returning({
+        id: users.id,
+        email: users.email
+      })
+      .then(rows => rows[0] || null);
 
-    if (updateError) {
-      console.error("❌ Failed to update password:", updateError);
+    if (!updatedUser) {
+      console.error("❌ Failed to update password");
       return NextResponse.json(
         { error: "Failed to update password" }, 
         { status: 500 }

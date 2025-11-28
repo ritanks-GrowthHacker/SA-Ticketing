@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, quotes, clients, transactions, transactionLineItems, eq, and } from '@/lib/sales-db-helper';
 import { emailService } from '@/lib/emailService';
 import { emailTemplates } from '@/app/emailTemplates';
 
@@ -17,16 +17,30 @@ export async function POST(
     }
 
     // Verify token matches quote
-    const { data: quote, error: quoteError } = await supabaseAdminSales
-      .from('quotes')
-      .select('*, clients(*)')
-      .eq('quote_id', id)
-      .eq('magic_link_token', token)
-      .single();
+    const quoteResult = await salesDb
+      .select()
+      .from(quotes)
+      .where(
+        and(
+          eq(quotes.quoteId, id),
+          eq(quotes.magicLinkToken, token)
+        )
+      )
+      .limit(1);
 
-    if (quoteError || !quote) {
+    const quote = quoteResult[0];
+    if (!quote) {
       return NextResponse.json({ error: 'Invalid token or quote not found' }, { status: 404 });
     }
+
+    // Fetch client info
+    const clientResult = await salesDb
+      .select()
+      .from(clients)
+      .where(eq(clients.clientId, quote.clientId))
+      .limit(1);
+    
+    const client = clientResult[0];
 
     // Check if already accepted
     if (quote.status === 'accepted') {
@@ -34,8 +48,8 @@ export async function POST(
     }
 
     // Check if expired
-    if (quote.magic_link_expires_at) {
-      const expiryDate = new Date(quote.magic_link_expires_at);
+    if (quote.magicLinkExpiresAt) {
+      const expiryDate = new Date(quote.magicLinkExpiresAt);
       if (new Date() > expiryDate) {
         return NextResponse.json({ error: 'Quote has expired' }, { status: 410 });
       }
@@ -45,74 +59,75 @@ export async function POST(
     const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
     // Create transaction from quote
-    const { data: transaction, error: txnError } = await supabaseAdminSales
-      .from('transactions')
-      .insert({
-        organization_id: quote.organization_id,
-        client_id: quote.client_id,
-        sales_member_id: quote.created_by_user_id,
-        transaction_date: new Date().toISOString(),
-        invoice_number: invoiceNumber,
-        subtotal_amount: quote.quote_amount,
-        discount_percentage: 0,
-        discount_amount: 0,
-        tax_percentage: quote.tax_amount && quote.quote_amount ? ((quote.tax_amount / quote.quote_amount) * 100) : 0,
-        tax_amount: quote.tax_amount || 0,
-        total_amount: quote.total_amount,
+    const transactionResult = await salesDb
+      .insert(transactions)
+      .values({
+        organizationId: quote.organizationId,
+        clientId: quote.clientId,
+        salesMemberId: quote.createdByUserId,
+        transactionDate: new Date().toISOString().split('T')[0],
+        invoiceNumber,
+        subtotalAmount: quote.quoteAmount,
+        discountPercentage: '0',
+        discountAmount: '0',
+        taxPercentage: (quote.taxAmount && quote.quoteAmount) ? ((parseFloat(quote.taxAmount) / parseFloat(quote.quoteAmount)) * 100).toString() : '0',
+        taxAmount: quote.taxAmount || '0',
+        totalAmount: quote.totalAmount,
         currency: quote.currency || 'INR',
-        payment_status: 'pending',
-        amount_paid: 0,
-        amount_due: quote.total_amount,
-        notes: `Generated from Quote ${quote.quote_number} (Accepted via magic link)`
+        paymentStatus: 'pending',
+        amountPaid: '0',
+        amountDue: quote.totalAmount,
+        notes: `Generated from Quote ${quote.quoteNumber} (Accepted via magic link)`
       })
-      .select()
-      .single();
+      .returning();
 
-    if (txnError) {
-      console.error('Error creating transaction:', txnError);
+    const transaction = transactionResult[0];
+    if (!transaction) {
+      console.error('Error creating transaction: No result returned');
       return NextResponse.json({ error: 'Failed to create invoice' }, { status: 500 });
     }
 
     // Create line items from quote items
-    if (quote.quote_items && quote.quote_items.length > 0) {
-      const lineItems = quote.quote_items.map((item: any) => ({
-        transaction_id: transaction.transaction_id,
-        product_name: item.description,
+    const quoteItemsArray = quote.quoteItems as any[] || [];
+    if (quoteItemsArray && quoteItemsArray.length > 0) {
+      const lineItemsData = quoteItemsArray.map((item: any) => ({
+        transactionId: transaction.transactionId,
+        productName: item.description,
         quantity: item.quantity,
-        unit_price: item.rate,
-        line_total: item.amount,
-        discount_percentage: 0
+        unitPrice: item.rate.toString(),
+        lineTotal: item.amount.toString(),
+        discountPercentage: '0'
       }));
 
-      await supabaseAdminSales
-        .from('transaction_line_items')
-        .insert(lineItems);
+      await salesDb
+        .insert(transactionLineItems)
+        .values(lineItemsData);
     }
 
     // Update quote status
-    await supabaseAdminSales
-      .from('quotes')
-      .update({
+    await salesDb
+      .update(quotes)
+      .set({
         status: 'accepted',
-        accepted_at: new Date().toISOString()
+        acceptedAt: new Date()
       })
-      .eq('quote_id', id);
+      .where(eq(quotes.quoteId, id));
 
     // Send payment email to client
     try {
       await emailService.sendEmail({
-        to: quote.clients.email,
+        to: client.email!,
         subject: `Invoice ${invoiceNumber} - Payment Details`,
         html: emailTemplates.quoteAccepted({
           invoiceNumber,
-          quoteNumber: quote.quote_number,
-          totalAmount: quote.total_amount,
+          quoteNumber: quote.quoteNumber,
+          totalAmount: parseFloat(quote.totalAmount),
           currency: quote.currency || 'INR',
-          clientName: quote.clients.client_name,
-          contactPerson: quote.clients.contact_person
+          clientName: client.clientName,
+          contactPerson: client.contactPerson || ''
         })
       });
-      console.log('✅ Payment email sent to:', quote.clients.email);
+      console.log('✅ Payment email sent to:', client.email);
     } catch (emailError) {
       console.error('❌ Error sending payment email:', emailError);
     }
@@ -122,25 +137,25 @@ export async function POST(
       const { createSalesNotification } = await import('@/lib/salesNotifications');
       
       console.log('🔔 Creating sales notification for:', {
-        userId: quote.created_by_user_id,
-        organizationId: quote.organization_id,
+        userId: quote.createdByUserId,
+        organizationId: quote.organizationId,
         entityType: 'quote',
-        entityId: quote.quote_id
+        entityId: quote.quoteId
       });
       
       const notificationResult = await createSalesNotification({
-        userId: quote.created_by_user_id,
-        organizationId: quote.organization_id,
+        userId: quote.createdByUserId,
+        organizationId: quote.organizationId,
         entityType: 'quote',
-        entityId: quote.quote_id,
+        entityId: quote.quoteId,
         title: '🎉 Quote Accepted!',
-        message: `Quote ${quote.quote_number} was accepted by ${quote.clients.client_name}. Invoice ${invoiceNumber} generated.`,
+        message: `Quote ${quote.quoteNumber} was accepted by ${client.clientName}. Invoice ${invoiceNumber} generated.`,
         type: 'quote_accepted',
         metadata: {
-          quote_number: quote.quote_number,
+          quote_number: quote.quoteNumber,
           invoice_number: invoiceNumber,
-          client_name: quote.clients.client_name,
-          amount: quote.total_amount,
+          client_name: client.clientName,
+          amount: quote.totalAmount,
           currency: quote.currency || 'INR'
         }
       });
@@ -157,7 +172,7 @@ export async function POST(
     return NextResponse.json({
       message: 'Quote accepted and invoice generated successfully',
       invoice_number: invoiceNumber,
-      transaction_id: transaction.transaction_id
+      transaction_id: transaction.transactionId
     });
   } catch (error) {
     console.error('Error in POST /api/sales/quotes/[id]/accept-public:', error);

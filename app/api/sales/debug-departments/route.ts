@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdmin } from '@/app/db/connections';
+import { db, userDepartmentRoles, departments, eq, and } from '@/lib/db-helper';
 
 interface DecodedToken {
   user_id: string;
@@ -21,29 +21,30 @@ export async function POST(req: NextRequest) {
     console.log('🔍 Debug: User ID:', decoded.user_id, 'Org ID:', decoded.organization_id);
 
     // Get user's departments
-    const { data: userDepts, error: userDeptsError } = await supabaseAdmin
-      .from('user_department_roles')
-      .select('*')
-      .eq('user_id', decoded.user_id)
-      .eq('organization_id', decoded.organization_id);
+    const userDepts = await db
+      .select()
+      .from(userDepartmentRoles)
+      .where(
+        and(
+          eq(userDepartmentRoles.userId, decoded.user_id),
+          eq(userDepartmentRoles.organizationId, decoded.organization_id)
+        )
+      );
 
     console.log('📦 User departments:', userDepts);
 
-    // Get ALL departments in organization
-    const { data: allDepts, error: allDeptsError } = await supabaseAdmin
-      .from('departments')
-      .select('*')
-      .eq('organization_id', decoded.organization_id);
+    // Get ALL departments (departments are global, not org-specific)
+    const allDepts = await db
+      .select()
+      .from(departments);
 
-    console.log('📦 All departments in org:', allDepts);
+    console.log('📦 All departments:', allDepts);
 
     return NextResponse.json({
       userId: decoded.user_id,
       orgId: decoded.organization_id,
       userDepartments: userDepts,
-      allDepartments: allDepts,
-      userDeptsError,
-      allDeptsError
+      allDepartments: allDepts
     });
 
   } catch (error: any) {

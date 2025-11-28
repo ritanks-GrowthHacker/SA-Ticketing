@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, eq } from '@/lib/db-helper';
 
 interface JWTPayload {
   sub: string;
@@ -58,29 +59,17 @@ export async function POST(req: Request) {
     console.log(`📸 Uploading image of size: ${imageData.length} characters for user: ${decodedToken.sub}`);
 
     // Update user profile with image
-    const { data: updatedUser, error: updateError } = await supabase
-      .from("users")
-      .update({
-        profile_picture_url: imageData,
-        profile_updated_at: new Date().toISOString()
+    const currentTime = new Date();
+    const updatedUserData = await db.update(users)
+      .set({
+        profilePictureUrl: imageData,
+        profileUpdatedAt: currentTime
       })
-      .eq("id", decodedToken.sub)
-      .select(`
-        id,
-        name,
-        email,
-        profile_picture_url,
-        about,
-        phone,
-        location,
-        job_title,
-        department,
-        date_of_birth,
-        created_at,
-        updated_at,
-        profile_updated_at
-      `)
-      .single();
+      .where(eq(users.id, decodedToken.sub))
+      .returning();
+    
+    const updatedUser = updatedUserData[0];
+    const updateError = null;
 
     if (updateError) {
       console.error("❌ Profile image update error:", updateError);
@@ -104,16 +93,16 @@ export async function POST(req: Request) {
       id: updatedUser.id,
       name: updatedUser.name,
       email: updatedUser.email,
-      profilePicture: updatedUser.profile_picture_url,
+      profilePicture: updatedUser.profilePictureUrl,
       about: updatedUser.about,
       phone: updatedUser.phone,
       location: updatedUser.location,
-      jobTitle: updatedUser.job_title,
+      jobTitle: updatedUser.jobTitle,
       department: updatedUser.department,
-      dateOfBirth: updatedUser.date_of_birth,
-      createdAt: updatedUser.created_at,
-      updatedAt: updatedUser.updated_at,
-      profileUpdatedAt: updatedUser.profile_updated_at
+      dateOfBirth: updatedUser.dateOfBirth,
+      createdAt: updatedUser.createdAt,
+      updatedAt: updatedUser.updatedAt,
+      profileUpdatedAt: updatedUser.profileUpdatedAt
     };
 
     return NextResponse.json({

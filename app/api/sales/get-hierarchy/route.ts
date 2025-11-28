@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, salesTeamHierarchy, eq, and, isNull, desc } from '@/lib/sales-db-helper';
 
 interface DecodedToken {
   sub: string;
@@ -23,6 +23,10 @@ export async function GET(req: NextRequest) {
     const userId = decoded.sub || decoded.user_id;
     const organizationId = decoded.org_id || decoded.organization_id;
 
+    if (!userId || !organizationId) {
+      return NextResponse.json({ error: 'Invalid token: missing user or organization ID' }, { status: 401 });
+    }
+
     console.log('🔍 Get hierarchy - User ID:', userId, 'Org ID:', organizationId);
 
     const { searchParams } = new URL(req.url);
@@ -30,26 +34,32 @@ export async function GET(req: NextRequest) {
 
     if (viewType === 'admin') {
       // Admin sees all managers and their members
-      const { data: managers, error: managersError } = await supabaseAdminSales
-        .from('sales_team_hierarchy')
-        .select('*')
-        .eq('organization_id', organizationId)
-        .eq('sales_role', 'sales_manager')
-        .eq('is_active', true)
-        .order('full_name');
-
-      if (managersError) throw managersError;
+      const managers = await salesDb
+        .select()
+        .from(salesTeamHierarchy)
+        .where(
+          and(
+            eq(salesTeamHierarchy.organizationId, organizationId),
+            eq(salesTeamHierarchy.salesRole, 'sales_manager'),
+            eq(salesTeamHierarchy.isActive, true)
+          )
+        )
+        .orderBy(salesTeamHierarchy.fullName);
 
       // Get members for each manager
       const hierarchyData = await Promise.all(
         (managers || []).map(async (manager) => {
-          const { data: members } = await supabaseAdminSales
-            .from('sales_team_hierarchy')
-            .select('*')
-            .eq('organization_id', organizationId)
-            .eq('manager_id', manager.user_id)
-            .eq('is_active', true)
-            .order('full_name');
+          const members = await salesDb
+            .select()
+            .from(salesTeamHierarchy)
+            .where(
+              and(
+                eq(salesTeamHierarchy.organizationId, organizationId),
+                eq(salesTeamHierarchy.managerId, manager.userId),
+                eq(salesTeamHierarchy.isActive, true)
+              )
+            )
+            .orderBy(salesTeamHierarchy.fullName);
 
           return {
             ...manager,
@@ -59,14 +69,18 @@ export async function GET(req: NextRequest) {
       );
 
       // Also get unassigned members
-      const { data: unassignedMembers } = await supabaseAdminSales
-        .from('sales_team_hierarchy')
-        .select('*')
-        .eq('organization_id', organizationId)
-        .eq('sales_role', 'sales_member')
-        .is('manager_id', null)
-        .eq('is_active', true)
-        .order('full_name');
+      const unassignedMembers = await salesDb
+        .select()
+        .from(salesTeamHierarchy)
+        .where(
+          and(
+            eq(salesTeamHierarchy.organizationId, organizationId),
+            eq(salesTeamHierarchy.salesRole, 'sales_member'),
+            isNull(salesTeamHierarchy.managerId),
+            eq(salesTeamHierarchy.isActive, true)
+          )
+        )
+        .orderBy(salesTeamHierarchy.fullName);
 
       return NextResponse.json({ 
         managers: hierarchyData,
@@ -75,30 +89,34 @@ export async function GET(req: NextRequest) {
 
     } else if (viewType === 'manager') {
       // Manager sees their own members
-      const { data: members, error } = await supabaseAdminSales
-        .from('sales_team_hierarchy')
-        .select('*')
-        .eq('organization_id', organizationId)
-        .eq('manager_id', userId)
-        .eq('is_active', true)
-        .order('full_name');
-
-      if (error) throw error;
+      const members = await salesDb
+        .select()
+        .from(salesTeamHierarchy)
+        .where(
+          and(
+            eq(salesTeamHierarchy.organizationId, organizationId),
+            eq(salesTeamHierarchy.managerId, userId),
+            eq(salesTeamHierarchy.isActive, true)
+          )
+        )
+        .orderBy(salesTeamHierarchy.fullName);
 
       return NextResponse.json({ members: members || [] });
 
     } else {
       // Member view - just return their own info
-      const { data: memberInfo, error } = await supabaseAdminSales
-        .from('sales_team_hierarchy')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('organization_id', organizationId)
-        .single();
+      const memberInfo = await salesDb
+        .select()
+        .from(salesTeamHierarchy)
+        .where(
+          and(
+            eq(salesTeamHierarchy.userId, userId),
+            eq(salesTeamHierarchy.organizationId, organizationId)
+          )
+        )
+        .limit(1);
 
-      if (error) throw error;
-
-      return NextResponse.json({ member: memberInfo });
+      return NextResponse.json({ member: memberInfo[0] || null });
     }
 
   } catch (error: any) {

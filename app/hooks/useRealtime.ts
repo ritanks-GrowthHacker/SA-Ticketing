@@ -42,6 +42,18 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
   const ticketSourceRef = useRef<EventSource | null>(null);
 
   const token = useAuthStore(state => state.token);
+  
+  // Use refs to store callbacks to prevent reconnections on every render
+  const onNotificationRef = useRef(onNotification);
+  const onTicketUpdateRef = useRef(onTicketUpdate);
+  
+  useEffect(() => {
+    onNotificationRef.current = onNotification;
+  }, [onNotification]);
+  
+  useEffect(() => {
+    onTicketUpdateRef.current = onTicketUpdate;
+  }, [onTicketUpdate]);
 
   // Request browser notification permission
   const requestNotificationPermission = useCallback(async () => {
@@ -77,8 +89,8 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
         const notification: Notification = data;
         console.log('🔔 New notification:', notification);
 
-        // Call callback
-        onNotification?.(notification);
+        // Call callback using ref
+        onNotificationRef.current?.(notification);
 
         // Show browser notification if permission granted
         if (browserNotifications.getPermission() === 'granted') {
@@ -110,7 +122,7 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
       notificationSourceRef.current = null;
       setIsConnected(false);
     };
-  }, [enabled, onNotification, token]);
+  }, [enabled, token]); // Removed onNotification from dependencies
 
   // Connect to ticket updates stream
   useEffect(() => {
@@ -135,7 +147,7 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
 
         if (data.type === 'ticket_update') {
           console.log('🎫 Ticket updated:', data.ticket);
-          onTicketUpdate?.(data.ticket);
+          onTicketUpdateRef.current?.(data.ticket);
         }
       } catch (error) {
         console.error('Error parsing ticket update:', error);
@@ -153,7 +165,7 @@ export function useRealtime(options: UseRealtimeOptions = {}) {
       eventSource.close();
       ticketSourceRef.current = null;
     };
-  }, [enabled, onTicketUpdate, token, projectId]);
+  }, [enabled, token, projectId]); // Removed onTicketUpdate from dependencies
 
   // Auto-request notification permission on mount if supported
   useEffect(() => {

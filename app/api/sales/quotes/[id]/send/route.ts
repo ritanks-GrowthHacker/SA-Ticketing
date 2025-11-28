@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, quotes, clients, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../../../helpers';
 import { emailService } from '@/lib/emailService';
 import { emailTemplates } from '@/app/emailTemplates';
@@ -28,22 +28,35 @@ export async function POST(
     expiresAt.setDate(expiresAt.getDate() + 15); // 15 days from now
 
     // Update quote with magic link and status
-    const { data: quote, error: updateError } = await supabaseAdminSales
-      .from('quotes')
-      .update({
-        magic_link_token: magicToken,
-        magic_link_expires_at: expiresAt.toISOString(),
+    const quoteResult = await salesDb
+      .update(quotes)
+      .set({
+        magicLinkToken: magicToken,
+        magicLinkExpiresAt: expiresAt,
         status: 'sent'
       })
-      .eq('quote_id', id)
-      .eq('organization_id', organizationId)
-      .select('*, clients(*)')
-      .single();
+      .where(
+        and(
+          eq(quotes.quoteId, id),
+          eq(quotes.organizationId, organizationId)
+        )
+      )
+      .returning();
 
-    if (updateError) {
-      console.error('Error updating quote:', updateError);
+    const quote = quoteResult[0];
+    if (!quote) {
+      console.error('Error updating quote: not found');
       return NextResponse.json({ error: 'Failed to update quote' }, { status: 500 });
     }
+
+    // Fetch client info
+    const clientResult = await salesDb
+      .select()
+      .from(clients)
+      .where(eq(clients.clientId, quote.clientId))
+      .limit(1);
+    
+    const client = clientResult[0];
 
     // Generate magic link URL with token parameter
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -52,20 +65,20 @@ export async function POST(
     // Send email to client with magic link
     try {
       await emailService.sendEmail({
-        to: quote.clients.email,
-        subject: `Quote ${quote.quote_number} - ${quote.quote_title}`,
+        to: client.email!,
+        subject: `Quote ${quote.quoteNumber} - ${quote.quoteTitle}`,
         html: emailTemplates.quoteSent({
-          quoteNumber: quote.quote_number,
-          quoteTitle: quote.quote_title,
-          totalAmount: quote.total_amount,
+          quoteNumber: quote.quoteNumber,
+          quoteTitle: quote.quoteTitle,
+          totalAmount: parseFloat(quote.totalAmount),
           currency: quote.currency || 'INR',
-          validUntil: quote.valid_until,
-          clientName: quote.clients.client_name,
-          contactPerson: quote.clients.contact_person,
+          validUntil: quote.validUntil?.toISOString(),
+          clientName: client.clientName,
+          contactPerson: client.contactPerson || '',
           magicLink
         })
       });
-      console.log('✅ Quote email sent to:', quote.clients.email);
+      console.log('✅ Quote email sent to:', client.email);
     } catch (emailError) {
       console.error('❌ Error sending email:', emailError);
       // Don't fail the request if email fails
@@ -74,7 +87,7 @@ export async function POST(
     return NextResponse.json({
       message: 'Quote sent successfully',
       magic_link: magicLink,
-      quote
+      quote: { ...quote, clients: client }
     });
   } catch (error) {
     console.error('Error in POST /api/sales/quotes/[id]/send:', error);

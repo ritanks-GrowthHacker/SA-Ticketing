@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, organizations, eq, ilike, or, asc } from "@/lib/db-helper";
 
 export async function GET(req: Request) {
   try {
@@ -7,33 +8,31 @@ export async function GET(req: Request) {
     const search = searchParams.get('search');
     const limit = searchParams.get('limit');
 
-    let query = supabase
-      .from("organizations")
-      .select("id, name, domain, created_at")
-      .order("name", { ascending: true });
+    let query = db
+      .select()
+      .from(organizations)
+      .orderBy(asc(organizations.name));
+
+    let orgsData = await query;
 
     if (search && search.trim()) {
-      query = query.or(`name.ilike.%${search}%,domain.ilike.%${search}%`);
+      orgsData = orgsData.filter(org => 
+        org.name?.toLowerCase().includes(search.toLowerCase()) ||
+        org.domain?.toLowerCase().includes(search.toLowerCase())
+      );
     }
 
     if (limit && !isNaN(parseInt(limit))) {
-      query = query.limit(parseInt(limit));
-    }
-
-    const { data: organizations, error: orgError } = await query;
-
-    if (orgError) {
-      console.error("Organizations fetch error:", orgError);
-      return NextResponse.json(
-        { error: "Failed to fetch organizations" }, 
-        { status: 500 }
-      );
+      orgsData = orgsData.slice(0, parseInt(limit));
     }
 
     const response = {
       message: "Organizations retrieved successfully",
-      count: organizations?.length || 0,
-      data: organizations || [],
+      count: orgsData.length,
+      data: orgsData.map(org => ({
+        ...org,
+        created_at: org.createdAt?.toISOString()
+      })),
       filters: {
         search: search || null,
         limit: limit ? parseInt(limit) : null
@@ -80,11 +79,12 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: existingOrg } = await supabase
-      .from("organizations")
-      .select("id")
-      .eq("domain", domain)
-      .maybeSingle();
+    const existingOrg = await db
+      .select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.domain, domain))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (existingOrg) {
       return NextResponse.json(
@@ -93,14 +93,14 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: organization, error: orgError } = await supabase
-      .from("organizations")
-      .insert([{ name, domain }])
-      .select("id, name, domain, created_at")
-      .single();
+    const organization = await db
+      .insert(organizations)
+      .values({ name, domain, createdAt: new Date() })
+      .returning()
+      .then(rows => rows[0] || null);
 
-    if (orgError || !organization) {
-      console.error("Organization creation error:", orgError);
+    if (!organization) {
+      console.error("Organization creation error");
       return NextResponse.json(
         { error: "Failed to create organization" }, 
         { status: 500 }
@@ -109,7 +109,10 @@ export async function POST(req: Request) {
 
     return NextResponse.json({
       message: "Organization created successfully",
-      organization
+      organization: {
+        ...organization,
+        created_at: organization.createdAt?.toISOString()
+      }
     }, { status: 201 });
 
   } catch (error) {

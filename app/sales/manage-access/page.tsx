@@ -8,19 +8,19 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { ArrowLeft, UserPlus, Users, RefreshCw } from 'lucide-react';
 
 interface Manager {
-  user_id: string;
-  full_name: string;
+  userId: string;
+  fullName: string;
   email: string;
-  sales_role: string;
+  salesRole: string;
   members: Member[];
 }
 
 interface Member {
-  user_id: string;
-  full_name: string;
+  userId: string;
+  fullName: string;
   email: string;
-  sales_role: string;
-  manager_id: string | null;
+  salesRole: string;
+  managerId: string | null;
 }
 
 export default function SalesManageAccess() {
@@ -327,27 +327,27 @@ export default function SalesManageAccess() {
               </TableHeader>
               <TableBody>
                 {unassignedMembers.map((member) => (
-                  <TableRow key={member.user_id}>
-                    <TableCell className="font-medium">{member.full_name}</TableCell>
+                  <TableRow key={member.userId}>
+                    <TableCell className="font-medium">{member.fullName}</TableCell>
                     <TableCell className="text-gray-600">{member.email}</TableCell>
                     <TableCell>
                       <select
-                        value={selectedAssignments[member.user_id] || ''}
-                        onChange={(e) => setSelectedAssignments({ ...selectedAssignments, [member.user_id]: e.target.value })}
+                        value={selectedAssignments[member.userId] || ''}
+                        onChange={(e) => setSelectedAssignments({ ...selectedAssignments, [member.userId]: e.target.value })}
                         className="w-64 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
                         <option value="">Select a manager...</option>
                         {managers.map((manager) => (
-                          <option key={manager.user_id} value={manager.user_id}>
-                            {manager.full_name} ({manager.members?.length || 0} members)
+                          <option key={manager.userId} value={manager.userId}>
+                            {manager.fullName} ({manager.members?.length || 0} members)
                           </option>
                         ))}
                       </select>
                     </TableCell>
                     <TableCell>
                       <button
-                        onClick={() => handleAssignMember(member.user_id, selectedAssignments[member.user_id])}
-                        disabled={!selectedAssignments[member.user_id] || assigning}
+                        onClick={() => handleAssignMember(member.userId, selectedAssignments[member.userId])}
+                        disabled={!selectedAssignments[member.userId] || assigning}
                         className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                       >
                         <UserPlus className="h-4 w-4" />
@@ -364,12 +364,12 @@ export default function SalesManageAccess() {
 
       {/* Manager Sections */}
       {managers.map((manager) => (
-        <Card key={manager.user_id}>
+        <Card key={manager.userId}>
           <CardHeader className="bg-blue-50">
             <CardTitle className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Users className="h-5 w-5 text-blue-600" />
-                <span>Manager: {manager.full_name}</span>
+                <span>Manager: {manager.fullName}</span>
                 <span className="text-sm font-normal text-gray-600">({manager.email})</span>
               </div>
               <span className="text-sm font-normal text-gray-600 bg-white px-3 py-1 rounded-full">
@@ -393,22 +393,22 @@ export default function SalesManageAccess() {
                 </TableHeader>
                 <TableBody>
                   {manager.members.map((member) => (
-                    <TableRow key={member.user_id}>
-                      <TableCell className="font-medium">{member.full_name}</TableCell>
+                    <TableRow key={member.userId}>
+                      <TableCell className="font-medium">{member.fullName}</TableCell>
                       <TableCell className="text-gray-600">{member.email}</TableCell>
                       <TableCell>
                         <select
-                          onChange={(e) => handleReassignMember(member.user_id, e.target.value, manager.user_id)}
+                          onChange={(e) => handleReassignMember(member.userId, e.target.value, manager.userId)}
                           disabled={assigning}
                           className="w-64 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-                          defaultValue={manager.user_id}
+                          defaultValue={manager.userId}
                         >
-                          <option value={manager.user_id}>Current Manager</option>
+                          <option value={manager.userId}>Current Manager</option>
                           {managers
-                            .filter(m => m.user_id !== manager.user_id)
+                            .filter(m => m.userId !== manager.userId)
                             .map((otherManager) => (
-                              <option key={otherManager.user_id} value={otherManager.user_id}>
-                                {otherManager.full_name}
+                              <option key={otherManager.userId} value={otherManager.userId}>
+                                {otherManager.fullName}
                               </option>
                             ))}
                         </select>

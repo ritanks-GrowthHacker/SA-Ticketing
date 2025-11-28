@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, quotes, clients, eq, and } from '@/lib/sales-db-helper';
 
 export async function POST(
   request: NextRequest,
@@ -10,16 +10,30 @@ export async function POST(
     const { token } = await request.json();
 
     // Verify magic link token
-    const { data: quote, error: quoteError } = await supabaseAdminSales
-      .from('quotes')
-      .select('*, clients(*)')
-      .eq('quote_id', id)
-      .eq('magic_link_token', token)
-      .single();
+    const quoteResult = await salesDb
+      .select()
+      .from(quotes)
+      .where(
+        and(
+          eq(quotes.quoteId, id),
+          eq(quotes.magicLinkToken, token)
+        )
+      )
+      .limit(1);
 
-    if (quoteError || !quote) {
+    const quote = quoteResult[0];
+    if (!quote) {
       return NextResponse.json({ error: 'Invalid quote or token' }, { status: 404 });
     }
+
+    // Fetch client info
+    const clientResult = await salesDb
+      .select()
+      .from(clients)
+      .where(eq(clients.clientId, quote.clientId))
+      .limit(1);
+    
+    const client = clientResult[0];
 
     // Check if already processed
     if (quote.status === 'rejected') {
@@ -27,30 +41,30 @@ export async function POST(
     }
 
     // Update quote status to rejected
-    await supabaseAdminSales
-      .from('quotes')
-      .update({
+    await salesDb
+      .update(quotes)
+      .set({
         status: 'rejected',
-        rejected_at: new Date().toISOString()
+        rejectedAt: new Date()
       })
-      .eq('quote_id', id);
+      .where(eq(quotes.quoteId, id));
 
     // Send notification to sales member
     try {
       const { createSalesNotification } = await import('@/lib/salesNotifications');
       
       await createSalesNotification({
-        userId: quote.created_by_user_id,
-        organizationId: quote.organization_id,
+        userId: quote.createdByUserId,
+        organizationId: quote.organizationId,
         entityType: 'quote',
-        entityId: quote.quote_id,
+        entityId: quote.quoteId,
         title: '❌ Quote Rejected',
-        message: `Quote ${quote.quote_number} was rejected by ${quote.clients.client_name}.`,
+        message: `Quote ${quote.quoteNumber} was rejected by ${client.clientName}.`,
         type: 'quote_sent',
         metadata: {
-          quote_number: quote.quote_number,
-          client_name: quote.clients.client_name,
-          amount: quote.total_amount,
+          quote_number: quote.quoteNumber,
+          client_name: client.clientName,
+          amount: quote.totalAmount,
           currency: quote.currency || 'INR'
         }
       });

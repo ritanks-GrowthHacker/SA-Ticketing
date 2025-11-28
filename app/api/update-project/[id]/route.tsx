@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, projects, organizations, users as usersTable, projectStatuses, eq, and } from '@/lib/db-helper';
 
 interface JWTPayload {
   sub: string;
@@ -56,12 +57,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     console.log('🔄 Updating project:', projectId);
 
     // Verify project exists and belongs to user's organization
-    const { data: existingProject } = await supabase
-      .from('projects')
-      .select('id, organization_id, name')
-      .eq('id', projectId)
-      .eq('organization_id', decodedToken.org_id)
-      .single();
+    const existingProject = await db.select({ id: projects.id, organizationId: projects.organizationId, name: projects.name })
+      .from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.organizationId, decodedToken.org_id)))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (!existingProject) {
       return NextResponse.json(
@@ -72,11 +72,11 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
     // Check if status_id is valid (if provided) - now global, no org check needed
     if (status_id) {
-      const { data: status } = await supabase
-        .from('project_statuses')
-        .select('id')
-        .eq('id', status_id)
-        .single();
+      const status = await db.select({ id: projectStatuses.id })
+        .from(projectStatuses)
+        .where(eq(projectStatuses.id, status_id))
+        .limit(1)
+        .then(rows => rows[0] || null);
 
       if (!status) {
         return NextResponse.json(
@@ -87,13 +87,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     }
 
     // Check for duplicate name (excluding current project)
-    const { data: duplicateProject } = await supabase
-      .from('projects')
-      .select('id')
-      .eq('name', name.trim())
-      .eq('organization_id', decodedToken.org_id)
-      .neq('id', projectId)
-      .single();
+    const duplicateProject = await db.select({ id: projects.id })
+      .from(projects)
+      .where(and(
+        eq(projects.name, name.trim()),
+        eq(projects.organizationId, decodedToken.org_id)
+      ))
+      .limit(2)
+      .then(rows => rows.find(p => p.id !== projectId) || null);
 
     if (duplicateProject) {
       return NextResponse.json(
@@ -106,58 +107,52 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     const updateData: any = {
       name: name.trim(),
       description: description?.trim() || null,
-      updated_by: decodedToken.sub,
-      updated_at: new Date().toISOString()
+      updatedBy: decodedToken.sub,
+      updatedAt: new Date()
     };
 
     if (status_id) {
-      updateData.status_id = status_id;
+      updateData.statusId = status_id;
     }
 
-    const { data: updatedProject, error: updateError } = await supabase
-      .from('projects')
-      .update(updateData)
-      .eq('id', projectId)
-      .select(`
-        id,
-        name,
-        description,
-        status_id,
-        created_at,
-        updated_at,
-        organization_id,
-        created_by,
-        organizations(id, name, domain),
-        users!projects_created_by_fkey(id, name, email),
-        project_statuses(
-          id,
-          name,
-          description,
-          color_code,
-          sort_order
-        )
-      `)
-      .single();
+    const updatedProjects = await db.update(projects)
+      .set(updateData)
+      .where(eq(projects.id, projectId))
+      .returning();
 
-    if (updateError) {
-      console.error('Error updating project:', updateError);
+    const updatedProject = updatedProjects[0];
+    if (!updatedProject) {
+      console.error('Error updating project: No project returned');
       return NextResponse.json(
         { error: "Failed to update project" }, 
         { status: 500 }
       );
     }
 
+    // Fetch related data
+    const [org, creator, status] = await Promise.all([
+      db.select().from(organizations).where(eq(organizations.id, updatedProject.organizationId)).limit(1).then(rows => rows[0] || null),
+      updatedProject.createdBy ? db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email }).from(usersTable).where(eq(usersTable.id, updatedProject.createdBy)).limit(1).then(rows => rows[0] || null) : Promise.resolve(null),
+      updatedProject.statusId ? db.select().from(projectStatuses).where(eq(projectStatuses.id, updatedProject.statusId)).limit(1).then(rows => rows[0] || null) : Promise.resolve(null)
+    ]);
+
     // Format the response
     const formattedProject = {
       id: updatedProject.id,
       name: updatedProject.name,
       description: updatedProject.description,
-      status_id: updatedProject.status_id,
-      status: updatedProject.project_statuses,
-      created_at: updatedProject.created_at,
-      updated_at: updatedProject.updated_at,
-      created_by: updatedProject.users,
-      organization: updatedProject.organizations
+      status_id: updatedProject.statusId,
+      status: status ? {
+        id: status.id,
+        name: status.name,
+        description: status.description,
+        color_code: status.colorCode,
+        sort_order: status.sortOrder
+      } : null,
+      created_at: updatedProject.createdAt?.toISOString() || new Date().toISOString(),
+      updated_at: updatedProject.updatedAt?.toISOString() || null,
+      created_by: creator,
+      organization: org ? { id: org.id, name: org.name, domain: org.domain } : null
     };
 
     console.log('✅ Project updated successfully');

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, eq } from '@/lib/db-helper';
 import { OTPService } from '@/lib/otpService';
 
 interface ResendLoginOTPRequest {
@@ -20,13 +21,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Get organization from database
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('*')
-      .eq('id', orgId)
-      .single();
+    const orgResults = await db.select()
+      .from(organizations)
+      .where(eq(organizations.id, orgId))
+      .limit(1);
+    
+    const organization = orgResults[0] || null;
 
-    if (orgError || !organization) {
+    if (!organization) {
       return NextResponse.json(
         { error: 'Organization not found with this email' },
         { status: 404 }
@@ -34,7 +36,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if organization is active
-    if (!organization.is_active) {
+    if (!organization.isActive) {
       return NextResponse.json(
         { error: 'Organization account is not active' },
         { status: 400 }
@@ -46,18 +48,17 @@ export async function POST(request: NextRequest) {
     const otpExpiry = OTPService.getExpiryTime();
 
     // Update organization with new OTP
-    await supabase
-      .from('organizations')
-      .update({ 
+    await db.update(organizations)
+      .set({ 
         otp: newOtp,
-        otp_expires_at: otpExpiry.toISOString(),
-        updated_at: new Date().toISOString()
+        otpExpiresAt: otpExpiry,
+        updatedAt: new Date()
       })
-      .eq('id', organization.id);
+      .where(eq(organizations.id, organization.id));
 
     // Send OTP email
     try {
-      const emailSent = await OTPService.sendOTP(organization.org_email, newOtp, 'login');
+      const emailSent = await OTPService.sendOTP(organization.orgEmail || '', newOtp, 'login');
       
       if (!emailSent) {
         return NextResponse.json(

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, organizations, eq, ilike, or, and, sql } from "@/lib/db-helper";
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,17 +18,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let query = supabase.from('organizations').select('id, name, domain, created_at');
-    let conditions = [];
+    let conditions: any[] = [];
+    let whereClauses: any[] = [];
+    let criteriaDescriptions: string[] = [];
 
     // Build query based on provided parameters
     if (domain) {
-      query = query.eq('domain', domain.toLowerCase());
+      whereClauses.push(eq(organizations.domain, domain.toLowerCase()));
       conditions.push(`domain: ${domain}`);
     }
 
     if (name) {
-      query = query.ilike('name', `%${name}%`);
+      whereClauses.push(ilike(organizations.name, `%${name}%`));
       conditions.push(`name: ${name}`);
     }
 
@@ -35,15 +37,18 @@ export async function POST(request: NextRequest) {
       // Extract domain from email for organization lookup
       const emailDomain = email.split('@')[1];
       if (emailDomain) {
-        query = query.eq('domain', emailDomain.toLowerCase());
+        whereClauses.push(eq(organizations.domain, emailDomain.toLowerCase()));
         conditions.push(`email domain: ${emailDomain}`);
       }
     }
 
-    const { data: organizations, error } = await query;
+    // Execute query with combined WHERE clauses
+    const orgsResult = whereClauses.length > 0
+      ? await db.select().from(organizations).where(or(...whereClauses))
+      : [];
 
-    if (error) {
-      console.error('Database error:', error);
+    if (!orgsResult) {
+      console.error('Database error: Query failed');
       return NextResponse.json(
         { 
           error: 'Failed to check organization',
@@ -53,8 +58,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const exists = organizations && organizations.length > 0;
-    const organization = exists ? organizations[0] : null;
+    const exists = orgsResult && orgsResult.length > 0;
+    const organization = exists ? orgsResult[0] : null;
 
     return NextResponse.json({
       exists,
@@ -62,7 +67,7 @@ export async function POST(request: NextRequest) {
         id: organization.id,
         name: organization.name,
         domain: organization.domain,
-        created_at: organization.created_at
+        created_at: organization.createdAt
       } : null,
       searchCriteria: conditions,
       message: exists 
@@ -100,44 +105,38 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    let query = supabase.from('organizations').select('id, name, domain, created_at');
-    let conditions = [];
+    let whereClauses: any[] = [];
+    let criteriaDescriptions: string[] = [];
 
     // Build query based on provided parameters
     if (domain) {
-      query = query.eq('domain', domain.toLowerCase());
-      conditions.push(`domain: ${domain}`);
+      whereClauses.push(eq(organizations.domain, domain.toLowerCase()));
+      criteriaDescriptions.push(`domain: ${domain}`);
     }
 
     if (name) {
-      query = query.ilike('name', `%${name}%`);
-      conditions.push(`name: ${name}`);
+      whereClauses.push(ilike(organizations.name, `%${name}%`));
+      criteriaDescriptions.push(`name: ${name}`);
     }
 
     if (email) {
       // Extract domain from email for organization lookup
       const emailDomain = email.split('@')[1];
       if (emailDomain) {
-        query = query.eq('domain', emailDomain.toLowerCase());
-        conditions.push(`email domain: ${emailDomain}`);
+        whereClauses.push(eq(organizations.domain, emailDomain.toLowerCase()));
+        criteriaDescriptions.push(`email domain: ${emailDomain}`);
       }
     }
 
-    const { data: organizations, error } = await query;
+    const orgsData = whereClauses.length > 0
+      ? await db
+          .select()
+          .from(organizations)
+          .where(and(...whereClauses))
+      : [];
 
-    if (error) {
-      console.error('Database error:', error);
-      return NextResponse.json(
-        { 
-          error: 'Failed to check organization',
-          exists: false
-        }, 
-        { status: 500 }
-      );
-    }
-
-    const exists = organizations && organizations.length > 0;
-    const organization = exists ? organizations[0] : null;
+    const exists = orgsData && orgsData.length > 0;
+    const organization = exists ? orgsData[0] : null;
 
     return NextResponse.json({
       exists,
@@ -145,9 +144,9 @@ export async function GET(request: NextRequest) {
         id: organization.id,
         name: organization.name,
         domain: organization.domain,
-        created_at: organization.created_at
+        created_at: organization.createdAt?.toISOString()
       } : null,
-      searchCriteria: conditions,
+      searchCriteria: criteriaDescriptions,
       message: exists 
         ? 'Organization found' 
         : 'Organization not found'

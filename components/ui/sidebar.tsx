@@ -50,7 +50,7 @@ const navItems: NavItem[] = [
   { name: 'Tickets', href: '/tickets', icon: Ticket, nonSalesOnly: true },
   { name: 'Home', href: '/sales', icon: Home, salesOnly: true }, // Sales Dashboard as Home
   { name: 'Requests', href: '/requests', icon: Inbox, salesOnly: true, adminOnly: true }, // Only for Sales Admin
-  { name: 'Sales', href: '/sales', icon: DollarSign , nonSalesOnly: false }, // Always visible
+  { name: 'Sales', href: '/sales', icon: DollarSign, salesOnly: true }, // Only visible to sales users
 ];
 
 const Sidebar = () => {
@@ -59,7 +59,7 @@ const Sidebar = () => {
   const [isLoadingTickets, setIsLoadingTickets] = useState(false);
   const [isSalesOnly, setIsSalesOnly] = useState(false);
   const pathname = usePathname();
-  const { user, roles, currentProject, currentDepartment, role, token } = useAuthStore();
+  const { user, roles,  currentDepartment, role, token } = useAuthStore();
 
   // IMPORTANT: Sidebar visibility is based on ORG/DEPARTMENT role, NOT project role
   // Manage Access and Requests tabs are organization/department level features
@@ -132,19 +132,22 @@ const Sidebar = () => {
   const filteredNavItems = navItems.filter(item => {
     // If user is sales-only
     if (isSalesOnly) {
-      // Hide non-sales items
-      if (item.nonSalesOnly) return false;
-      // Show sales-only items
-      if (item.salesOnly) return true;
-      // For Sales tab (always visible), show it
-      if (item.href === '/sales') return true;
-      return false;
+      // Only show items marked as salesOnly
+      if (!item.salesOnly) return false;
+      
+      // Check admin requirements for sales users
+      if (item.adminOnly && effectiveRole !== 'Admin') {
+        return false;
+      }
+      
+      return true;
     }
     
-    // If user is NOT sales-only
+    // If user is NOT sales-only (regular users)
     else {
-      // Hide sales-only items
+      // Hide all sales-only items from non-sales users
       if (item.salesOnly) return false;
+      
       // Show non-sales items based on role
       if (item.adminOnly) {
         return effectiveRole === 'Admin';
@@ -262,11 +265,11 @@ const Sidebar = () => {
             })}
           </div>
 
-          {/* Tickets Section */}
-          {isExpanded && (
+          {/* Tickets Section - Only show for non-sales users */}
+          {isExpanded && !isSalesOnly && (
             <div className="pt-6">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-900">Recent Tickets</h3>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Recent Tickets</h3>
                 <ChevronRight className="w-4 h-4 text-gray-400" />
               </div>
               
@@ -280,10 +283,10 @@ const Sidebar = () => {
                     <Link
                       key={ticket.id}
                       href={`/tickets`}
-                      className="block p-3 rounded-lg hover:bg-gray-50 transition-colors border border-transparent hover:border-gray-200"
+                      className="block p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors border border-transparent hover:border-gray-200 dark:hover:border-gray-600"
                     >
                       <div className="flex items-start justify-between mb-2">
-                        <h4 className="text-sm font-medium text-gray-900 leading-tight">
+                        <h4 className="text-sm font-medium text-gray-900 dark:text-gray-100 leading-tight">
                           {truncateTitle(ticket.title)}
                         </h4>
                         <div className={`w-2 h-2 rounded-full shrink-0 ml-2 mt-1`} 
@@ -303,14 +306,14 @@ const Sidebar = () => {
                           {ticket.statuses?.name || 'Unknown'}
                         </span>
                         
-                        <span className="text-xs text-gray-500">
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
                           {new Date(ticket.created_at).toLocaleDateString()}
                         </span>
                       </div>
                     </Link>
                   ))
                 ) : (
-                  <div className="text-center py-8 text-sm text-gray-500">
+                  <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
                     No recent tickets
                   </div>
                 )}
@@ -318,7 +321,7 @@ const Sidebar = () => {
               
               <Link
                 href="/tickets"
-                className="block mt-3 text-center py-2 text-sm text-blue-600 hover:text-blue-800 font-medium"
+                className="block mt-3 text-center py-2 text-sm text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 font-medium"
               >
                 View All Tickets
               </Link>
@@ -328,8 +331,8 @@ const Sidebar = () => {
 
         {/* Collapse hint for mobile */}
         {isExpanded && (
-          <div className="p-4 border-t border-gray-200 md:hidden">
-            <p className="text-xs text-gray-500 text-center">
+          <div className="p-4 border-t border-gray-200 dark:border-gray-700 md:hidden">
+            <p className="text-xs text-gray-500 dark:text-gray-400 text-center">
               Tap outside to close
             </p>
           </div>

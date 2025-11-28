@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdmin } from '@/app/db/connections';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { db, departments, userDepartmentRoles, users, globalRoles, eq, and, inArray, ilike } from '@/lib/db-helper';
+import { salesDb, salesTeamHierarchy } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../helpers';
 
 export async function POST(req: NextRequest) {
@@ -17,40 +17,36 @@ export async function POST(req: NextRequest) {
 
     console.log('🔄 Starting bulk sync for org:', organizationId);
 
-    // Step 1: Get Sales department (departments are global, not org-specific)
-    const { data: salesDept, error: deptError } = await supabaseAdmin
-      .from('departments')
-      .select('id, name')
-      .ilike('name', 'sales')
-      .single();
+    // Step 1: Get Sales department
+    const salesDeptResult = await db
+      .select({ id: departments.id, name: departments.name })
+      .from(departments)
+      .where(ilike(departments.name, 'sales'))
+      .limit(1);
 
-    if (deptError || !salesDept) {
+    const salesDept = salesDeptResult[0];
+    if (!salesDept) {
       return NextResponse.json({ 
-        error: 'Sales department not found',
-        details: deptError 
+        error: 'Sales department not found'
       }, { status: 404 });
     }
 
     console.log('📦 Sales department:', salesDept);
 
     // Step 2: Get all users in Sales department with their role_ids
-    const { data: userDeptRoles, error: usersError } = await supabaseAdmin
-      .from('user_department_roles')
-      .select('user_id, role_id')
-      .eq('organization_id', organizationId)
-      .eq('department_id', salesDept.id);
+    const userDeptRolesResult = await db
+      .select({ userId: userDepartmentRoles.userId, roleId: userDepartmentRoles.roleId })
+      .from(userDepartmentRoles)
+      .where(
+        and(
+          eq(userDepartmentRoles.organizationId, organizationId),
+          eq(userDepartmentRoles.departmentId, salesDept.id)
+        )
+      );
 
-    if (usersError) {
-      console.error('Error fetching sales users:', usersError);
-      return NextResponse.json({ 
-        error: 'Failed to fetch sales users',
-        details: usersError 
-      }, { status: 500 });
-    }
+    console.log('👥 Found user department roles:', userDeptRolesResult?.length);
 
-    console.log('👥 Found user department roles:', userDeptRoles?.length);
-
-    if (!userDeptRoles || userDeptRoles.length === 0) {
+    if (!userDeptRolesResult || userDeptRolesResult.length === 0) {
       return NextResponse.json({ 
         message: 'No users found in Sales department',
         synced: 0
@@ -58,60 +54,48 @@ export async function POST(req: NextRequest) {
     }
 
     // Step 3: Get role names from global_roles
-    const roleIds = userDeptRoles.map(u => u.role_id);
-    const { data: roles, error: rolesError } = await supabaseAdmin
-      .from('global_roles')
-      .select('id, name')
-      .in('id', roleIds);
+    const roleIds = userDeptRolesResult.map(u => u.roleId);
+    const rolesResult = await db
+      .select({ id: globalRoles.id, name: globalRoles.name })
+      .from(globalRoles)
+      .where(inArray(globalRoles.id, roleIds));
 
-    if (rolesError) {
-      console.error('Error fetching roles:', rolesError);
-      return NextResponse.json({ 
-        error: 'Failed to fetch roles',
-        details: rolesError 
-      }, { status: 500 });
-    }
-
-    const roleMap = new Map(roles?.map(r => [r.id, r.name]) || []);
+    const roleMap = new Map(rolesResult?.map(r => [r.id, r.name]) || []);
 
     // Step 4: Get user details from users table
-    const userIds = userDeptRoles.map(u => u.user_id);
-    const { data: userDetails, error: detailsError } = await supabaseAdmin
-      .from('users')
-      .select('id, email, name')
-      .in('id', userIds);
+    const userIds = userDeptRolesResult.map(u => u.userId);
+    const userDetailsResult = await db
+      .select({ id: users.id, email: users.email, name: users.name })
+      .from(users)
+      .where(inArray(users.id, userIds));
 
-    if (detailsError) {
-      console.error('Error fetching user details:', detailsError);
-      return NextResponse.json({ 
-        error: 'Failed to fetch user details',
-        details: detailsError 
-      }, { status: 500 });
-    }
-
-    // Create a map for quick lookup
-    const userMap = new Map(userDetails?.map(u => [u.id, u]) || []);
+    const userMap = new Map(userDetailsResult?.map(u => [u.id, u]) || []);
 
     // Step 5: Sync each user to sales_team_hierarchy
     const syncResults = [];
-    for (const userDeptRole of userDeptRoles) {
+    for (const userDeptRole of userDeptRolesResult) {
       try {
-        const userInfo = userMap.get(userDeptRole.user_id);
-        const roleName = roleMap.get(userDeptRole.role_id);
+        const userInfo = userMap.get(userDeptRole.userId);
+        const roleName = roleMap.get(userDeptRole.roleId);
         
         if (!userInfo || !roleName) {
-          console.log('⚠️ User info not found for:', userDeptRole.user_id);
-          syncResults.push({ user_id: userDeptRole.user_id, status: 'user_not_found' });
+          console.log('⚠️ User info not found for:', userDeptRole.userId);
+          syncResults.push({ user_id: userDeptRole.userId, status: 'user_not_found' });
           continue;
         }
         // Check if user already exists
-        const { data: existing } = await supabaseAdminSales
-          .from('sales_team_hierarchy')
-          .select('user_id')
-          .eq('user_id', userDeptRole.user_id)
-          .eq('organization_id', organizationId)
-          .single();
+        const existingResult = await salesDb
+          .select({ userId: salesTeamHierarchy.userId })
+          .from(salesTeamHierarchy)
+          .where(
+            and(
+              eq(salesTeamHierarchy.userId, userDeptRole.userId),
+              eq(salesTeamHierarchy.organizationId, organizationId)
+            )
+          )
+          .limit(1);
 
+        const existing = existingResult[0];
         if (existing) {
           console.log('⏭️ User already synced:', userInfo.email);
           syncResults.push({ email: userInfo.email, status: 'already_exists' });
@@ -128,36 +112,25 @@ export async function POST(req: NextRequest) {
         console.log('✅ Final sales_role:', salesRole);
 
         // Insert user
-        const { error: insertError } = await supabaseAdminSales
-          .from('sales_team_hierarchy')
-          .insert({
-            user_id: userDeptRole.user_id,
-            organization_id: organizationId,
+        await salesDb
+          .insert(salesTeamHierarchy)
+          .values({
+            userId: userDeptRole.userId,
+            organizationId,
             email: userInfo.email,
-            full_name: userInfo.name || userInfo.email.split('@')[0],
+            fullName: userInfo.name || userInfo.email.split('@')[0],
             phone: null,
-            sales_role: salesRole,
-            manager_id: null,
-            is_active: true
+            salesRole,
+            managerId: null,
+            isActive: true
           });
 
-        if (insertError) {
-          console.error('Failed to sync user:', userInfo.email, insertError);
-          console.error('Attempted insert with salesRole:', salesRole, 'from roleName:', roleName);
-          syncResults.push({ 
-            email: userInfo.email, 
-            status: 'failed', 
-            error: insertError.message,
-            details: { roleName, salesRole, insertError }
-          });
-        } else {
-          console.log('✅ Synced user:', userInfo.email, 'as', salesRole);
-          syncResults.push({ email: userInfo.email, status: 'synced', role: salesRole });
-        }
+        console.log('✅ Synced user:', userInfo.email, 'as', salesRole);
+        syncResults.push({ email: userInfo.email, status: 'synced', role: salesRole });
       } catch (err: any) {
         console.error('Error processing user:', err);
-        const userInfo = userMap.get(userDeptRole.user_id);
-        syncResults.push({ email: userInfo?.email || userDeptRole.user_id, status: 'error', error: err.message });
+        const userInfo = userMap.get(userDeptRole.userId);
+        syncResults.push({ email: userInfo?.email || userDeptRole.userId, status: 'error', error: err.message });
       }
     }
 
@@ -166,7 +139,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       message: 'Bulk sync completed',
-      total: userDeptRoles.length,
+      total: userDeptRolesResult.length,
       synced: syncedCount,
       alreadyExists: existingCount,
       results: syncResults

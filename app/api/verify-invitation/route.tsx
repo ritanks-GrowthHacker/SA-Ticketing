@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, invitations, organizations, departments, eq, and, sql } from '@/lib/db-helper';
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,20 +21,21 @@ export async function POST(request: NextRequest) {
 
     if (token) {
       // First check if invitation exists and is completed
-      const completedResult = await supabase
-        .from('invitations')
-        .select('status')
-        .eq('invitation_token', token)
-        .eq('status', 'completed')
-        .single();
+      const completedResults = await db.select()
+        .from(invitations)
+        .where(and(
+          eq(invitations.invitationToken, token),
+          eq(invitations.status, 'completed')
+        ))
+        .limit(1);
 
-      if (completedResult.data) {
+      if (completedResults.length > 0) {
         // Delete completed invitation and show message
-        await supabase
-          .from('invitations')
-          .delete()
-          .eq('invitation_token', token)
-          .eq('status', 'completed');
+        await db.delete(invitations)
+          .where(and(
+            eq(invitations.invitationToken, token),
+            eq(invitations.status, 'completed')
+          ));
 
         return NextResponse.json(
           { error: 'Onboarding already completed! This invitation has been used.' },
@@ -41,36 +43,52 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Find pending invitation by token
-      const result = await supabase
-        .from('invitations')
-        .select(`
-          *,
-          organizations (name),
-          departments (name)
-        `)
-        .eq('invitation_token', token)
-        .eq('status', 'pending')
-        .single();
+      // Find pending invitation by token with nested joins using raw SQL
+      const result = await db.execute<{
+        id: string;
+        organization_id: string;
+        department_id: string;
+        email: string;
+        name: string;
+        job_title: string;
+        phone: string;
+        status: string;
+        expires_at: Date;
+        org_name: string;
+        dept_name: string;
+      }>(sql`
+        SELECT 
+          i.id, i.organization_id, i.department_id, i.email, i.name, i.job_title, i.phone,
+          i.status, i.expires_at,
+          o.name as org_name,
+          d.name as dept_name
+        FROM invitations i
+        LEFT JOIN organizations o ON i.organization_id = o.id
+        LEFT JOIN departments d ON i.department_id = d.id
+        WHERE i.invitation_token = ${token}
+        AND i.status = 'pending'
+        LIMIT 1
+      `);
       
-      invitation = result.data;
-      invitationError = result.error;
+      invitation = result.rows[0];
+      invitationError = !invitation;
     } else if (email) {
       // First check if invitation exists and is completed
-      const completedResult = await supabase
-        .from('invitations')
-        .select('status')
-        .eq('email', email.toLowerCase())
-        .eq('status', 'completed')
-        .single();
+      const completedResults = await db.select()
+        .from(invitations)
+        .where(and(
+          eq(sql`LOWER(${invitations.email})`, email.toLowerCase()),
+          eq(invitations.status, 'completed')
+        ))
+        .limit(1);
 
-      if (completedResult.data) {
+      if (completedResults.length > 0) {
         // Delete completed invitation and show message
-        await supabase
-          .from('invitations')
-          .delete()
-          .eq('email', email.toLowerCase())
-          .eq('status', 'completed');
+        await db.delete(invitations)
+          .where(and(
+            eq(sql`LOWER(${invitations.email})`, email.toLowerCase()),
+            eq(invitations.status, 'completed')
+          ));
 
         return NextResponse.json(
           { error: 'Onboarding already completed! This email has already been registered.' },
@@ -78,20 +96,36 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Find pending invitation by email
-      const result = await supabase
-        .from('invitations')
-        .select(`
-          *,
-          organizations (name),
-          departments (name)
-        `)
-        .eq('email', email.toLowerCase())
-        .eq('status', 'pending')
-        .single();
+      // Find pending invitation by email with nested joins
+      const result = await db.execute<{
+        id: string;
+        organization_id: string;
+        department_id: string;
+        email: string;
+        name: string;
+        job_title: string;
+        phone: string;
+        status: string;
+        expires_at: Date;
+        org_name: string;
+        dept_name: string;
+      }>(sql`
+        SELECT 
+          i.id, i.organization_id, i.department_id, i.email, i.name, i.job_title, i.phone,
+          i.status, i.expires_at,
+          o.name as org_name,
+          d.name as dept_name
+        FROM invitations i
+        LEFT JOIN organizations o ON i.organization_id = o.id
+        LEFT JOIN departments d ON i.department_id = d.id
+        WHERE LOWER(i.email) = ${email.toLowerCase()}
+        AND i.status = 'pending'
+        ORDER BY i.created_at DESC
+        LIMIT 1
+      `);
       
-      invitation = result.data;
-      invitationError = result.error;
+      invitation = result.rows[0];
+      invitationError = !invitation;
     }
 
     if (invitationError || !invitation) {
@@ -105,10 +139,9 @@ export async function POST(request: NextRequest) {
     const expirationDate = new Date(invitation.expires_at);
     if (expirationDate < new Date()) {
       // Update status to expired
-      await supabase
-        .from('invitations')
-        .update({ status: 'expired' })
-        .eq('id', invitation.id);
+      await db.update(invitations)
+        .set({ status: 'expired' })
+        .where(eq(invitations.id, invitation.id));
 
       return NextResponse.json(
         { error: 'Invitation has expired' },
@@ -125,9 +158,9 @@ export async function POST(request: NextRequest) {
         jobTitle: invitation.job_title,
         phone: invitation.phone,
         organizationId: invitation.organization_id,
-        organizationName: invitation.organizations?.name,
+        organizationName: invitation.org_name,
         departmentId: invitation.department_id,
-        departmentName: invitation.departments?.name
+        departmentName: invitation.dept_name
       }
     });
 

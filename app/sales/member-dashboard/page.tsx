@@ -13,12 +13,12 @@ import { Users, TrendingUp, DollarSign, Target, Plus } from 'lucide-react';
 import { Pagination } from '@/app/sales/components/Pagination';
 
 interface Client {
-  client_id: string;
-  client_name: string;
+  clientId: string;
+  clientName: string;
   email: string;
   phone: string;
   industry: string;
-  registration_date: string;
+  registrationDate: string;
 }
 
 interface Analytics {
@@ -27,9 +27,9 @@ interface Analytics {
   totalProfit: number;
   totalClients: number;
   target: {
-    target_revenue: number;
-    achieved_revenue: number;
-    revenue_achievement_percentage: number;
+    targetRevenue: number;
+    achievedRevenue: number;
+    revenueAchievementPercentage: number;
   } | null;
 }
 
@@ -361,9 +361,9 @@ export default function SalesMemberDashboard() {
             <Target className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{analytics?.target?.revenue_achievement_percentage.toFixed(1) || 0}%</div>
+            <div className="text-2xl font-bold">{analytics?.target?.revenueAchievementPercentage.toFixed(1) || 0}%</div>
             <p className="text-xs text-muted-foreground">
-              {formatCurrency(analytics?.target?.achieved_revenue || 0)} / {formatCurrency(analytics?.target?.target_revenue || 0)}
+              {formatCurrency(analytics?.target?.achievedRevenue || 0)} / {formatCurrency(analytics?.target?.targetRevenue || 0)}
             </p>
           </CardContent>
         </Card>
@@ -394,12 +394,12 @@ export default function SalesMemberDashboard() {
                 </TableRow>
               ) : (
                 paginatedClients.map((client) => (
-                  <TableRow key={client.client_id}>
-                    <TableCell className="font-medium">{client.client_name}</TableCell>
+                  <TableRow key={client.clientId}>
+                    <TableCell className="font-medium">{client.clientName}</TableCell>
                     <TableCell>{client.email || '-'}</TableCell>
                     <TableCell>{client.phone || '-'}</TableCell>
                     <TableCell>{client.industry || '-'}</TableCell>
-                    <TableCell>{new Date(client.registration_date).toLocaleDateString()}</TableCell>
+                    <TableCell>{new Date(client.registrationDate).toLocaleDateString()}</TableCell>
                   </TableRow>
                 ))
               )}

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, salesTeamHierarchy, memberAssignmentAudit, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../helpers';
 
 export async function POST(req: NextRequest) {
@@ -27,57 +27,66 @@ export async function POST(req: NextRequest) {
     }
 
     // Verify member exists and is unassigned or being reassigned
-    const { data: member, error: memberError } = await supabaseAdminSales
-      .from('sales_team_hierarchy')
-      .select('*')
-      .eq('user_id', member_user_id)
-      .eq('organization_id', organizationId)
-      .single();
+    const memberResult = await salesDb
+      .select()
+      .from(salesTeamHierarchy)
+      .where(
+        and(
+          eq(salesTeamHierarchy.userId, member_user_id),
+          eq(salesTeamHierarchy.organizationId, organizationId)
+        )
+      )
+      .limit(1);
 
-    if (memberError || !member) {
-      console.error('Member lookup error:', memberError, 'for user_id:', member_user_id, 'org:', organizationId);
-      return NextResponse.json({ error: 'Member not found', details: memberError }, { status: 404 });
+    const member = memberResult[0];
+    if (!member) {
+      console.error('Member not found for user_id:', member_user_id, 'org:', organizationId);
+      return NextResponse.json({ error: 'Member not found' }, { status: 404 });
     }
 
     // Verify manager exists
-    const { data: manager, error: managerError } = await supabaseAdminSales
-      .from('sales_team_hierarchy')
-      .select('*')
-      .eq('user_id', manager_user_id)
-      .eq('organization_id', organizationId)
-      .eq('sales_role', 'sales_manager')
-      .single();
+    const managerResult = await salesDb
+      .select()
+      .from(salesTeamHierarchy)
+      .where(
+        and(
+          eq(salesTeamHierarchy.userId, manager_user_id),
+          eq(salesTeamHierarchy.organizationId, organizationId),
+          eq(salesTeamHierarchy.salesRole, 'sales_manager')
+        )
+      )
+      .limit(1);
 
-    if (managerError || !manager) {
+    const manager = managerResult[0];
+    if (!manager) {
       return NextResponse.json({ error: 'Manager not found' }, { status: 404 });
     }
 
-    const oldManagerId = member.manager_id;
+    const oldManagerId = member.managerId;
 
     // Update member's manager_id
-    const { error: updateError } = await supabaseAdminSales
-      .from('sales_team_hierarchy')
-      .update({ 
-        manager_id: manager_user_id,
-        updated_at: new Date().toISOString()
+    await salesDb
+      .update(salesTeamHierarchy)
+      .set({ 
+        managerId: manager_user_id,
+        updatedAt: new Date()
       })
-      .eq('user_id', member_user_id)
-      .eq('organization_id', organizationId);
-
-    if (updateError) {
-      console.error('Error updating member assignment:', updateError);
-      return NextResponse.json({ error: updateError.message }, { status: 500 });
-    }
+      .where(
+        and(
+          eq(salesTeamHierarchy.userId, member_user_id),
+          eq(salesTeamHierarchy.organizationId, organizationId)
+        )
+      );
 
     // Log the assignment in audit table
-    await supabaseAdminSales
-      .from('member_assignment_audit')
-      .insert({
-        organization_id: organizationId,
-        member_user_id,
-        old_manager_id: oldManagerId,
-        new_manager_id: manager_user_id,
-        assigned_by_admin_id: userId,
+    await salesDb
+      .insert(memberAssignmentAudit)
+      .values({
+        organizationId,
+        memberUserId: member_user_id,
+        oldManagerId: oldManagerId,
+        newManagerId: manager_user_id,
+        assignedByAdminId: userId,
         reason: oldManagerId ? 'Reassignment' : 'Initial assignment'
       });
 
@@ -85,7 +94,7 @@ export async function POST(req: NextRequest) {
       message: 'Member assigned successfully',
       member: {
         ...member,
-        manager_id: manager_user_id
+        managerId: manager_user_id
       }
     });
 
@@ -97,3 +106,4 @@ export async function POST(req: NextRequest) {
     }, { status: 500 });
   }
 }
+

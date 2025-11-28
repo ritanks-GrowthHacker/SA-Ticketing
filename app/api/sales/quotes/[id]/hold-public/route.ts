@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdminSales, supabase } from '@/app/db/connections';
+import { salesDb, salesTeamHierarchy, quotes, clients, eq, and } from '@/lib/sales-db-helper';
 import { emailService } from '@/lib/emailService';
 import { emailTemplates } from '@/app/emailTemplates';
 
@@ -12,63 +12,76 @@ export async function POST(
     const { token } = await request.json();
 
     // Verify magic link token
-    const { data: quote, error: quoteError } = await supabaseAdminSales
-      .from('quotes')
-      .select('*, clients(*)')
-      .eq('quote_id', id)
-      .eq('magic_link_token', token)
-      .single();
+    const quoteResult = await salesDb
+      .select()
+      .from(quotes)
+      .where(
+        and(
+          eq(quotes.quoteId, id),
+          eq(quotes.magicLinkToken, token)
+        )
+      )
+      .limit(1);
 
+    const quote = quoteResult[0];
     console.log('🔍 Quote fetched:', { 
-      quote_id: quote?.quote_id, 
-      created_by_user_id: quote?.created_by_user_id,
+      quote_id: quote?.quoteId, 
+      created_by_user_id: quote?.createdByUserId,
       status: quote?.status 
     });
 
-    if (quoteError || !quote) {
-      console.error('❌ Quote fetch error:', quoteError);
+    if (!quote) {
+      console.error('❌ Quote not found');
       return NextResponse.json({ error: 'Invalid quote or token' }, { status: 404 });
     }
 
-    // Update quote status to hold
-    await supabaseAdminSales
-      .from('quotes')
-      .update({
-        status: 'hold',
-        hold_at: new Date().toISOString()
-      })
-      .eq('quote_id', id);
+    // Fetch client info
+    const clientResult = await salesDb
+      .select()
+      .from(clients)
+      .where(eq(clients.clientId, quote.clientId))
+      .limit(1);
+    
+    const client = clientResult[0];
 
-    console.log('📧 Fetching sales person details for user_id:', quote.created_by_user_id);
+    // Update quote status to hold
+    await salesDb
+      .update(quotes)
+      .set({
+        status: 'hold'
+      })
+      .where(eq(quotes.quoteId, id));
+
+    console.log('📧 Fetching sales person details for user_id:', quote.createdByUserId);
 
     // Get sales person details from sales_team_hierarchy
-    const { data: salesPerson, error: salesPersonError } = await supabaseAdminSales
-      .from('sales_team_hierarchy')
-      .select('full_name, email')
-      .eq('user_id', quote.created_by_user_id)
-      .single();
+    const salesPersonResult = await salesDb
+      .select({ fullName: salesTeamHierarchy.fullName, email: salesTeamHierarchy.email })
+      .from(salesTeamHierarchy)
+      .where(eq(salesTeamHierarchy.userId, quote.createdByUserId))
+      .limit(1);
 
+    const salesPerson = salesPersonResult[0];
     console.log('👤 Sales person found:', salesPerson);
-    if (salesPersonError) console.error('❌ Error fetching sales person:', salesPersonError);
 
     if (salesPerson && salesPerson.email) {
       console.log('📨 Sending connect email to:', salesPerson.email);
       
       const emailHTML = emailTemplates.clientConnectRequest({
-        salesPersonName: salesPerson.full_name,
-        quoteNumber: quote.quote_number,
-        quoteTitle: quote.quote_title,
-        totalAmount: quote.total_amount,
+        salesPersonName: salesPerson.fullName,
+        quoteNumber: quote.quoteNumber,
+        quoteTitle: quote.quoteTitle,
+        totalAmount: parseFloat(quote.totalAmount),
         currency: quote.currency || 'INR',
-        clientName: quote.clients.client_name,
-        contactPerson: quote.clients.contact_person,
-        clientEmail: quote.clients.email,
-        clientPhone: quote.clients.phone
+        clientName: client.clientName,
+        contactPerson: client.contactPerson || '',
+        clientEmail: client.email || '',
+        clientPhone: client.phone || ''
       });
       
       console.log('📧 Email Content:', {
         to: salesPerson.email,
-        subject: `Client Wants to Connect - Quote ${quote.quote_number}`,
+        subject: `Client Wants to Connect - Quote ${quote.quoteNumber}`,
         htmlPreview: emailHTML.substring(0, 200) + '...'
       });
       
@@ -76,7 +89,7 @@ export async function POST(
       try {
         const emailResult = await emailService.sendEmail({
           to: salesPerson.email,
-          subject: `Client Wants to Connect - Quote ${quote.quote_number}`,
+          subject: `Client Wants to Connect - Quote ${quote.quoteNumber}`,
           html: emailHTML
         });
         
@@ -90,7 +103,7 @@ export async function POST(
         // Don't fail the request if email fails
       }
     } else {
-      console.warn('⚠️ No sales person found or email missing for user_id:', quote.created_by_user_id);
+      console.warn('⚠️ No sales person found or email missing for user_id:', quote.createdByUserId);
     }
 
     // Send notification to sales member
@@ -98,23 +111,23 @@ export async function POST(
       const { createSalesNotification } = await import('@/lib/salesNotifications');
       
       await createSalesNotification({
-        userId: quote.created_by_user_id,
-        organizationId: quote.organization_id,
+        userId: quote.createdByUserId,
+        organizationId: quote.organizationId,
         entityType: 'quote',
-        entityId: quote.quote_id,
+        entityId: quote.quoteId,
         title: '🤝 Client Wants to Connect',
-        message: `${quote.clients.client_name} wants to discuss Quote ${quote.quote_number}. Please contact them soon.`,
+        message: `${client.clientName} wants to discuss Quote ${quote.quoteNumber}. Please contact them soon.`,
         type: 'quote_sent',
         metadata: {
-          quote_number: quote.quote_number,
-          client_name: quote.clients.client_name,
-          client_email: quote.clients.email,
-          client_phone: quote.clients.phone,
-          amount: quote.total_amount,
+          quote_number: quote.quoteNumber,
+          client_name: client.clientName,
+          client_email: client.email,
+          client_phone: client.phone,
+          amount: quote.totalAmount,
           currency: quote.currency || 'INR'
         }
       });
-      console.log('✅ Hold notification sent to user:', quote.created_by_user_id);
+      console.log('✅ Hold notification sent to user:', quote.createdByUserId);
     } catch (notifError) {
       console.error('❌ Error sending hold notification:', notifError);
     }

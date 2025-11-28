@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/app/db/connections';
+import { supabaseAdmin } from '@/app/db/connections'; // Keep for Storage only
+import { db, projects, eq } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 interface JWTPayload {
@@ -95,33 +96,37 @@ export async function POST(request: NextRequest) {
       projectId
     });
 
-    // Verify project access using admin client (bypass RLS)
-    const { data: project, error: projectError } = await supabaseAdmin
-      .from('projects')
-      .select('id, organization_id, name')
-      .eq('id', projectId)
-      .single();
+    // Verify project access using Drizzle
+    const projectResults = await db.select({
+      id: projects.id,
+      organizationId: projects.organizationId,
+      name: projects.name
+    })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
+
+    const project = projectResults[0];
 
     console.log('🔍 Project verification:', { 
-      project, 
-      projectError, 
+      project,
       expectedOrgId: orgId,
-      projectOrgId: project?.organization_id 
+      projectOrgId: project?.organizationId
     });
 
-    if (projectError || !project) {
-      console.error('❌ Project access denied:', projectError);
+    if (!project) {
+      console.error('❌ Project access denied');
       return NextResponse.json(
-        { error: 'Project not found or access denied', details: projectError?.message },
+        { error: 'Project not found or access denied' },
         { status: 403 }
       );
     }
 
     // Check organization match
-    if (orgId && project.organization_id !== orgId) {
+    if (orgId && project.organizationId !== orgId) {
       console.error('❌ Organization mismatch:', { 
         userOrgId: orgId, 
-        projectOrgId: project.organization_id 
+        projectOrgId: project.organizationId
       });
       return NextResponse.json(
         { error: 'Project belongs to different organization' },

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuthStore } from '@/app/store/authStore';
 
 interface SalesNotification {
@@ -26,6 +26,13 @@ export function useSalesRealtime(options: UseSalesRealtimeOptions = {}) {
   const { enabled = true, onNotification } = options;
   const [isConnected, setIsConnected] = useState(false);
   const token = useAuthStore(state => state.token);
+  
+  // Use ref to store callback to prevent reconnections on every render
+  const onNotificationRef = useRef(onNotification);
+  
+  useEffect(() => {
+    onNotificationRef.current = onNotification;
+  }, [onNotification]);
 
   useEffect(() => {
     if (!enabled || !token) return;
@@ -51,8 +58,8 @@ export function useSalesRealtime(options: UseSalesRealtimeOptions = {}) {
         const notification: SalesNotification = data;
         console.log('🔔 Sales notification:', notification);
 
-        // Call callback
-        onNotification?.(notification);
+        // Call callback using ref
+        onNotificationRef.current?.(notification);
 
         // Show browser notification if permission granted
         if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
@@ -77,7 +84,7 @@ export function useSalesRealtime(options: UseSalesRealtimeOptions = {}) {
       eventSource.close();
       setIsConnected(false);
     };
-  }, [enabled, onNotification, token]);
+  }, [enabled, token]); // Removed onNotification from dependencies
 
   return { isConnected };
 }

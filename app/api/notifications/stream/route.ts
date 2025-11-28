@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, notifications, eq, and, gt, desc } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 // SSE endpoint for real-time notifications
@@ -47,19 +48,27 @@ export async function GET(request: NextRequest) {
           // Poll for new notifications every 3 seconds
           const pollInterval = setInterval(async () => {
             try {
-              const { data: newNotifications, error } = await supabase
-                .from('notifications')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('is_read', false)
-                .gt('created_at', lastCheckTime.toISOString())
-                .order('created_at', { ascending: false });
+              const newNotifications = await db
+                .select()
+                .from(notifications)
+                .where(
+                  and(
+                    eq(notifications.userId, userId),
+                    eq(notifications.isRead, false),
+                    gt(notifications.createdAt, lastCheckTime)
+                  )
+                )
+                .orderBy(desc(notifications.createdAt));
 
-              if (!error && newNotifications && newNotifications.length > 0) {
+              if (newNotifications && newNotifications.length > 0) {
                 // Send each new notification
                 for (const notification of newNotifications) {
                   controller.enqueue(
-                    encoder.encode(`data: ${JSON.stringify(notification)}\n\n`)
+                    encoder.encode(`data: ${JSON.stringify({
+                      ...notification,
+                      createdAt: notification.createdAt?.toISOString(),
+                      readAt: notification.readAt?.toISOString()
+                    })}\n\n`)
                   );
                 }
                 

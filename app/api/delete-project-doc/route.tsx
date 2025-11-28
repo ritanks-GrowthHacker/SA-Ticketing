@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, projectDocs, projects, userProject, globalRoles, users as usersTable, eq, and } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 interface JWTPayload {
@@ -62,18 +63,21 @@ export async function DELETE(request: NextRequest) {
     // Get the existing document and check permissions
     console.log('🔍 STEP 1: Fetching document details for ID:', doc_id);
     
-    const { data: existingDoc, error: docError } = await supabase
-      .from('project_docs')
-      .select(`
-        *,
-        projects!inner(id, name),
-        author:users!author_id(id, name, email)
-      `)
-      .eq('id', doc_id)
-      .single();
+    const existingDocsData = await db.select({
+      id: projectDocs.id,
+      projectId: projectDocs.projectId,
+      authorId: projectDocs.authorId,
+      title: projectDocs.title,
+      projectName: projects.name
+    })
+    .from(projectDocs)
+    .leftJoin(projects, eq(projectDocs.projectId, projects.id))
+    .where(eq(projectDocs.id, doc_id))
+    .limit(1);
 
-    if (docError || !existingDoc) {
-      console.error('❌ DOCUMENT NOT FOUND:', { docError, doc_id });
+    const existingDoc = existingDocsData[0];
+    if (!existingDoc) {
+      console.error('❌ DOCUMENT NOT FOUND:', { doc_id });
       return NextResponse.json(
         { error: 'Document not found' },
         { status: 404 }
@@ -83,9 +87,8 @@ export async function DELETE(request: NextRequest) {
     console.log('✅ DOCUMENT FOUND:', { 
       id: existingDoc.id, 
       title: existingDoc.title, 
-      author_id: existingDoc.author_id,
-      project_id: existingDoc.project_id,
-      author_email: existingDoc.author?.email
+      author_id: existingDoc.authorId,
+      project_id: existingDoc.projectId
     });
 
     // Check user's organization role first
@@ -95,22 +98,22 @@ export async function DELETE(request: NextRequest) {
     let isProjectManager = false;
     
     // First check if user is Project Admin or Project Manager
-    const { data: userProjectRole, error: userProjectError } = await supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        project_id,
-        role_id,
-        global_roles!inner(id, name)
-      `)
-      .eq('user_id', user_id)
-      .eq('project_id', existingDoc.project_id)
-      .single();
+    const userProjectRoleData = await db.select({
+      userId: userProject.userId,
+      projectId: userProject.projectId,
+      roleId: userProject.roleId,
+      roleName: globalRoles.name
+    })
+    .from(userProject)
+    .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+    .where(and(eq(userProject.userId, user_id), eq(userProject.projectId, existingDoc.projectId)))
+    .limit(1);
 
-    console.log('🔍 User project role query:', { userProjectRole, userProjectError });
+    const userProjectRole = userProjectRoleData[0];
+    console.log('🔍 User project role query:', { userProjectRole });
 
-    if (userProjectRole?.global_roles) {
-      const projectRole = (userProjectRole.global_roles as any)?.name || 'Member';
+    if (userProjectRole && userProjectRole.roleName) {
+      const projectRole = userProjectRole.roleName;
       console.log('✅ User project role:', projectRole);
       
       if (projectRole === 'Admin') {
@@ -124,7 +127,7 @@ export async function DELETE(request: NextRequest) {
       }
     } else {
       // User not in user_project table - check if they're the document author
-      if (existingDoc.author_id === user_id) {
+      if (existingDoc.authorId === user_id) {
         console.log('⚠️ User not in user_project but is document author - allowing access');
         userRole = 'Member'; // Treat as member, can delete own doc
       } else {
@@ -142,20 +145,20 @@ export async function DELETE(request: NextRequest) {
     console.log('🔍 STEP 3: Checking DOCUMENT AUTHOR role');
     let authorRole = 'Member'; // Default role
     
-    const { data: authorProjectRole, error: authorProjectError } = await supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        project_id,
-        role_id,
-        global_roles!inner(id, name)
-      `)
-      .eq('user_id', existingDoc.author_id)
-      .eq('project_id', existingDoc.project_id)
-      .single();
+    const authorProjectRoleData = await db.select({
+      userId: userProject.userId,
+      projectId: userProject.projectId,
+      roleId: userProject.roleId,
+      roleName: globalRoles.name
+    })
+    .from(userProject)
+    .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+    .where(and(eq(userProject.userId, existingDoc.authorId), eq(userProject.projectId, existingDoc.projectId)))
+    .limit(1);
 
-    if (authorProjectRole?.global_roles) {
-      authorRole = (authorProjectRole.global_roles as any)?.name || 'Member';
+    const authorProjectRole = authorProjectRoleData[0];
+    if (authorProjectRole && authorProjectRole.roleName) {
+      authorRole = authorProjectRole.roleName;
       console.log('✅ Author project role:', authorRole);
     } else {
       console.log('⚠️ Author role not found, using default Member');
@@ -166,14 +169,14 @@ export async function DELETE(request: NextRequest) {
     // Check delete permissions based on RBAC rules
     console.log('🔍 STEP 4: PERMISSION CHECK');
     console.log('🔍 PERMISSION CHECK INPUTS:', { 
-      authorId: existingDoc.author_id, 
+      authorId: existingDoc.authorId, 
       currentUserId: user_id, 
       currentUserRole: userRole, 
       authorRole: authorRole,
-      isAuthorSameAsCurrentUser: existingDoc.author_id === user_id
+      isAuthorSameAsCurrentUser: existingDoc.authorId === user_id
     });
     
-    const canDelete = getDeletePermission(existingDoc.author_id, user_id, userRole, authorRole);
+    const canDelete = getDeletePermission(existingDoc.authorId, user_id, userRole, authorRole);
     console.log('🔍 PERMISSION CHECK RESULT:', canDelete);
     
     if (canDelete) {
@@ -190,18 +193,8 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Delete the document
-    const { error: deleteError } = await supabase
-      .from('project_docs')
-      .delete()
-      .eq('id', doc_id);
-
-    if (deleteError) {
-      console.error('❌ Error deleting document:', deleteError);
-      return NextResponse.json(
-        { error: 'Failed to delete project document', details: deleteError.message },
-        { status: 500 }
-      );
-    }
+    await db.delete(projectDocs)
+      .where(eq(projectDocs.id, doc_id));
 
     console.log('✅ Document deleted successfully:', doc_id);
 

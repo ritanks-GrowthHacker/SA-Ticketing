@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
-import { supabase } from "@/app/db/connections";
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from "@/app/db/connections";
+
+// PostgreSQL with Drizzle ORM
+import { db, tickets, projects, users, userOrganizationRoles, userDepartmentRoles, globalRoles, userProject, projectDepartment, sharedProjects, ticketComments, notifications, eq, and, sql } from '@/lib/db-helper';
+
 import jwt from 'jsonwebtoken';
 import { CreateCommentRequest, CommentsListResponse, CommentResponse, TicketCommentWithUser, buildCommentTree } from '../../../db/comment-types';
 
@@ -9,46 +14,72 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 async function checkTicketAccess(ticketId: string, userId: string, organizationId: string): Promise<boolean> {
   try {
     // Get the ticket with project information
-    const { data: ticket, error: ticketError } = await supabase
-      .from('tickets')
-      .select(`
-        id,
-        project_id,
-        assigned_to,
-        created_by,
-        projects!inner(organization_id)
-      `)
-      .eq('id', ticketId)
-      .eq('projects.organization_id', organizationId)
-      .single();
+    // Supabase (commented out)
+    // const { data: ticket, error: ticketError } = await supabase.from('tickets').select(`...`)
 
-    if (ticketError || !ticket) {
+    // PostgreSQL with Drizzle
+    const ticketData = await db
+      .select({
+        id: tickets.id,
+        projectId: tickets.projectId,
+        assignedTo: tickets.assignedTo,
+        createdBy: tickets.createdBy,
+        orgId: projects.organizationId
+      })
+      .from(tickets)
+      .innerJoin(projects, eq(tickets.projectId, projects.id))
+      .where(
+        and(
+          eq(tickets.id, ticketId),
+          eq(projects.organizationId, organizationId)
+        )
+      )
+      .limit(1);
+
+    if (!ticketData || ticketData.length === 0) {
       console.log('❌ Ticket not found or not in user organization:', ticketId);
       return false;
     }
 
+    const ticket = ticketData[0];
+
     // Get user's role in the organization (check both org-level and dept-level)
-    const { data: userOrgRole } = await supabase
-      .from('user_organization_roles')
-      .select(`
-        role_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId)
-      .maybeSingle();
+    // Supabase (commented out)
+    // const { data: userOrgRole } = await supabase.from('user_organization_roles').select(`...`)
+    // const { data: userDeptRole } = await supabase.from('user_department_roles').select(`...`)
 
-    const { data: userDeptRole } = await supabase
-      .from('user_department_roles')
-      .select(`
-        role_id,
-        global_roles!user_department_roles_role_id_fkey(name)
-      `)
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId)
-      .maybeSingle();
+    // PostgreSQL with Drizzle
+    const userOrgRoleData = await db
+      .select({
+        roleId: userOrganizationRoles.roleId,
+        roleName: globalRoles.name
+      })
+      .from(userOrganizationRoles)
+      .innerJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userOrganizationRoles.userId, userId),
+          eq(userOrganizationRoles.organizationId, organizationId)
+        )
+      )
+      .limit(1);
 
-    const userRole = (userOrgRole?.global_roles as any)?.name || (userDeptRole?.global_roles as any)?.name || 'Member';
+    const userDeptRoleData = await db
+      .select({
+        roleId: userDepartmentRoles.roleId,
+        roleName: globalRoles.name
+      })
+      .from(userDepartmentRoles)
+      .innerJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userDepartmentRoles.userId, userId),
+          eq(userDepartmentRoles.organizationId, organizationId)
+        )
+      )
+      .limit(1);
+
+    const userRole = userOrgRoleData[0]?.roleName || userDeptRoleData[0]?.roleName || 'Member';
 
     // Admin can access any ticket in the organization
     if (userRole === 'Admin') {
@@ -62,56 +93,85 @@ async function checkTicketAccess(ticketId: string, userId: string, organizationI
     // 4. Being creator or assignee
 
     // First check if user is creator or assignee
-    if (ticket.assigned_to === userId || ticket.created_by === userId) {
+    if (ticket.assignedTo === userId || ticket.createdBy === userId) {
       return true;
     }
 
     // Get user's department
-    const { data: userData } = await supabase
-      .from('users')
-      .select('department_id')
-      .eq('id', userId)
-      .single();
+    // Supabase (commented out)
+    // const { data: userData } = await supabase.from('users').select('department_id').eq('id', userId).single();
+
+    // PostgreSQL with Drizzle
+    const userData = await db
+      .select({ departmentId: users.departmentId })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
 
     // Check if project belongs to user's department
-    if (userData?.department_id) {
-      const { data: projectDept } = await supabase
-        .from('project_department')
-        .select('project_id')
-        .eq('project_id', ticket.project_id)
-        .eq('department_id', userData.department_id)
-        .maybeSingle();
+    if (userData[0]?.departmentId) {
+      // Supabase (commented out)
+      // const { data: projectDept } = await supabase.from('project_department').select('project_id')...
 
-      if (projectDept) {
+      // PostgreSQL with Drizzle
+      const projectDept = await db
+        .select({ projectId: projectDepartment.projectId })
+        .from(projectDepartment)
+        .where(
+          and(
+            eq(projectDepartment.projectId, ticket.projectId),
+            eq(projectDepartment.departmentId, userData[0].departmentId)
+          )
+        )
+        .limit(1);
+
+      if (projectDept.length > 0) {
         return true;
       }
 
       // Check if project is shared with user's department
-      const { data: sharedProject } = await supabase
-        .from('shared_projects')
-        .select('project_id')
-        .eq('project_id', ticket.project_id)
-        .eq('department_id', userData.department_id)
-        .maybeSingle();
+      // Supabase (commented out)
+      // const { data: sharedProject } = await supabase.from('shared_projects').select('project_id')...
 
-      if (sharedProject) {
+      // PostgreSQL with Drizzle
+      const sharedProject = await db
+        .select({ projectId: sharedProjects.projectId })
+        .from(sharedProjects)
+        .where(
+          and(
+            eq(sharedProjects.projectId, ticket.projectId),
+            eq(sharedProjects.departmentId, userData[0].departmentId)
+          )
+        )
+        .limit(1);
+
+      if (sharedProject.length > 0) {
         return true;
       }
     }
 
     // Get user's project assignments and roles
-    const { data: userProjects } = await supabase
-      .from('user_project')
-      .select(`
-        project_id,
-        role_id,
-        global_roles!user_project_role_id_fkey(name)
-      `)
-      .eq('user_id', userId)
-      .eq('project_id', ticket.project_id);
+    // Supabase (commented out)
+    // const { data: userProjects } = await supabase.from('user_project').select(`...`)
+
+    // PostgreSQL with Drizzle
+    const userProjects = await db
+      .select({
+        projectId: userProject.projectId,
+        roleId: userProject.roleId,
+        roleName: globalRoles.name
+      })
+      .from(userProject)
+      .innerJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userProject.userId, userId),
+          eq(userProject.projectId, ticket.projectId)
+        )
+      );
 
     if (userProjects && userProjects.length > 0) {
-      const projectRole = (userProjects[0].global_roles as any)?.name || 'Member';
+      const projectRole = userProjects[0].roleName || 'Member';
 
       // Manager can access any ticket in projects they manage
       if (projectRole === 'Manager') {
@@ -171,31 +231,37 @@ export async function GET(request: Request) {
     }
 
     // Fetch comments with user information - handle both old and new schema
-    const { data: comments, error } = await supabase
-      .from('ticket_comments')
-      .select(`
-        id,
-        ticket_id,
-        parent_comment_id,
-        user_id,
-        comment,
-        content,
-        is_deleted,
-        created_at,
-        updated_at,
-        users!ticket_comments_user_id_fkey (
-          id,
-          name,
-          email,
-          profile_picture_url
-        )
-      `)
-      .eq('ticket_id', ticket_id)
-      .eq('is_deleted', false) // Only get non-deleted comments
-      .order('created_at', { ascending: true });
+    // Supabase (commented out)
+    // const { data: comments, error } = await supabase.from('ticket_comments').select(`...`)
 
-    if (error) {
-      console.error('❌ Error fetching comments:', error);
+    // PostgreSQL with Drizzle
+    const commentsData = await db
+      .select({
+        id: ticketComments.id,
+        ticketId: ticketComments.ticketId,
+        parentCommentId: ticketComments.parentCommentId,
+        userId: ticketComments.userId,
+        comment: ticketComments.comment,
+        content: ticketComments.content,
+        isDeleted: ticketComments.isDeleted,
+        createdAt: ticketComments.createdAt,
+        updatedAt: ticketComments.updatedAt,
+        userName: users.name,
+        userEmail: users.email,
+        userProfilePictureUrl: users.profilePictureUrl
+      })
+      .from(ticketComments)
+      .innerJoin(users, eq(ticketComments.userId, users.id))
+      .where(
+        and(
+          eq(ticketComments.ticketId, ticket_id),
+          eq(ticketComments.isDeleted, false)
+        )
+      )
+      .orderBy(ticketComments.createdAt);
+
+    if (!commentsData) {
+      console.error('❌ Error fetching comments');
       return NextResponse.json({ 
         success: false, 
         error: 'Failed to fetch comments' 
@@ -203,19 +269,19 @@ export async function GET(request: Request) {
     }
 
     // Transform data to match expected format
-    const transformedComments = comments.map((comment: any) => ({
+    const transformedComments = commentsData.map((comment: any) => ({
       id: comment.id,
-      ticket_id: comment.ticket_id,
-      parent_comment_id: comment.parent_comment_id,
-      user_id: comment.user_id,
+      ticket_id: comment.ticketId,
+      parent_comment_id: comment.parentCommentId,
+      user_id: comment.userId,
       organization_id: organizationId,
       content: comment.content || comment.comment, // Support both old and new fields
-      is_deleted: comment.is_deleted || false,
-      created_at: comment.created_at,
-      updated_at: comment.updated_at,
-      user_name: (comment.users as any)?.name || 'Unknown User',
-      user_email: (comment.users as any)?.email || '',
-      user_avatar: (comment.users as any)?.profile_picture_url || null
+      is_deleted: comment.isDeleted || false,
+      created_at: comment.createdAt,
+      updated_at: comment.updatedAt,
+      user_name: comment.userName || 'Unknown User',
+      user_email: comment.userEmail || '',
+      user_avatar: comment.userProfilePictureUrl || null
     }));
 
     // Build nested comment tree
@@ -287,14 +353,25 @@ export async function POST(request: Request) {
 
     // If this is a reply, verify parent comment exists and belongs to same ticket
     if (parent_comment_id) {
-      const { data: parentComment, error: parentError } = await supabase
-        .from('ticket_comments')
-        .select('id, ticket_id')
-        .eq('id', parent_comment_id)
-        .eq('ticket_id', ticket_id)
-        .single();
+      // Supabase (commented out)
+      // const { data: parentComment, error: parentError } = await supabase.from('ticket_comments').select('id, ticket_id')...
 
-      if (parentError || !parentComment) {
+      // PostgreSQL with Drizzle
+      const parentComment = await db
+        .select({
+          id: ticketComments.id,
+          ticketId: ticketComments.ticketId
+        })
+        .from(ticketComments)
+        .where(
+          and(
+            eq(ticketComments.id, parent_comment_id),
+            eq(ticketComments.ticketId, ticket_id)
+          )
+        )
+        .limit(1);
+
+      if (!parentComment || parentComment.length === 0) {
         return NextResponse.json({ 
           success: false, 
           error: 'Parent comment not found or invalid' 
@@ -302,148 +379,158 @@ export async function POST(request: Request) {
       }
     }
 
-    // Create the comment (support both old and new schema)
-    const commentData: any = {
-      ticket_id,
-      parent_comment_id,
-      user_id: userId,
-      comment: content.trim(), // Use old field for compatibility
-    };
+    // Create the comment
+    // Supabase (commented out)
+    // const { data: newComment, error: createError } = await supabase.from('ticket_comments').insert(commentData).select().single();
 
-    // Add new fields if they exist (after migration)
-    try {
-      const { data: schemaCheck } = await supabase
-        .from('ticket_comments')
-        .select('organization_id, content')
-        .limit(1);
-      
-      // If new fields exist, use them
-      if (schemaCheck) {
-        commentData.organization_id = organizationId;
-        commentData.content = content.trim();
-      }
-    } catch (e) {
-      // New fields don't exist yet, continue with old schema
-    }
+    // PostgreSQL with Drizzle
+    const newCommentData = await db
+      .insert(ticketComments)
+      .values({
+        ticketId: ticket_id,
+        parentCommentId: parent_comment_id || null,
+        userId: userId,
+        comment: content.trim(),
+        content: content.trim(),
+        organizationId: organizationId
+      })
+      .returning();
 
-    const { data: newComment, error: createError } = await supabase
-      .from('ticket_comments')
-      .insert(commentData)
-      .select()
-      .single();
-
-    if (createError) {
-      console.error('❌ Error creating comment:', createError);
+    if (!newCommentData || newCommentData.length === 0) {
+      console.error('❌ Error creating comment');
       return NextResponse.json({ 
         success: false, 
         error: 'Failed to create comment' 
       }, { status: 500 });
     }
 
-    console.log('🕐 Comment created with timestamp:', newComment.created_at);
+    const newComment = newCommentData[0];
+
+    console.log('🕐 Comment created with timestamp:', newComment.createdAt);
     console.log('🕐 Current time for comparison:', new Date().toISOString());
 
     // Get the comment with user information
-    const { data: commentWithUserData, error: fetchError } = await supabase
-      .from('ticket_comments')
-      .select(`
-        id,
-        ticket_id,
-        parent_comment_id,
-        user_id,
-        comment,
-        content,
-        is_deleted,
-        created_at,
-        updated_at,
-        users:user_id (
-          id,
-          name,
-          email,
-          profile_picture_url
-        )
-      `)
-      .eq('id', newComment.id)
-      .single();
+    // Supabase (commented out)
+    // const { data: commentWithUserData, error: fetchError } = await supabase.from('ticket_comments').select(`...`)
 
-    if (fetchError) {
-      console.error('❌ Error fetching created comment:', fetchError);
+    // PostgreSQL with Drizzle
+    const commentWithUserDataResult = await db
+      .select({
+        id: ticketComments.id,
+        ticketId: ticketComments.ticketId,
+        parentCommentId: ticketComments.parentCommentId,
+        userId: ticketComments.userId,
+        comment: ticketComments.comment,
+        content: ticketComments.content,
+        isDeleted: ticketComments.isDeleted,
+        createdAt: ticketComments.createdAt,
+        updatedAt: ticketComments.updatedAt,
+        userName: users.name,
+        userEmail: users.email,
+        userProfilePictureUrl: users.profilePictureUrl
+      })
+      .from(ticketComments)
+      .innerJoin(users, eq(ticketComments.userId, users.id))
+      .where(eq(ticketComments.id, newComment.id))
+      .limit(1);
+
+    if (!commentWithUserDataResult || commentWithUserDataResult.length === 0) {
+      console.error('❌ Error fetching created comment');
       return NextResponse.json({ 
         success: false, 
         error: 'Comment created but failed to fetch details' 
       }, { status: 500 });
     }
 
+    const commentWithUserData = commentWithUserDataResult[0];
+
     // Transform the data
     const commentWithUser = {
       id: commentWithUserData.id,
-      ticket_id: commentWithUserData.ticket_id,
-      parent_comment_id: commentWithUserData.parent_comment_id,
-      user_id: commentWithUserData.user_id,
+      ticket_id: commentWithUserData.ticketId,
+      parent_comment_id: commentWithUserData.parentCommentId,
+      user_id: commentWithUserData.userId,
       organization_id: organizationId,
       content: commentWithUserData.content || commentWithUserData.comment,
-      is_deleted: commentWithUserData.is_deleted || false,
-      created_at: commentWithUserData.created_at,
-      updated_at: commentWithUserData.updated_at,
-      user_name: (commentWithUserData.users as any)?.[0]?.name || 'Unknown User',
-      user_email: (commentWithUserData.users as any)?.[0]?.email || '',
-      user_avatar: (commentWithUserData.users as any)?.[0]?.profile_picture_url || null
+      is_deleted: commentWithUserData.isDeleted || false,
+      created_at: commentWithUserData.createdAt?.toISOString() || new Date().toISOString(),
+      updated_at: commentWithUserData.updatedAt?.toISOString() || new Date().toISOString(),
+      user_name: commentWithUserData.userName || 'Unknown User',
+      user_email: commentWithUserData.userEmail || '',
+      user_avatar: commentWithUserData.userProfilePictureUrl || null
     };
 
     console.log('✅ Comment created successfully:', newComment.id);
 
     // Send notifications to ticket creator and assignee (excluding the commenter)
     try {
-      const { data: ticket } = await supabase
-        .from('tickets')
-        .select(`
-          id,
-          title,
-          created_by,
-          assigned_to,
-          projects!inner(name)
-        `)
-        .eq('id', ticket_id)
-        .single();
+      // Supabase (commented out)
+      // const { data: ticket } = await supabase.from('tickets').select(`...`)
 
-      if (ticket) {
+      // PostgreSQL with Drizzle
+      const ticketData = await db
+        .select({
+          id: tickets.id,
+          title: tickets.title,
+          createdBy: tickets.createdBy,
+          assignedTo: tickets.assignedTo,
+          projectName: projects.name
+        })
+        .from(tickets)
+        .innerJoin(projects, eq(tickets.projectId, projects.id))
+        .where(eq(tickets.id, ticket_id))
+        .limit(1);
+
+      if (ticketData && ticketData.length > 0) {
+        const ticket = ticketData[0];
         const { emailService } = await import('@/lib/emailService');
         const recipients = new Set<string>();
 
         // Add creator (if not the commenter)
-        if (ticket.created_by && ticket.created_by !== userId) {
-          recipients.add(ticket.created_by);
+        if (ticket.createdBy && ticket.createdBy !== userId) {
+          recipients.add(ticket.createdBy);
         }
 
         // Add assignee (if not the commenter and different from creator)
-        if (ticket.assigned_to && ticket.assigned_to !== userId) {
-          recipients.add(ticket.assigned_to);
+        if (ticket.assignedTo && ticket.assignedTo !== userId) {
+          recipients.add(ticket.assignedTo);
         }
 
-        const projectName = (ticket.projects as any)?.name || 'Unknown Project';
+        const projectName = ticket.projectName || 'Unknown Project';
         const commenterName = commentWithUser.user_name;
         const commentText = content.trim().substring(0, 200); // Limit to 200 chars for email
 
         // Send emails and in-app notifications to all recipients
         for (const recipientId of recipients) {
-          const { data: recipient } = await supabase
-            .from('users')
-            .select('name, email')
-            .eq('id', recipientId)
-            .single();
+          // Supabase (commented out)
+          // const { data: recipient } = await supabase.from('users').select('name, email').eq('id', recipientId).single();
 
-          if (recipient) {
+          // PostgreSQL with Drizzle
+          const recipientData = await db
+            .select({
+              name: users.name,
+              email: users.email
+            })
+            .from(users)
+            .where(eq(users.id, recipientId))
+            .limit(1);
+
+          if (recipientData && recipientData.length > 0) {
+            const recipient = recipientData[0];
+            
             // Create in-app notification
-            await supabase
-              .from('notifications')
-              .insert({
-                user_id: recipientId,
-                entity_type: 'ticket',
-                entity_id: ticket_id,
-                title: parent_comment_id ? 'New Reply on Ticket' : 'New Comment on Ticket',
-                message: `${commenterName} ${parent_comment_id ? 'replied to a comment' : 'commented'} on "${ticket.title}": "${commentText.substring(0, 100)}${commentText.length > 100 ? '...' : ''}"`,
-                type: 'info'
-              });
+            // Supabase (commented out)
+            // await supabase.from('notifications').insert({...})
+
+            // PostgreSQL with Drizzle
+            await db.insert(notifications).values({
+              userId: recipientId,
+              entityType: 'ticket',
+              entityId: ticket_id,
+              title: parent_comment_id ? 'New Reply on Ticket' : 'New Comment on Ticket',
+              message: `${commenterName} ${parent_comment_id ? 'replied to a comment' : 'commented'} on "${ticket.title}": "${commentText.substring(0, 100)}${commentText.length > 100 ? '...' : ''}"`,
+              type: 'info'
+            });
 
             // Send email notification
             await emailService.sendTicketCommentEmail(

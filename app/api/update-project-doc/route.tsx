@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, projectDocs, projects, userProject, globalRoles, users as usersTable, eq, and } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 interface JWTPayload {
@@ -68,18 +69,21 @@ export async function PUT(request: NextRequest) {
     }
 
     // Get the existing document and check permissions
-    const { data: existingDoc, error: docError } = await supabase
-      .from('project_docs')
-      .select(`
-        *,
-        projects!inner(id, name),
-        author:users!author_id(id, name, email)
-      `)
-      .eq('id', doc_id)
-      .single();
+    const existingDocsData = await db.select({
+      id: projectDocs.id,
+      projectId: projectDocs.projectId,
+      authorId: projectDocs.authorId,
+      title: projectDocs.title,
+      projectName: projects.name
+    })
+    .from(projectDocs)
+    .leftJoin(projects, eq(projectDocs.projectId, projects.id))
+    .where(eq(projectDocs.id, doc_id))
+    .limit(1);
 
-    if (docError || !existingDoc) {
-      console.log('❌ Document not found:', docError);
+    const existingDoc = existingDocsData[0];
+    if (!existingDoc) {
+      console.log('❌ Document not found');
       return NextResponse.json(
         { error: 'Document not found' },
         { status: 404 }
@@ -90,26 +94,26 @@ export async function PUT(request: NextRequest) {
     console.log('🔍 Checking current user project role');
     let userRole = 'Member'; // Default role
     
-    const { data: userProjectRole, error: userProjectError } = await supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        project_id,
-        role_id,
-        global_roles!inner(id, name)
-      `)
-      .eq('user_id', user_id)
-      .eq('project_id', existingDoc.project_id)
-      .single();
+    const userProjectRoleData = await db.select({
+      userId: userProject.userId,
+      projectId: userProject.projectId,
+      roleId: userProject.roleId,
+      roleName: globalRoles.name
+    })
+    .from(userProject)
+    .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+    .where(and(eq(userProject.userId, user_id), eq(userProject.projectId, existingDoc.projectId)))
+    .limit(1);
 
-    console.log('🔍 User project role query:', { userProjectRole, userProjectError });
+    const userProjectRole = userProjectRoleData[0];
+    console.log('🔍 User project role query:', { userProjectRole });
 
-    if (userProjectRole?.global_roles) {
-      userRole = (userProjectRole.global_roles as any)?.name || 'Member';
+    if (userProjectRole && userProjectRole.roleName) {
+      userRole = userProjectRole.roleName;
       console.log('✅ User project role:', userRole);
     } else {
       // User not in user_project table - check if they're the document author
-      if (existingDoc.author_id === user_id) {
+      if (existingDoc.authorId === user_id) {
         console.log('⚠️ User not in user_project but is document author - allowing access');
         userRole = 'Member'; // Treat as member, can edit own doc
       } else {
@@ -128,27 +132,27 @@ export async function PUT(request: NextRequest) {
     console.log('🔍 Checking document author project role');
     let authorRole = 'Member'; // Default role
     
-    const { data: authorProjectRole } = await supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        project_id,
-        role_id,
-        global_roles!inner(id, name)
-      `)
-      .eq('user_id', existingDoc.author_id)
-      .eq('project_id', existingDoc.project_id)
-      .single();
+    const authorProjectRoleData = await db.select({
+      userId: userProject.userId,
+      projectId: userProject.projectId,
+      roleId: userProject.roleId,
+      roleName: globalRoles.name
+    })
+    .from(userProject)
+    .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+    .where(and(eq(userProject.userId, existingDoc.authorId), eq(userProject.projectId, existingDoc.projectId)))
+    .limit(1);
 
-    if (authorProjectRole?.global_roles) {
-      authorRole = (authorProjectRole.global_roles as any)?.name || 'Member';
+    const authorProjectRole = authorProjectRoleData[0];
+    if (authorProjectRole && authorProjectRole.roleName) {
+      authorRole = authorProjectRole.roleName;
       console.log('✅ Author project role:', authorRole);
     } else {
       console.log('⚠️ Author role not found, using default Member');
     }
 
     // Check edit permissions based on role hierarchy
-    const canEdit = getUpdatePermission(existingDoc.author_id, user_id, userRole, authorRole);
+    const canEdit = getUpdatePermission(existingDoc.authorId, user_id, userRole, authorRole);
     
     if (!canEdit) {
       return NextResponse.json(
@@ -159,42 +163,50 @@ export async function PUT(request: NextRequest) {
 
     // Prepare update data
     const updateData: any = {
-      updated_by: user_id,
-      updated_at: new Date().toISOString()
+      updatedBy: user_id,
+      updatedAt: new Date()
     };
 
     if (title !== undefined) updateData.title = title;
     if (content !== undefined) updateData.content = content;
     if (visibility !== undefined) updateData.visibility = visibility;
-    if (is_public !== undefined) updateData.is_public = is_public;
+    if (is_public !== undefined) updateData.isPublic = is_public;
     if (file_url !== undefined) {
-      updateData.file_url = file_url;
-      updateData.file_name = file_name;
-      updateData.file_type = file_type;
-      updateData.file_size = file_size;
-      updateData.has_file = !!file_url;
+      updateData.fileUrl = file_url;
+      updateData.fileName = file_name;
+      updateData.fileType = file_type;
+      updateData.fileSize = file_size;
+      updateData.hasFile = !!file_url;
     }
 
     // Update the document
-    const { data: updatedDoc, error: updateError } = await supabase
-      .from('project_docs')
-      .update(updateData)
-      .eq('id', doc_id)
-      .select(`
-        *,
-        author:users!author_id(id, name, email),
-        updater:users!updated_by(id, name, email),
-        projects!inner(id, name)
-      `)
-      .single();
+    const updatedDocs = await db.update(projectDocs)
+      .set(updateData)
+      .where(eq(projectDocs.id, doc_id))
+      .returning();
 
-    if (updateError) {
-      console.error('❌ Error updating document:', updateError);
+    const updatedDocBase = updatedDocs[0];
+    if (!updatedDocBase) {
+      console.error('❌ Error updating document: No doc returned');
       return NextResponse.json(
-        { error: 'Failed to update project document', details: updateError.message },
+        { error: 'Failed to update project document' },
         { status: 500 }
       );
     }
+
+    // Fetch related data
+    const [author, updater, projectData] = await Promise.all([
+      db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email }).from(usersTable).where(eq(usersTable.id, updatedDocBase.authorId)).limit(1).then(rows => rows[0] || null),
+      updatedDocBase.updatedBy ? db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email }).from(usersTable).where(eq(usersTable.id, updatedDocBase.updatedBy)).limit(1).then(rows => rows[0] || null) : Promise.resolve(null),
+      db.select({ id: projects.id, name: projects.name }).from(projects).where(eq(projects.id, updatedDocBase.projectId)).limit(1).then(rows => rows[0] || null)
+    ]);
+
+    const updatedDoc = {
+      ...updatedDocBase,
+      author,
+      updater,
+      projects: projectData
+    };
 
     console.log('✅ Document updated successfully:', updatedDoc.id);
 

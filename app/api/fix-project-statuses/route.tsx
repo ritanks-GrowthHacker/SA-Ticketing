@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, projectStatuses } from '@/lib/db-helper';
 
 export async function POST(request: NextRequest) {
   try {
@@ -51,17 +52,17 @@ export async function POST(request: NextRequest) {
 
     console.log('🔧 Inserting statuses:', defaultStatuses);
 
-    const { data: insertedStatuses, error: insertError } = await supabase
-      .from('project_statuses')
-      .insert(defaultStatuses)
-      .select('*');
-
-    if (insertError) {
+    let insertedStatuses;
+    try {
+      insertedStatuses = await db.insert(projectStatuses)
+        .values(defaultStatuses)
+        .returning();
+    } catch (insertError) {
       console.error('🔥 Insert error:', insertError);
       return NextResponse.json(
         { 
           error: 'Failed to insert project statuses', 
-          details: insertError.message 
+          details: (insertError as Error).message 
         }, 
         { status: 500 }
       );

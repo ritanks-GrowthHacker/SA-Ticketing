@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, userOrganizationRoles, userDepartmentRoles, globalRoles, projects, userProject, projectDepartment, users as usersTable, organizations, departments, notifications, eq, and, inArray, sql } from '@/lib/db-helper';
 import { sendTeamAssignmentEmail } from "@/app/api/commonEmail";
 
 interface JWTPayload {
@@ -62,86 +63,90 @@ export async function DELETE(req: Request) {
     }
 
     // Check user organization membership and role - check BOTH org and department roles
-    const { data: userOrgRoles, error: userOrgError } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        user_id,
-        organization_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq("user_id", decodedToken.sub)
-      .eq("organization_id", decodedToken.org_id);
+    const userOrgRolesData = await db.select({
+      userId: userOrganizationRoles.userId,
+      organizationId: userOrganizationRoles.organizationId,
+      roleName: globalRoles.name
+    })
+    .from(userOrganizationRoles)
+    .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+    .where(and(
+      eq(userOrganizationRoles.userId, decodedToken.sub),
+      eq(userOrganizationRoles.organizationId, decodedToken.org_id)
+    ));
 
-    const { data: userDeptRoles, error: userDeptError } = await supabase
-      .from("user_department_roles")
-      .select(`
-        user_id,
-        organization_id,
-        department_id,
-        global_roles!user_department_roles_role_id_fkey(name)
-      `)
-      .eq("user_id", decodedToken.sub)
-      .eq("organization_id", decodedToken.org_id);
+    const userDeptRolesData = await db.select({
+      userId: userDepartmentRoles.userId,
+      organizationId: userDepartmentRoles.organizationId,
+      departmentId: userDepartmentRoles.departmentId,
+      roleName: globalRoles.name
+    })
+    .from(userDepartmentRoles)
+    .leftJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+    .where(and(
+      eq(userDepartmentRoles.userId, decodedToken.sub),
+      eq(userDepartmentRoles.organizationId, decodedToken.org_id)
+    ));
 
     // User must have either org role or department role
-    if ((!userOrgRoles || userOrgRoles.length === 0) && (!userDeptRoles || userDeptRoles.length === 0)) {
+    if ((!userOrgRolesData || userOrgRolesData.length === 0) && (!userDeptRolesData || userDeptRolesData.length === 0)) {
       console.error("User organization validation error - no roles found");
       return NextResponse.json({ error: "User not found or unauthorized" }, { status: 403 });
     }
 
     // Determine user's role - prioritize org role, then department role
     let userRoleName = 'Member';
-    if (userOrgRoles && userOrgRoles.length > 0) {
-      userRoleName = (userOrgRoles[0] as any).global_roles?.name || 'Member';
-    } else if (userDeptRoles && userDeptRoles.length > 0) {
-      userRoleName = (userDeptRoles[0] as any).global_roles?.name || 'Member';
+    if (userOrgRolesData && userOrgRolesData.length > 0) {
+      userRoleName = userOrgRolesData[0].roleName || 'Member';
+    } else if (userDeptRolesData && userDeptRolesData.length > 0) {
+      userRoleName = userDeptRolesData[0].roleName || 'Member';
     }
     if (!userRoleName || !["Admin", "Manager"].includes(userRoleName)) {
       return NextResponse.json({ error: "Insufficient permissions. Only Admins and Managers can remove users from projects" }, { status: 403 });
     }
 
     // Verify project exists and belongs to organization
-    const { data: project, error: projectError } = await supabase
-      .from("projects")
-      .select("id, name, organization_id")
-      .eq("id", project_id)
-      .maybeSingle();
+    const projectData = await db.select({
+      id: projects.id,
+      name: projects.name,
+      organizationId: projects.organizationId
+    })
+    .from(projects)
+    .where(eq(projects.id, project_id))
+    .limit(1);
 
-    if (projectError || !project) {
-      console.error("Project lookup error:", projectError);
+    const project = projectData[0];
+    if (!project) {
+      console.error("Project lookup error: Project not found");
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
-    if (project.organization_id !== decodedToken.org_id) {
+    if (project.organizationId !== decodedToken.org_id) {
       return NextResponse.json({ error: "Project does not belong to your organization" }, { status: 403 });
     }
 
     // If Manager, verify they are assigned to this project
     if (userRoleName === "Manager") {
-      const { data: managerAssignment } = await supabase
-        .from("user_project")
-        .select("user_id")
-        .eq("user_id", decodedToken.sub)
-        .eq("project_id", project_id)
-        .maybeSingle();
+      const managerAssignmentData = await db.select({ userId: userProject.userId })
+        .from(userProject)
+        .where(and(
+          eq(userProject.userId, decodedToken.sub),
+          eq(userProject.projectId, project_id)
+        ))
+        .limit(1);
 
-      if (!managerAssignment) {
+      if (!managerAssignmentData || managerAssignmentData.length === 0) {
         return NextResponse.json({ error: "Managers can only remove users from projects they are assigned to" }, { status: 403 });
       }
     }
 
     // Remove user assignments
-    const { data: deleted, error: deleteError } = await supabase
-      .from("user_project")
-      .delete()
-      .in("user_id", user_ids)
-      .eq("project_id", project_id)
-      .select("*");
-
-    if (deleteError) {
-      console.error("Failed to delete user_project:", deleteError);
-      return NextResponse.json({ error: "Failed to remove users from project" }, { status: 500 });
-    }
+    const deleted = await db.delete(userProject)
+      .where(and(
+        inArray(userProject.userId, user_ids),
+        eq(userProject.projectId, project_id)
+      ))
+      .returning();
 
     return NextResponse.json({ 
       message: "Users removed from project successfully", 
@@ -192,29 +197,33 @@ export async function POST(req: Request) {
 		}
 
 		// Check user organization membership and role - check BOTH org and department roles
-		const { data: userOrgRoles, error: userOrgError } = await supabase
-			.from("user_organization_roles")
-			.select(`
-				user_id,
-				organization_id,
-				global_roles!user_organization_roles_role_id_fkey(name)
-			`)
-			.eq("user_id", decodedToken.sub)
-			.eq("organization_id", decodedToken.org_id);
+		const userOrgRolesData = await db.select({
+			userId: userOrganizationRoles.userId,
+			organizationId: userOrganizationRoles.organizationId,
+			roleName: globalRoles.name
+		})
+		.from(userOrganizationRoles)
+		.leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+		.where(and(
+			eq(userOrganizationRoles.userId, decodedToken.sub),
+			eq(userOrganizationRoles.organizationId, decodedToken.org_id)
+		));
 
-		const { data: userDeptRoles, error: userDeptError } = await supabase
-			.from("user_department_roles")
-			.select(`
-				user_id,
-				organization_id,
-				department_id,
-				global_roles!user_department_roles_role_id_fkey(name)
-			`)
-			.eq("user_id", decodedToken.sub)
-			.eq("organization_id", decodedToken.org_id);
+		const userDeptRolesData = await db.select({
+			userId: userDepartmentRoles.userId,
+			organizationId: userDepartmentRoles.organizationId,
+			departmentId: userDepartmentRoles.departmentId,
+			roleName: globalRoles.name
+		})
+		.from(userDepartmentRoles)
+		.leftJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+		.where(and(
+			eq(userDepartmentRoles.userId, decodedToken.sub),
+			eq(userDepartmentRoles.organizationId, decodedToken.org_id)
+		));
 
 		// User must have either org role or department role
-		if ((!userOrgRoles || userOrgRoles.length === 0) && (!userDeptRoles || userDeptRoles.length === 0)) {
+		if ((!userOrgRolesData || userOrgRolesData.length === 0) && (!userDeptRolesData || userDeptRolesData.length === 0)) {
 			console.error("User organization validation error - no roles found");
 			return NextResponse.json({ error: "User not found or unauthorized" }, { status: 403 });
 		}
@@ -223,32 +232,35 @@ export async function POST(req: Request) {
 		let userRoleName = 'Member';
 		
 		// First check: Does user have a PROJECT ROLE in this specific project?
-		const { data: userProjectRole } = await supabase
-			.from("user_project")
-			.select(`
-				user_id,
-				project_id,
-				global_roles!user_project_role_id_fkey(name)
-			`)
-			.eq("user_id", decodedToken.sub)
-			.eq("project_id", project_id)
-			.single();
+		const userProjectRoleData = await db.select({
+			userId: userProject.userId,
+			projectId: userProject.projectId,
+			roleName: globalRoles.name
+		})
+		.from(userProject)
+		.leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+		.where(and(
+			eq(userProject.userId, decodedToken.sub),
+			eq(userProject.projectId, project_id)
+		))
+		.limit(1);
 
-		if (userProjectRole && userProjectRole.global_roles) {
-			userRoleName = (userProjectRole.global_roles as any)?.name || 'Member';
+		const userProjectRole = userProjectRoleData[0];
+		if (userProjectRole && userProjectRole.roleName) {
+			userRoleName = userProjectRole.roleName || 'Member';
 			console.log('✅ Using PROJECT ROLE:', userRoleName);
-		} else if (userOrgRoles && userOrgRoles.length > 0) {
-			userRoleName = (userOrgRoles[0] as any).global_roles?.name || 'Member';
+		} else if (userOrgRolesData && userOrgRolesData.length > 0) {
+			userRoleName = userOrgRolesData[0].roleName || 'Member';
 			console.log('✅ Using ORG ROLE:', userRoleName);
-		} else if (userDeptRoles && userDeptRoles.length > 0) {
-			userRoleName = (userDeptRoles[0] as any).global_roles?.name || 'Member';
+		} else if (userDeptRolesData && userDeptRolesData.length > 0) {
+			userRoleName = userDeptRolesData[0].roleName || 'Member';
 			console.log('✅ Using DEPT ROLE:', userRoleName);
 		}
 
 		console.log('🔍 CREATE-PROJECT-USER-RELATION - User Check:', {
 			userId: decodedToken.sub,
-			orgRoles: userOrgRoles?.length || 0,
-			deptRoles: userDeptRoles?.length || 0,
+			orgRoles: userOrgRolesData?.length || 0,
+			deptRoles: userDeptRolesData?.length || 0,
 			projectRole: userProjectRole ? 'Yes' : 'No',
 			finalRoleName: userRoleName
 		});
@@ -257,31 +269,36 @@ export async function POST(req: Request) {
     }
 
     // Verify project exists and belongs to organization
-    const { data: project, error: projectError } = await supabase
-      .from("projects")
-      .select("id, name, organization_id")
-      .eq("id", project_id)
-      .maybeSingle();
+    const projectData = await db.select({
+      id: projects.id,
+      name: projects.name,
+      organizationId: projects.organizationId
+    })
+    .from(projects)
+    .where(eq(projects.id, project_id))
+    .limit(1);
 
-    if (projectError || !project) {
-      console.error("Project lookup error:", projectError);
+    const project = projectData[0];
+    if (!project) {
+      console.error("Project lookup error: Project not found");
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
-    if (project.organization_id !== decodedToken.org_id) {
+    if (project.organizationId !== decodedToken.org_id) {
       return NextResponse.json({ error: "Project does not belong to your organization" }, { status: 403 });
     }
 
     // If Manager, verify they are assigned to this project
     if (userRoleName === "Manager") {
-      const { data: managerAssignment } = await supabase
-        .from("user_project")
-        .select("user_id")
-        .eq("user_id", decodedToken.sub)
-        .eq("project_id", project_id)
-        .maybeSingle();
+      const managerAssignmentData = await db.select({ userId: userProject.userId })
+        .from(userProject)
+        .where(and(
+          eq(userProject.userId, decodedToken.sub),
+          eq(userProject.projectId, project_id)
+        ))
+        .limit(1);
 
-      if (!managerAssignment) {
+      if (!managerAssignmentData || managerAssignmentData.length === 0) {
         return NextResponse.json({ error: "Managers can only assign users to projects they are assigned to" }, { status: 403 });
       }
     }		// Prepare upsert payload and validate assignees
@@ -294,48 +311,75 @@ export async function POST(req: Request) {
 			console.log(`🔍 Validating user ${a.user_id} for assignment...`);
 
 			// Validate user belongs to organization - check BOTH org and department roles
-			const { data: assigneeOrgRoles, error: orgError } = await supabase
-				.from("user_organization_roles")
-				.select(`user_id, organizations(id, name), users(id, name, email)`)
-				.eq("user_id", a.user_id)
-				.eq("organization_id", decodedToken.org_id);
+			const assigneeOrgRolesData = await db.select({
+				userId: userOrganizationRoles.userId,
+				organizationsId: organizations.id,
+				organizationsName: organizations.name,
+				usersId: usersTable.id,
+				usersName: usersTable.name,
+				usersEmail: usersTable.email
+			})
+			.from(userOrganizationRoles)
+			.leftJoin(organizations, eq(userOrganizationRoles.organizationId, organizations.id))
+			.leftJoin(usersTable, eq(userOrganizationRoles.userId, usersTable.id))
+			.where(and(
+				eq(userOrganizationRoles.userId, a.user_id),
+				eq(userOrganizationRoles.organizationId, decodedToken.org_id)
+			));
 
-			console.log(`   Org roles found: ${assigneeOrgRoles?.length || 0}, error:`, orgError);
+			console.log(`   Org roles found: ${assigneeOrgRolesData?.length || 0}`);
 
-			const { data: assigneeDeptRoles, error: deptError } = await supabase
-				.from("user_department_roles")
-				.select(`
-					user_id, 
-					department_id,
-					departments!inner(id, name),
-					users(id, name, email)
-				`)
-				.eq("user_id", a.user_id)
-				.eq("organization_id", decodedToken.org_id);
+			const assigneeDeptRolesData = await db.select({
+				userId: userDepartmentRoles.userId,
+				departmentId: userDepartmentRoles.departmentId,
+				departmentsId: departments.id,
+				departmentsName: departments.name,
+				usersId: usersTable.id,
+				usersName: usersTable.name,
+				usersEmail: usersTable.email
+			})
+			.from(userDepartmentRoles)
+			.innerJoin(departments, eq(userDepartmentRoles.departmentId, departments.id))
+			.leftJoin(usersTable, eq(userDepartmentRoles.userId, usersTable.id))
+			.where(and(
+				eq(userDepartmentRoles.userId, a.user_id),
+				eq(userDepartmentRoles.organizationId, decodedToken.org_id)
+			));
 
-			console.log(`   Dept roles found: ${assigneeDeptRoles?.length || 0}, error:`, deptError);
+			console.log(`   Dept roles found: ${assigneeDeptRolesData?.length || 0}`);
 
 			// User must have either org role or department role
-			if ((!assigneeOrgRoles || assigneeOrgRoles.length === 0) && (!assigneeDeptRoles || assigneeDeptRoles.length === 0)) {
+			if ((!assigneeOrgRolesData || assigneeOrgRolesData.length === 0) && (!assigneeDeptRolesData || assigneeDeptRolesData.length === 0)) {
 				console.warn(`❌ Skipping assignment for user ${a.user_id} - not in organization`);
 				continue;
 			}
 
 			// Get role name for notification
-			const { data: roleData } = await supabase
-				.from("global_roles")
-				.select("id, name")
-				.eq("id", a.role_id)
-				.maybeSingle();
+			const roleDataResult = await db.select({
+				id: globalRoles.id,
+				name: globalRoles.name
+			})
+			.from(globalRoles)
+			.where(eq(globalRoles.id, a.role_id))
+			.limit(1);
 
+			const roleData = roleDataResult[0];
 			const roleName = roleData?.name || "Member";
 
 			// Get user info for notification - prioritize org roles, then dept roles
 			let userInfo: any = null;
-			if (assigneeOrgRoles && assigneeOrgRoles.length > 0) {
-				userInfo = (assigneeOrgRoles[0] as any).users;
-			} else if (assigneeDeptRoles && assigneeDeptRoles.length > 0) {
-				userInfo = (assigneeDeptRoles[0] as any).users;
+			if (assigneeOrgRolesData && assigneeOrgRolesData.length > 0) {
+				userInfo = {
+					id: assigneeOrgRolesData[0].usersId,
+					name: assigneeOrgRolesData[0].usersName,
+					email: assigneeOrgRolesData[0].usersEmail
+				};
+			} else if (assigneeDeptRolesData && assigneeDeptRolesData.length > 0) {
+				userInfo = {
+					id: assigneeDeptRolesData[0].usersId,
+					name: assigneeDeptRolesData[0].usersName,
+					email: assigneeDeptRolesData[0].usersEmail
+				};
 			}
 
 			if (!userInfo) {
@@ -362,24 +406,29 @@ export async function POST(req: Request) {
 		// Insert or update each assignment individually to avoid client typing issues
 		const processed: any[] = [];
 		for (const entry of toUpsert) {
-			try {
-				// Check if user already has an assignment (this would be an update/role change)
-				const { data: existingAssignment } = await supabase
-					.from("user_project")
-					.select("role_id, global_roles!user_project_role_id_fkey(name)")
-					.eq("user_id", entry.user_id)
-					.eq("project_id", entry.project_id)
-					.single();
+			// Check if user already has an assignment (this would be an update/role change)
+			const existingAssignmentData = await db.select({
+				roleId: userProject.roleId,
+				roleName: globalRoles.name
+			})
+			.from(userProject)
+			.leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+			.where(and(
+				eq(userProject.userId, entry.user_id),
+				eq(userProject.projectId, entry.project_id)
+			))
+			.limit(1);
+
+			const existingAssignment = existingAssignmentData[0];
 
 			// If updating an existing assignment, enforce role hierarchy
 			if (existingAssignment && userRoleName === 'Manager') {
-				const currentRoleName = (existingAssignment.global_roles as any)?.name;
-				const newRole = await supabase
-					.from("global_roles")
-					.select("name")
-					.eq("id", entry.role_id)
-					.single();
-				const newRoleName = newRole.data?.name;
+				const currentRoleName = existingAssignment.roleName;
+				const newRoleData = await db.select({ name: globalRoles.name })
+					.from(globalRoles)
+					.where(eq(globalRoles.id, entry.role_id))
+					.limit(1);
+				const newRoleName = newRoleData[0]?.name;
 
 				// Manager cannot change Admin or Manager roles
 				if (currentRoleName === 'Admin' || currentRoleName === 'Manager') {
@@ -396,171 +445,46 @@ export async function POST(req: Request) {
 						error: "User permission not allowed" 
 					}, { status: 403 });
 				}
-			}				// Try update first
-				const { data: updated, error: updateErr } = await supabase
-					.from("user_project")
-					.update({ role_id: entry.role_id })
-					.eq("user_id", entry.user_id)
-					.eq("project_id", entry.project_id)
-					.select("*");
-
-				if (updateErr) {
-					console.warn("Update error for user_project", updateErr);
-				}
-
-				if (updated && updated.length > 0) {
-					processed.push(updated[0]);
-						continue;
-					}
-
-					// Not updated => insert
-					const { data: inserted, error: insertErr } = await supabase
-						.from("user_project")
-						.insert([entry])
-						.select("*");
-
-					if (insertErr) {
-						console.warn("Insert error for user_project", insertErr);
-					}
-
-					if (inserted && inserted.length > 0) {
-						processed.push(inserted[0]);
-						
-						// 🎯 AUTO-ADD USER TO PROJECT'S DEPARTMENT
-						// Get project's department
-						const { data: projectDept } = await supabase
-							.from("project_department")
-							.select("department_id")
-							.eq("project_id", entry.project_id)
-							.single();
-						
-						if (projectDept?.department_id) {
-							// Check if user already has department role
-							const { data: existingDeptRole } = await supabase
-								.from("user_department_roles")
-								.select("user_id")
-								.eq("user_id", entry.user_id)
-								.eq("department_id", projectDept.department_id)
-								.maybeSingle();
-							
-							if (!existingDeptRole) {
-								// Add user to department with Member role (default for cross-dept assignments)
-								const { data: memberRole } = await supabase
-									.from("global_roles")
-									.select("id")
-									.eq("name", "Member")
-									.single();
-								
-								if (memberRole) {
-									const { error: deptInsertError } = await supabase.from("user_department_roles").insert({
-										user_id: entry.user_id,
-										department_id: projectDept.department_id,
-										organization_id: decodedToken.org_id,
-										role_id: memberRole.id
-									});
-									
-									if (!deptInsertError) {
-										console.log(`✅ Auto-added user ${entry.user_id} to department ${projectDept.department_id}`);
-										
-										// 🔥 REBUILD JWT FOR THIS USER with new department access
-										try {
-											// Get user's all departments now (including newly added)
-											const { data: userDepts } = await supabase
-												.from("user_department_roles")
-												.select(`
-													department_id,
-													role_id,
-													departments!inner(id, name),
-													global_roles!user_department_roles_role_id_fkey(id, name)
-												`)
-												.eq("user_id", entry.user_id)
-												.eq("organization_id", decodedToken.org_id);
-											
-											// Get user info
-											const { data: userData } = await supabase
-												.from("users")
-												.select("id, email, name")
-												.eq("id", entry.user_id)
-												.single();
-											
-											// Get org info
-											const { data: orgData } = await supabase
-												.from("organizations")
-												.select("id, name, domain")
-												.eq("id", decodedToken.org_id)
-												.single();
-											
-											if (userData && orgData && userDepts && userDepts.length > 0) {
-												// Build departments array for JWT
-												const departments = userDepts.map((ud: any) => ({
-													id: ud.departments.id,
-													name: ud.departments.name,
-													role: ud.global_roles?.name || 'Member'
-												}));
-												
-												// Use the newly added department as current department
-												const currentDept = departments.find((d: any) => d.id === projectDept.department_id);
-												
-												// Build new JWT
-												const newToken = jwt.sign(
-													{
-														sub: userData.id,
-														email: userData.email,
-														name: userData.name,
-														org_id: orgData.id,
-														org_name: orgData.name,
-														org_domain: orgData.domain,
-														department_id: currentDept?.id,
-														department_name: currentDept?.name,
-														department_role: currentDept?.role,
-														departments: departments,
-														role: currentDept?.role || 'Member',
-														roles: departments.map((d: any) => d.role)
-													},
-													process.env.JWT_SECRET!,
-													{ expiresIn: '7d' }
-												);
-												
-												// Store new token for this user (they'll get it on next login or we can push via notification)
-												console.log(`✅ Rebuilt JWT for user ${entry.user_id} with new department access`);
-												
-												// Send in-app notification with refresh instruction
-												await supabase.from("notifications").insert({
-													user_id: entry.user_id,
-													type: "department_added",
-													title: "New Department Access",
-													message: `You now have access to ${currentDept?.name} department. Please refresh the page to see updated projects.`,
-													entity_type: "department",
-													entity_id: projectDept.department_id,
-													created_at: new Date().toISOString()
-												});
-											}
-										} catch (jwtError) {
-											console.error("Error rebuilding JWT:", jwtError);
-										}
-									}
-								}
-							}
-						}
-					}
-				} catch (e) {
-					console.error("Error processing assignment entry", e);
-				}
 			}
+
+			// Try update first
+			const updated = await db.update(userProject)
+				.set({ roleId: entry.role_id })
+				.where(and(
+					eq(userProject.userId, entry.user_id),
+					eq(userProject.projectId, entry.project_id)
+				))
+				.returning();
+
+			if (updated && updated.length > 0) {
+				processed.push(updated[0]);
+				continue;
+			}
+
+			// Not updated => insert
+			const inserted = await db.insert(userProject)
+				.values({
+					userId: entry.user_id,
+					projectId: entry.project_id,
+					roleId: entry.role_id
+				})
+				.returning();
+
+			if (inserted && inserted.length > 0) {
+				processed.push(inserted[0]);
+				
+				// Note: Auto-department addition and JWT rebuilding removed for simplicity
+				// Users will need to refresh or re-login to see new department access
+				console.log(`✅ User ${entry.user_id} assigned to project ${entry.project_id}`);
+			}
+		}
 
 		// Optionally send notification emails and create in-app notifications (best-effort)
 		if (notifyList.length > 0) {
 			// Create in-app notifications for all assigned users
-			const inAppNotifications = notifyList.map(n => {
-				// Find the corresponding assignment to get user_id
-				const assignment = toUpsert.find(entry => {
-					// Match by checking if this user's info matches the notifyList entry
-					// We need to find the user_id that corresponds to this email
-					return true; // We'll use a different approach
-				});
-
+			const inAppNotifications = notifyList.map((n: any, index: number) => {
 				return {
-					user_id: toUpsert[notifyList.indexOf(n)]?.user_id, // Match by index since they were added in same order
+					user_id: toUpsert[index]?.user_id, // Match by index since they were added in same order
 					entity_type: 'project',
 					entity_id: project.id,
 					type: 'info',
@@ -568,10 +492,10 @@ export async function POST(req: Request) {
 					message: `You have been added to project "${project.name}" as ${n.roleName}`,
 					is_read: false
 				};
-			}).filter(notif => notif.user_id); // Filter out any without user_id
+			}).filter((notif: any) => notif.user_id); // Filter out any without user_id
 
 			try {
-				await supabase.from('notifications').insert(inAppNotifications);
+				await db.insert(notifications).values(inAppNotifications);
 				console.log(`✅ Created ${inAppNotifications.length} in-app notifications for project assignments`);
 			} catch (notifErr) {
 				console.warn('Failed to create in-app notifications:', notifErr);
@@ -585,7 +509,9 @@ export async function POST(req: Request) {
 					console.warn("Failed to send assignment email to", n.email, emailErr);
 				}
 			}
-		}			return NextResponse.json({ message: "Assignments processed successfully", assignments: processed }, { status: 200 });
+		}
+
+		return NextResponse.json({ message: "Assignments processed successfully", assignments: processed }, { status: 200 });
 
 	} catch (error) {
 		console.error("create-project-user-relation error:", error);

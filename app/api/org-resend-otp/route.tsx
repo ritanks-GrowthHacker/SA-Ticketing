@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, eq } from '@/lib/db-helper';
 import { OTPService } from '@/lib/otpService';
 import bcrypt from 'bcryptjs';
 
@@ -21,13 +22,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the organization by email
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('id, org_email, otp_verified')
-      .eq('org_email', orgEmail)
-      .single();
+    const orgResults = await db.select({
+      id: organizations.id,
+      orgEmail: organizations.orgEmail,
+      otpVerified: organizations.otpVerified
+    })
+      .from(organizations)
+      .where(eq(organizations.orgEmail, orgEmail))
+      .limit(1);
+    
+    const organization = orgResults[0] || null;
 
-    if (orgError || !organization) {
+    if (!organization) {
       return NextResponse.json(
         { error: 'Organization not found' },
         { status: 404 }
@@ -35,7 +41,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if already verified
-    if (organization.otp_verified) {
+    if (organization.otpVerified) {
       return NextResponse.json(
         { error: 'Organization email is already verified' },
         { status: 400 }
@@ -47,15 +53,14 @@ export async function POST(request: NextRequest) {
     const otpExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes from now
 
     // Update organization with new OTP
-    const { error: updateError } = await supabase
-      .from('organizations')
-      .update({
-        otp: emailOtp,
-        otp_expires_at: otpExpiry.toISOString()
-      })
-      .eq('id', organization.id);
-
-    if (updateError) {
+    try {
+      await db.update(organizations)
+        .set({
+          otp: emailOtp,
+          otpExpiresAt: otpExpiry
+        })
+        .where(eq(organizations.id, organization.id));
+    } catch (updateError) {
       console.error('Error updating organization OTP:', updateError);
       return NextResponse.json(
         { error: 'Failed to generate new OTP' },

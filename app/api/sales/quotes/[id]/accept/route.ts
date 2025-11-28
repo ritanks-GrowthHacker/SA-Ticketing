@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, quotes, clients, transactions, transactionLineItems, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../../../helpers';
 import { emailService } from '@/lib/emailService';
 
@@ -21,17 +21,31 @@ export async function POST(
     const { userId, organizationId } = extractUserAndOrgId(decoded);
     const { id } = await params;
 
-    // Fetch quote with client info
-    const { data: quote, error: quoteError } = await supabaseAdminSales
-      .from('quotes')
-      .select('*, clients(*)')
-      .eq('quote_id', id)
-      .eq('organization_id', organizationId)
-      .single();
+    // Fetch quote
+    const quoteResult = await salesDb
+      .select()
+      .from(quotes)
+      .where(
+        and(
+          eq(quotes.quoteId, id),
+          eq(quotes.organizationId, organizationId)
+        )
+      )
+      .limit(1);
 
-    if (quoteError || !quote) {
+    const quote = quoteResult[0];
+    if (!quote) {
       return NextResponse.json({ error: 'Quote not found' }, { status: 404 });
     }
+
+    // Fetch client info
+    const clientResult = await salesDb
+      .select()
+      .from(clients)
+      .where(eq(clients.clientId, quote.clientId))
+      .limit(1);
+    
+    const client = clientResult[0];
 
     if (quote.status === 'accepted') {
       return NextResponse.json({ error: 'Quote already accepted' }, { status: 400 });
@@ -41,73 +55,74 @@ export async function POST(
     const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
     // Create transaction from quote
-    const { data: transaction, error: txnError } = await supabaseAdminSales
-      .from('transactions')
-      .insert({
-        organization_id: organizationId,
-        client_id: quote.client_id,
-        sales_member_id: quote.created_by_user_id,
-        transaction_date: new Date().toISOString(),
-        invoice_number: invoiceNumber,
-        subtotal_amount: quote.quote_amount,
-        discount_percentage: 0,
-        discount_amount: 0,
-        tax_percentage: quote.tax_amount && quote.quote_amount ? ((quote.tax_amount / quote.quote_amount) * 100) : 0,
-        tax_amount: quote.tax_amount || 0,
-        total_amount: quote.total_amount,
+    const transactionResult = await salesDb
+      .insert(transactions)
+      .values({
+        organizationId,
+        clientId: quote.clientId,
+        salesMemberId: quote.createdByUserId,
+        transactionDate: new Date().toISOString().split('T')[0],
+        invoiceNumber,
+        subtotalAmount: quote.quoteAmount,
+        discountPercentage: '0',
+        discountAmount: '0',
+        taxPercentage: (quote.taxAmount && quote.quoteAmount) ? ((parseFloat(quote.taxAmount) / parseFloat(quote.quoteAmount)) * 100).toString() : '0',
+        taxAmount: quote.taxAmount || '0',
+        totalAmount: quote.totalAmount,
         currency: quote.currency || 'INR',
-        payment_status: 'pending',
-        amount_paid: 0,
-        amount_due: quote.total_amount,
-        notes: `Generated from Quote ${quote.quote_number}`
+        paymentStatus: 'pending',
+        amountPaid: '0',
+        amountDue: quote.totalAmount,
+        notes: `Generated from Quote ${quote.quoteNumber}`
       })
-      .select()
-      .single();
+      .returning();
 
-    if (txnError) {
-      console.error('Error creating transaction:', txnError);
+    const transaction = transactionResult[0];
+    if (!transaction) {
+      console.error('Error creating transaction: No result returned');
       return NextResponse.json({ error: 'Failed to create transaction' }, { status: 500 });
     }
 
     // Create line items from quote items
-    if (quote.quote_items && quote.quote_items.length > 0) {
-      const lineItems = quote.quote_items.map((item: any) => ({
-        transaction_id: transaction.transaction_id,
-        product_name: item.description,
+    const quoteItemsArray = quote.quoteItems as any[] || [];
+    if (quoteItemsArray && quoteItemsArray.length > 0) {
+      const lineItemsData = quoteItemsArray.map((item: any) => ({
+        transactionId: transaction.transactionId,
+        productName: item.description,
         quantity: item.quantity,
-        unit_price: item.rate,
-        line_total: item.amount,
-        discount_percentage: 0
+        unitPrice: item.rate.toString(),
+        lineTotal: item.amount.toString(),
+        discountPercentage: '0'
       }));
 
-      await supabaseAdminSales
-        .from('transaction_line_items')
-        .insert(lineItems);
+      await salesDb
+        .insert(transactionLineItems)
+        .values(lineItemsData);
     }
 
     // Update quote status
-    await supabaseAdminSales
-      .from('quotes')
-      .update({
+    await salesDb
+      .update(quotes)
+      .set({
         status: 'accepted',
-        accepted_at: new Date().toISOString()
+        acceptedAt: new Date()
       })
-      .eq('quote_id', id);
+      .where(eq(quotes.quoteId, id));
 
     // Send payment email to client
     try {
       await emailService.sendEmail({
-        to: quote.clients.email,
+        to: client.email!,
         subject: `Invoice ${invoiceNumber} - Payment Details`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #333;">Invoice Generated - Quote Accepted</h2>
-            <p>Hello ${quote.clients.contact_person || quote.clients.client_name},</p>
+            <p>Hello ${client.contactPerson || client.clientName},</p>
             <p>Thank you for accepting our quote! Your invoice has been generated:</p>
             <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
               <p style="margin: 5px 0;"><strong>Invoice Number:</strong> ${invoiceNumber}</p>
-              <p style="margin: 5px 0;"><strong>Quote Number:</strong> ${quote.quote_number}</p>
-              <p style="margin: 5px 0;"><strong>Amount:</strong> ${new Intl.NumberFormat('en-IN', { style: 'currency', currency: quote.currency || 'INR' }).format(quote.total_amount)}</p>
+              <p style="margin: 5px 0;"><strong>Quote Number:</strong> ${quote.quoteNumber}</p>
+              <p style="margin: 5px 0;"><strong>Amount:</strong> ${new Intl.NumberFormat('en-IN', { style: 'currency', currency: quote.currency || 'INR' }).format(parseFloat(quote.totalAmount))}</p>
             </div>
             <p><strong>Payment Details:</strong></p>
             <div style="background: #e8f5e9; padding: 15px; border-radius: 6px; margin: 15px 0;">
@@ -121,7 +136,7 @@ export async function POST(
           </div>
         `
       });
-      console.log('✅ Payment email sent to:', quote.clients.email);
+      console.log('✅ Payment email sent to:', client.email);
     } catch (emailError) {
       console.error('❌ Error sending payment email:', emailError);
     }

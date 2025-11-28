@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '../../db/connections';
+// import { supabase } from '../../db/connections';
+import { db, userProject, users, projects, globalRoles, eq, and } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -44,71 +45,48 @@ export async function GET(request: NextRequest) {
     const userId = url.searchParams.get('user_id');
 
     // Build the query - filter by projects belonging to the organization
-    let query = supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        project_id,
-        role_id,
-        users!inner (
-          id,
-          name,
-          email
-        ),
-        projects!inner (
-          id,
-          name,
-          description,
-          organization_id
-        ),
-        global_roles!user_project_global_role_id_fkey (
-          id,
-          name,
-          description
-        )
-      `)
-      .eq('projects.organization_id', decoded.org_id);
+    let whereConditions = [eq(projects.organizationId, decoded.org_id)];
 
     // Apply filters if provided
     if (projectId && projectId !== 'all') {
-      query = query.eq('project_id', projectId);
+      whereConditions.push(eq(userProject.projectId, projectId));
     }
 
     if (userId) {
-      query = query.eq('user_id', userId);
+      whereConditions.push(eq(userProject.userId, userId));
     }
 
-    const { data: assignments, error } = await query;
-
-    if (error) {
-      console.error('Error fetching assignments:', error);
-      return NextResponse.json(
-        { error: 'Failed to fetch assignments' },
-        { status: 500 }
-      );
-    }
+    const assignments = await db.select({
+      userId: userProject.userId,
+      projectId: userProject.projectId,
+      roleId: userProject.roleId,
+      userName: users.name,
+      userEmail: users.email,
+      projectName: projects.name,
+      projectDescription: projects.description,
+      roleName: globalRoles.name,
+      roleDescription: globalRoles.description
+    })
+      .from(userProject)
+      .innerJoin(users, eq(userProject.userId, users.id))
+      .innerJoin(projects, eq(userProject.projectId, projects.id))
+      .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(and(...whereConditions));
 
     console.log('✅ Query successful, found assignments:', assignments?.length || 0);
 
     // Transform the data for easier consumption
-    const transformedAssignments = assignments?.map((assignment: any) => {
-      // Handle potential array returns from foreign key relationships
-      const user = Array.isArray(assignment.users) ? assignment.users[0] : assignment.users;
-      const project = Array.isArray(assignment.projects) ? assignment.projects[0] : assignment.projects;
-      const role = Array.isArray(assignment.global_roles) ? assignment.global_roles[0] : assignment.global_roles;
-
-      return {
-        user_id: assignment.user_id,
-        project_id: assignment.project_id,
-        role_id: assignment.role_id,
-        user_name: user?.name || 'Unknown',
-        user_email: user?.email || '',
-        project_name: project?.name || 'Unknown Project',
-        project_description: project?.description || '',
-        role_name: role?.name || 'Unknown Role',
-        role_description: role?.description || ''
-      };
-    }) || [];
+    const transformedAssignments = assignments?.map((assignment) => ({
+      user_id: assignment.userId,
+      project_id: assignment.projectId,
+      role_id: assignment.roleId,
+      user_name: assignment.userName || 'Unknown',
+      user_email: assignment.userEmail || '',
+      project_name: assignment.projectName || 'Unknown Project',
+      project_description: assignment.projectDescription || '',
+      role_name: assignment.roleName || 'Unknown Role',
+      role_description: assignment.roleDescription || ''
+    })) || [];
 
     return NextResponse.json(
       {

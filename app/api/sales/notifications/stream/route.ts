@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, salesNotifications, eq, and, gt } from '@/lib/sales-db-helper';
 import jwt from 'jsonwebtoken';
 
 // SSE endpoint for real-time sales notifications
@@ -49,23 +49,23 @@ export async function GET(request: NextRequest) {
           // Poll for new sales notifications every 3 seconds
           const pollInterval = setInterval(async () => {
             try {
-              const { data: newNotifications, error } = await supabaseAdminSales
-                .from('sales_notifications')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('is_read', false)
-                .gt('created_at', lastCheckTime.toISOString())
-                .order('created_at', { ascending: false });
-
-              if (error) {
-                console.error('❌ SSE Poll error:', error);
-              }
+              const newNotificationsList = await salesDb
+                .select()
+                .from(salesNotifications)
+                .where(
+                  and(
+                    eq(salesNotifications.userId, userId),
+                    eq(salesNotifications.isRead, false),
+                    gt(salesNotifications.createdAt, lastCheckTime)
+                  )
+                )
+                .orderBy(salesNotifications.createdAt);
               
-              if (newNotifications && newNotifications.length > 0) {
-                console.log(`🔔 Found ${newNotifications.length} new sales notifications for user ${userId}:`, newNotifications);
+              if (newNotificationsList && newNotificationsList.length > 0) {
+                console.log(`🔔 Found ${newNotificationsList.length} new sales notifications for user ${userId}:`, newNotificationsList);
                 
                 // Send each new notification
-                for (const notification of newNotifications) {
+                for (const notification of newNotificationsList) {
                   controller.enqueue(
                     encoder.encode(`data: ${JSON.stringify(notification)}\n\n`)
                   );

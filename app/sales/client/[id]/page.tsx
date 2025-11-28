@@ -15,9 +15,9 @@ import { SalesLoader } from '@/app/sales/components/SalesLoader';
 import { Pagination } from '@/app/sales/components/Pagination';
 
 interface Client {
-  client_id: string;
-  client_name: string;
-  contact_person: string;
+  clientId: string;
+  clientName: string;
+  contactPerson: string;
   email: string;
   phone: string;
   address: string;
@@ -25,26 +25,26 @@ interface Client {
   state: string;
   country: string;
   industry: string;
-  client_type: string;
+  clientType: string;
   status: string;
-  next_interaction_date: string;
-  created_at: string;
+  nextInteractionDate: string;
+  createdAt: string;
 }
 
 interface Quote {
-  quote_id: string;
-  quote_number: string;
-  quote_title: string;
-  quote_amount: number;
-  tax_amount: number;
-  total_amount: number;
+  quoteId: string;
+  quoteNumber: string;
+  quoteTitle: string;
+  quoteAmount: number;
+  taxAmount: number;
+  totalAmount: number;
   currency: string;
   status: string;
-  valid_until: string;
-  quote_items: QuoteItem[];
-  terms_conditions: string;
+  validUntil: string;
+  quoteItems: QuoteItem[];
+  termsConditions: string;
   notes: string;
-  created_at: string;
+  createdAt: string;
 }
 
 interface QuoteItem {
@@ -221,7 +221,7 @@ export default function ClientDetailPage() {
     setIsLoading(true);
     try {
       const url = editMode && selectedQuote 
-        ? `/api/sales/quotes/${selectedQuote.quote_id}` 
+        ? `/api/sales/quotes/${selectedQuote.quoteId}` 
         : '/api/sales/quotes';
       const method = editMode && selectedQuote ? 'PATCH' : 'POST';
       
@@ -289,14 +289,14 @@ export default function ClientDetailPage() {
     setSelectedQuote(quote);
     setEditMode(true);
     setNewQuote({
-      quote_title: quote.quote_title,
-      valid_until: quote.valid_until ? quote.valid_until.split('T')[0] : '',
-      terms_conditions: quote.terms_conditions || '',
+      quote_title: quote.quoteTitle,
+      valid_until: quote.validUntil ? quote.validUntil.split('T')[0] : '',
+      terms_conditions: quote.termsConditions || '',
       notes: quote.notes || '',
       currency: quote.currency || 'INR',
-      tax_percentage: quote.tax_amount && quote.quote_amount ? ((quote.tax_amount / quote.quote_amount) * 100) : 18
+      tax_percentage: quote.taxAmount && quote.quoteAmount ? ((quote.taxAmount / quote.quoteAmount) * 100) : 18
     });
-    setQuoteItems(quote.quote_items || [{ description: '', quantity: 1, rate: 0, amount: 0 }]);
+    setQuoteItems(quote.quoteItems || [{ description: '', quantity: 1, rate: 0, amount: 0 }]);
     setIsCreateQuoteOpen(true);
   };
 
@@ -304,14 +304,14 @@ export default function ClientDetailPage() {
     setSelectedQuote(quote);
     setEditMode(false);
     setNewQuote({
-      quote_title: quote.quote_title,
-      valid_until: quote.valid_until ? quote.valid_until.split('T')[0] : '',
-      terms_conditions: quote.terms_conditions || '',
+      quote_title: quote.quoteTitle,
+      valid_until: quote.validUntil ? quote.validUntil.split('T')[0] : '',
+      terms_conditions: quote.termsConditions || '',
       notes: quote.notes || '',
       currency: quote.currency || 'INR',
-      tax_percentage: quote.tax_amount && quote.quote_amount ? ((quote.tax_amount / quote.quote_amount) * 100) : 18
+      tax_percentage: quote.taxAmount && quote.quoteAmount ? ((quote.taxAmount / quote.quoteAmount) * 100) : 18
     });
-    setQuoteItems(quote.quote_items || [{ description: '', quantity: 1, rate: 0, amount: 0 }]);
+    setQuoteItems(quote.quoteItems || [{ description: '', quantity: 1, rate: 0, amount: 0 }]);
     setIsViewQuoteOpen(true);
   };
 
@@ -386,7 +386,7 @@ export default function ClientDetailPage() {
           <ArrowLeft className="h-4 w-4" />
           Back
         </button>
-        <h1 className="text-3xl font-bold">{client.client_name}</h1>
+        <h1 className="text-3xl font-bold">{client.clientName}</h1>
         <span className={`px-3 py-1 rounded text-sm ${
           client.status === 'active' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
         }`}>
@@ -401,11 +401,11 @@ export default function ClientDetailPage() {
             <CardTitle>Contact Information</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <div><strong>Contact Person:</strong> {client.contact_person || 'N/A'}</div>
+            <div><strong>Contact Person:</strong> {client.contactPerson || 'N/A'}</div>
             <div><strong>Email:</strong> {client.email || 'N/A'}</div>
             <div><strong>Phone:</strong> {client.phone || 'N/A'}</div>
             <div><strong>Industry:</strong> {client.industry || 'N/A'}</div>
-            <div><strong>Type:</strong> {client.client_type || 'N/A'}</div>
+            <div><strong>Type:</strong> {client.clientType || 'N/A'}</div>
           </CardContent>
         </Card>
 
@@ -679,18 +679,18 @@ export default function ClientDetailPage() {
               <Dialog open={isViewQuoteOpen} onOpenChange={setIsViewQuoteOpen}>
                 <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
-                    <DialogTitle>View Quote - {selectedQuote?.quote_number}</DialogTitle>
+                    <DialogTitle>View Quote - {selectedQuote?.quoteNumber}</DialogTitle>
                   </DialogHeader>
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label>Quote Title</Label>
-                        <div className="p-2 bg-gray-50 rounded border">{selectedQuote?.quote_title}</div>
+                        <div className="p-2 bg-gray-50 rounded border">{selectedQuote?.quoteTitle}</div>
                       </div>
                       <div className="space-y-2">
                         <Label>Valid Until</Label>
                         <div className="p-2 bg-gray-50 rounded border">
-                          {selectedQuote?.valid_until ? new Date(selectedQuote.valid_until).toLocaleDateString() : 'N/A'}
+                          {selectedQuote?.validUntil ? new Date(selectedQuote.validUntil).toLocaleDateString() : 'N/A'}
                         </div>
                       </div>
                     </div>
@@ -708,7 +708,7 @@ export default function ClientDetailPage() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {selectedQuote?.quote_items?.map((item, index) => (
+                          {selectedQuote?.quoteItems?.map((item, index) => (
                             <TableRow key={index}>
                               <TableCell>{item.description}</TableCell>
                               <TableCell>{item.quantity}</TableCell>
@@ -724,22 +724,22 @@ export default function ClientDetailPage() {
                     <div className="border-t pt-4 space-y-2">
                       <div className="flex justify-between">
                         <span>Subtotal:</span>
-                        <span className="font-semibold">{formatCurrency(selectedQuote?.quote_amount || 0)}</span>
+                        <span className="font-semibold">{formatCurrency(selectedQuote?.quoteAmount || 0)}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>Tax:</span>
-                        <span className="font-semibold">{formatCurrency(selectedQuote?.tax_amount || 0)}</span>
+                        <span className="font-semibold">{formatCurrency(selectedQuote?.taxAmount || 0)}</span>
                       </div>
                       <div className="flex justify-between text-lg font-bold border-t pt-2">
                         <span>Total:</span>
-                        <span>{formatCurrency(selectedQuote?.total_amount || 0)}</span>
+                        <span>{formatCurrency(selectedQuote?.totalAmount || 0)}</span>
                       </div>
                     </div>
 
-                    {selectedQuote?.terms_conditions && (
+                    {selectedQuote?.termsConditions && (
                       <div className="space-y-2">
                         <Label>Terms & Conditions</Label>
-                        <div className="p-3 bg-gray-50 rounded border whitespace-pre-wrap">{selectedQuote.terms_conditions}</div>
+                        <div className="p-3 bg-gray-50 rounded border whitespace-pre-wrap">{selectedQuote.termsConditions}</div>
                       </div>
                     )}
 
@@ -785,10 +785,10 @@ export default function ClientDetailPage() {
               </TableHeader>
               <TableBody>
                 {paginatedQuotes.map((quote) => (
-                  <TableRow key={quote.quote_id}>
-                    <TableCell className="font-medium">{quote.quote_number}</TableCell>
-                    <TableCell>{quote.quote_title}</TableCell>
-                    <TableCell>{formatCurrency(quote.total_amount)}</TableCell>
+                  <TableRow key={quote.quoteId}>
+                    <TableCell className="font-medium">{quote.quoteNumber}</TableCell>
+                    <TableCell>{quote.quoteTitle}</TableCell>
+                    <TableCell>{formatCurrency(quote.totalAmount)}</TableCell>
                     <TableCell>
                       <span className={`px-2 py-1 rounded text-xs ${
                         quote.status === 'accepted' ? 'bg-green-100 text-green-800' :
@@ -799,8 +799,8 @@ export default function ClientDetailPage() {
                         {quote.status}
                       </span>
                     </TableCell>
-                    <TableCell>{quote.valid_until ? new Date(quote.valid_until).toLocaleDateString() : 'N/A'}</TableCell>
-                    <TableCell>{new Date(quote.created_at).toLocaleDateString()}</TableCell>
+                    <TableCell>{quote.validUntil ? new Date(quote.validUntil).toLocaleDateString() : 'N/A'}</TableCell>
+                    <TableCell>{new Date(quote.createdAt).toLocaleDateString()}</TableCell>
                     <TableCell>
                       <div className="flex gap-2">
                         <button
@@ -818,7 +818,7 @@ export default function ClientDetailPage() {
                               Edit
                             </button>
                             <button
-                              onClick={() => sendQuote(quote.quote_id)}
+                              onClick={() => sendQuote(quote.quoteId)}
                               className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 flex items-center gap-1"
                             >
                               <Send className="h-3 w-3" />

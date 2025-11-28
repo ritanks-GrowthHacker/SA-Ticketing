@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from '@/app/db/connections';
+
+// PostgreSQL with Drizzle ORM
+import { db, notifications, eq, desc } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 export async function GET(request: NextRequest) {
@@ -27,15 +31,19 @@ export async function GET(request: NextRequest) {
     const userId = decoded.sub;
 
     // Fetch notifications for user
-    const { data: notifications, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
+    // Supabase (commented out)
+    // const { data: notifications, error } = await supabase.from('notifications').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(50);
+
+    // PostgreSQL with Drizzle
+    const notificationsData = await db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.userId, userId))
+      .orderBy(desc(notifications.createdAt))
       .limit(50);
 
-    if (error) {
-      console.error('Error fetching notifications:', error);
+    if (!notificationsData) {
+      console.error('Error fetching notifications');
       return NextResponse.json(
         { error: 'Failed to fetch notifications' },
         { status: 500 }
@@ -43,11 +51,11 @@ export async function GET(request: NextRequest) {
     }
 
     // Count unread notifications
-    const unreadCount = notifications?.filter((n: any) => !n.is_read).length || 0;
+    const unreadCount = notificationsData?.filter((n: any) => !n.isRead).length || 0;
 
     return NextResponse.json({
       success: true,
-      notifications: notifications || [],
+      notifications: notificationsData || [],
       unread_count: unreadCount
     });
 

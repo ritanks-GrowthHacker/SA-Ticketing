@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, projectStatuses, projects, eq, and } from '@/lib/db-helper';
 
 export async function POST(req: Request) {
   try {
@@ -38,40 +39,39 @@ export async function POST(req: Request) {
     }
 
     // Get the "Active" status for this organization
-    const { data: activeStatus, error: statusError } = await supabase
-      .from("project_statuses")
-      .select("id")
-      .eq("organization_id", tokenData.org_id)
-      .eq("name", "Active")
-      .eq("is_active", true)
-      .maybeSingle();
+    const activeStatusResults = await db.select({ id: projectStatuses.id })
+      .from(projectStatuses)
+      .where(and(
+        eq(projectStatuses.organizationId, tokenData.org_id),
+        eq(projectStatuses.name, "Active"),
+        eq(projectStatuses.isActive, true)
+      ))
+      .limit(1);
+    
+    const activeStatus = activeStatusResults[0] || null;
 
-    if (statusError || !activeStatus) {
-      console.error("Active status not found:", statusError);
+    if (!activeStatus) {
+      console.error("Active status not found");
       return NextResponse.json({
         error: "Active project status not found. Please ensure project statuses are configured."
       }, { status: 400 });
     }
 
     // Create the project
-    const { data: newProject, error: projectError } = await supabase
-      .from('projects')
-      .insert({
+    const newProjects = await db.insert(projects)
+      .values({
         name: name.trim(),
         description: description.trim(),
-        organization_id: tokenData.org_id,
-        status_id: activeStatus.id,
-        start_date: startDate,
-        end_date: endDate,
-        priority: priority || 'Medium',
-        budget: budget ? parseFloat(budget) : null,
-        created_by: tokenData.sub
+        organizationId: tokenData.org_id,
+        statusId: activeStatus.id,
+        createdBy: tokenData.sub
       })
-      .select()
-      .single();
+      .returning();
+    
+    const newProject = newProjects[0];
 
-    if (projectError) {
-      console.error('Error creating project:', projectError);
+    if (!newProject) {
+      console.error('Error creating project: No data returned');
       return NextResponse.json({ 
         error: "Failed to create project" 
       }, { status: 500 });

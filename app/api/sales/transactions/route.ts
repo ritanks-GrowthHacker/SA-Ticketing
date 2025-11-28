@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, transactions, clients, transactionLineItems, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../helpers';
 
 export async function GET(req: NextRequest) {
@@ -17,31 +17,32 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const clientId = searchParams.get('client_id');
 
-    let query = supabaseAdminSales
-      .from('transactions')
-      .select(`
-        *,
-        clients (client_name)
-      `)
-      .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
-
+    let whereConditions: any[] = [eq(transactions.organizationId, organizationId)];
     if (clientId) {
-      query = query.eq('client_id', clientId);
+      whereConditions.push(eq(transactions.clientId, clientId));
     }
 
-    const { data: transactions, error } = await query;
+    const transactionsResult = await salesDb
+      .select()
+      .from(transactions)
+      .where(and(...whereConditions))
+      .orderBy(transactions.createdAt);
 
-    if (error) {
-      console.error('Error fetching transactions:', error);
-      return NextResponse.json({ error: 'Failed to fetch transactions' }, { status: 500 });
-    }
-
-    // Format response
-    const formatted = transactions.map(txn => ({
-      ...txn,
-      client_name: txn.clients?.client_name || 'Unknown Client'
-    }));
+    // Format response with client names
+    const formatted = await Promise.all(
+      transactionsResult.map(async (txn) => {
+        const clientResult = await salesDb
+          .select({ clientName: clients.clientName })
+          .from(clients)
+          .where(eq(clients.clientId, txn.clientId))
+          .limit(1);
+        
+        return {
+          ...txn,
+          client_name: clientResult[0]?.clientName || 'Unknown Client'
+        };
+      })
+    );
 
     return NextResponse.json({ transactions: formatted });
   } catch (error) {
@@ -74,71 +75,67 @@ export async function POST(req: NextRequest) {
     const totalAmount = afterDiscount + taxAmount;
 
     // Insert transaction
-    const { data: transaction, error: transactionError } = await supabaseAdminSales
-      .from('transactions')
-      .insert({
-        organization_id: organizationId,
-        client_id: transactionData.client_id,
-        sales_member_id: transactionData.sales_member_id || userId,
-        transaction_date: transactionData.transaction_date || new Date().toISOString(),
-        invoice_number: invoiceNumber,
-        subtotal_amount: subtotal,
-        discount_percentage: transactionData.discount_percentage || 0,
-        discount_amount: discountAmount,
-        tax_percentage: transactionData.tax_percentage || 0,
-        tax_amount: taxAmount,
-        total_amount: totalAmount,
+    const transactionResult = await salesDb
+      .insert(transactions)
+      .values({
+        organizationId,
+        clientId: transactionData.client_id,
+        salesMemberId: transactionData.sales_member_id || userId,
+        transactionDate: transactionData.transaction_date || new Date().toISOString().split('T')[0],
+        invoiceNumber,
+        subtotalAmount: subtotal.toString(),
+        discountPercentage: (transactionData.discount_percentage || 0).toString(),
+        discountAmount: discountAmount.toString(),
+        taxPercentage: (transactionData.tax_percentage || 0).toString(),
+        taxAmount: taxAmount.toString(),
+        totalAmount: totalAmount.toString(),
         currency: transactionData.currency || 'INR',
-        payment_status: 'pending',
-        amount_paid: 0,
-        amount_due: totalAmount,
-        contract_start_date: transactionData.contract_start_date,
-        contract_end_date: transactionData.contract_end_date,
-        contract_duration_months: transactionData.contract_duration_months,
-        renewal_date: transactionData.renewal_date,
-        commission_percentage: transactionData.commission_percentage || 0,
-        commission_amount: (totalAmount * (transactionData.commission_percentage || 0)) / 100,
+        paymentStatus: 'pending',
+        amountPaid: '0',
+        amountDue: totalAmount.toString(),
+        contractStartDate: transactionData.contract_start_date,
+        contractEndDate: transactionData.contract_end_date,
+        contractDurationMonths: transactionData.contract_duration_months,
+        renewalDate: transactionData.renewal_date,
+        commissionPercentage: (transactionData.commission_percentage || 0).toString(),
+        commissionAmount: ((totalAmount * (transactionData.commission_percentage || 0)) / 100).toString(),
         notes: transactionData.notes
       })
-      .select()
-      .single();
+      .returning();
 
-    if (transactionError) {
-      console.error('Error creating transaction:', transactionError);
-      return NextResponse.json({ error: transactionError.message }, { status: 500 });
+    const transaction = transactionResult[0];
+    if (!transaction) {
+      console.error('Error creating transaction: No result returned');
+      return NextResponse.json({ error: 'Failed to create transaction' }, { status: 500 });
     }
 
     // Insert line items if provided
     if (transactionData.line_items && transactionData.line_items.length > 0) {
-      const lineItems = transactionData.line_items.map((item: any) => {
+      const lineItemsData = transactionData.line_items.map((item: any) => {
         const lineTotal = item.quantity * item.unit_price * (1 - (item.discount_percentage || 0) / 100);
         const totalCost = item.quantity * (item.cost_price || 0);
         const profitMargin = lineTotal - totalCost;
         const profitPercentage = totalCost > 0 ? (profitMargin / totalCost) * 100 : 0;
 
         return {
-          transaction_id: transaction.transaction_id,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          product_code: item.product_code,
+          transactionId: transaction.transactionId,
+          productId: item.product_id,
+          productName: item.product_name,
+          productCode: item.product_code,
           quantity: item.quantity,
-          unit_price: item.unit_price,
-          cost_price: item.cost_price,
-          discount_percentage: item.discount_percentage || 0,
-          line_total: lineTotal,
-          total_cost: totalCost,
-          profit_margin: profitMargin,
-          profit_percentage: profitPercentage
+          unitPrice: item.unit_price,
+          costPrice: item.cost_price,
+          discountPercentage: item.discount_percentage || 0,
+          lineTotal,
+          totalCost,
+          profitMargin,
+          profitPercentage
         };
       });
 
-      const { error: lineItemsError } = await supabaseAdminSales
-        .from('transaction_line_items')
-        .insert(lineItems);
-
-      if (lineItemsError) {
-        console.error('Error inserting line items:', lineItemsError);
-      }
+      await salesDb
+        .insert(transactionLineItems)
+        .values(lineItemsData);
     }
 
     return NextResponse.json({ 
@@ -171,20 +168,26 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'Transaction ID required' }, { status: 400 });
     }
 
-    const { data: updated, error } = await supabaseAdminSales
-      .from('transactions')
-      .update({
-        amount_paid,
-        payment_method,
-        payment_reference,
-        payment_date: payment_date || new Date().toISOString()
+    const updatedResult = await salesDb
+      .update(transactions)
+      .set({
+        amountPaid: amount_paid.toString(),
+        paymentMethod: payment_method,
+        paymentReference: payment_reference,
+        paymentDate: payment_date || new Date().toISOString().split('T')[0]
       })
-      .eq('transaction_id', transaction_id)
-      .eq('organization_id', decoded.organization_id)
-      .select()
-      .single();
+      .where(
+        and(
+          eq(transactions.transactionId, transaction_id),
+          eq(transactions.organizationId, decoded.organization_id || decoded.org_id || '')
+        )
+      )
+      .returning();
 
-    if (error) throw error;
+    const updated = updatedResult[0];
+    if (!updated) {
+      return NextResponse.json({ error: 'Transaction not found' }, { status: 404 });
+    }
 
     return NextResponse.json({ 
       message: 'Payment updated successfully',

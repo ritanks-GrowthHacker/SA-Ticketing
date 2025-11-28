@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from "@/app/db/connections";
+
+// PostgreSQL with Drizzle ORM
+import { db, userDepartmentRoles, departments, globalRoles, eq, and } from '@/lib/db-helper';
 
 export async function POST(req: Request) {
   try {
@@ -32,30 +36,42 @@ export async function POST(req: Request) {
     console.log(`🔄 SWITCH-DEPARTMENT: User ${userId} switching to department ${departmentId}`);
 
     // Verify user has access to this department
-    const { data: departmentRole, error: deptRoleError } = await supabase
-      .from("user_department_roles")
-      .select(`
-        department_id,
-        role_id,
-        organization_id,
-        departments(id, name),
-        global_roles(id, name)
-      `)
-      .eq("user_id", userId)
-      .eq("department_id", departmentId)
-      .eq("organization_id", organizationId)
-      .single();
+    // Supabase (commented out)
+    // const { data: departmentRole, error: deptRoleError } = await supabase.from("user_department_roles").select(`...`)
 
-    if (deptRoleError || !departmentRole) {
-      console.error("❌ SWITCH-DEPARTMENT: User does not have access to department:", deptRoleError);
+    // PostgreSQL with Drizzle
+    const departmentRole = await db
+      .select({
+        departmentId: userDepartmentRoles.departmentId,
+        roleId: userDepartmentRoles.roleId,
+        organizationId: userDepartmentRoles.organizationId,
+        deptId: departments.id,
+        deptName: departments.name,
+        roleIdGlobal: globalRoles.id,
+        roleName: globalRoles.name
+      })
+      .from(userDepartmentRoles)
+      .innerJoin(departments, eq(userDepartmentRoles.departmentId, departments.id))
+      .innerJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userDepartmentRoles.userId, userId),
+          eq(userDepartmentRoles.departmentId, departmentId),
+          eq(userDepartmentRoles.organizationId, organizationId)
+        )
+      )
+      .limit(1);
+
+    if (!departmentRole || departmentRole.length === 0) {
+      console.error("❌ SWITCH-DEPARTMENT: User does not have access to department");
       return NextResponse.json(
         { error: "You do not have access to this department" },
         { status: 403 }
       );
     }
 
-    const dept = (departmentRole as any).departments;
-    const deptRole = (departmentRole as any).global_roles;
+    const dept = { id: departmentRole[0].deptId, name: departmentRole[0].deptName };
+    const deptRole = { name: departmentRole[0].roleName };
 
     console.log(`✅ SWITCH-DEPARTMENT: User has ${deptRole?.name} role in department ${dept.name}`);
 

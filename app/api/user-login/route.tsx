@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, eq } from '@/lib/db-helper';
 import { OTPService } from "@/lib/otpService";
 
 export async function POST(req: Request) {
@@ -36,19 +37,18 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, name, email, password_hash, created_at")
-      .eq("email", email.toLowerCase())
-      .maybeSingle();
-
-    if (userError) {
-      console.error("User lookup error:", userError);
-      return NextResponse.json(
-        { error: "Internal Server Error" }, 
-        { status: 500 }
-      );
-    }
+    const user = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        passwordHash: users.passwordHash,
+        createdAt: users.createdAt
+      })
+      .from(users)
+      .where(eq(users.email, email.toLowerCase()))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (!user) {
       return NextResponse.json(
@@ -57,7 +57,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
       return NextResponse.json(
         { error: "Invalid email or password" }, 
@@ -77,21 +77,13 @@ export async function POST(req: Request) {
     });
 
     // Update user with login OTP
-    const { error: updateError } = await supabase
-      .from("users")
-      .update({
+    await db
+      .update(users)
+      .set({
         otp,
-        otp_expires_at: otpExpiresAt.toISOString()
+        otpExpiresAt
       })
-      .eq("id", user.id);
-
-    if (updateError) {
-      console.error("OTP update error:", updateError);
-      return NextResponse.json(
-        { error: "Failed to generate login code" }, 
-        { status: 500 }
-      );
-    }
+      .where(eq(users.id, user.id));
 
     // Send OTP email
     const emailSent = await OTPService.sendOTP(email, otp, 'login');

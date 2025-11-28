@@ -13,8 +13,8 @@ import { Users, TrendingUp, DollarSign, Target, Plus } from 'lucide-react';
 import { Pagination } from '@/app/sales/components/Pagination';
 
 interface Member {
-  user_id: string;
-  full_name: string;
+  userId: string;
+  fullName: string;
   email: string;
   phone: string;
 }
@@ -26,7 +26,7 @@ interface Analytics {
   teamSize?: number;
   totalClients?: number;
   memberPerformance: {
-    user_id: string;
+    userId: string;
     revenue: number;
     transactions: number;
     profit: number;
@@ -34,24 +34,24 @@ interface Analytics {
 }
 
 interface Client {
-  client_id: string;
-  client_name: string;
-  contact_person: string;
+  clientId: string;
+  clientName: string;
+  contactPerson: string;
   email: string;
   phone: string;
   city: string;
   status: string;
-  created_at: string;
+  createdAt: string;
 }
 
 interface Transaction {
-  transaction_id: string;
-  invoice_number: string;
+  transactionId: string;
+  invoiceNumber: string;
   client_name: string;
-  transaction_date: string;
-  total_amount: number;
-  payment_status: string;
-  created_at: string;
+  transactionDate: string;
+  totalAmount: number;
+  paymentStatus: string;
+  createdAt: string;
 }
 
 export default function SalesManagerDashboard() {
@@ -227,7 +227,7 @@ export default function SalesManagerDashboard() {
   };
 
   const getMemberPerformance = (userId: string) => {
-    return analytics?.memberPerformance?.find(p => p.user_id === userId);
+    return analytics?.memberPerformance?.find(p => p.userId === userId);
   };
 
   // Pagination logic
@@ -476,9 +476,9 @@ export default function SalesManagerDashboard() {
                 </TableHeader>
                 <TableBody>
                   {paginatedClients.map((client) => (
-                    <TableRow key={client.client_id} className="cursor-pointer hover:bg-muted/50">
-                      <TableCell className="font-medium">{client.client_name}</TableCell>
-                      <TableCell>{client.contact_person || '-'}</TableCell>
+                    <TableRow key={client.clientId} className="cursor-pointer hover:bg-muted/50">
+                      <TableCell className="font-medium">{client.clientName}</TableCell>
+                      <TableCell>{client.contactPerson || '-'}</TableCell>
                       <TableCell>{client.email || '-'}</TableCell>
                       <TableCell>{client.phone || '-'}</TableCell>
                       <TableCell>{client.city || '-'}</TableCell>
@@ -489,7 +489,7 @@ export default function SalesManagerDashboard() {
                           {client.status}
                         </span>
                       </TableCell>
-                      <TableCell>{new Date(client.created_at).toLocaleDateString()}</TableCell>
+                      <TableCell>{new Date(client.createdAt).toLocaleDateString()}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -537,18 +537,18 @@ export default function SalesManagerDashboard() {
                 </TableHeader>
                 <TableBody>
                   {paginatedTransactions.map((txn) => (
-                    <TableRow key={txn.transaction_id} className="cursor-pointer hover:bg-muted/50">
-                      <TableCell className="font-medium">{txn.invoice_number}</TableCell>
+                    <TableRow key={txn.transactionId} className="cursor-pointer hover:bg-muted/50">
+                      <TableCell className="font-medium">{txn.invoiceNumber}</TableCell>
                       <TableCell>{txn.client_name}</TableCell>
-                      <TableCell>{new Date(txn.transaction_date).toLocaleDateString()}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(txn.total_amount)}</TableCell>
+                      <TableCell>{new Date(txn.transactionDate).toLocaleDateString()}</TableCell>
+                      <TableCell className="text-right">{formatCurrency(txn.totalAmount)}</TableCell>
                       <TableCell>
                         <span className={`px-2 py-1 rounded text-xs ${
-                          txn.payment_status === 'paid' ? 'bg-green-100 text-green-800' : 
-                          txn.payment_status === 'partial' ? 'bg-yellow-100 text-yellow-800' :
+                          txn.paymentStatus === 'paid' ? 'bg-green-100 text-green-800' : 
+                          txn.paymentStatus === 'partial' ? 'bg-yellow-100 text-yellow-800' :
                           'bg-orange-100 text-orange-800'
                         }`}>
-                          {txn.payment_status}
+                          {txn.paymentStatus}
                         </span>
                       </TableCell>
                     </TableRow>
@@ -591,10 +591,10 @@ export default function SalesManagerDashboard() {
                 </TableRow>
               ) : (
                 paginatedMembers.map((member) => {
-                  const performance = getMemberPerformance(member.user_id);
+                  const performance = getMemberPerformance(member.userId);
                   return (
-                    <TableRow key={member.user_id}>
-                      <TableCell className="font-medium">{member.full_name}</TableCell>
+                    <TableRow key={member.userId}>
+                      <TableCell className="font-medium">{member.fullName}</TableCell>
                       <TableCell>{member.email}</TableCell>
                       <TableCell>{member.phone || '-'}</TableCell>
                       <TableCell className="text-right">{formatCurrency(performance?.revenue || 0)}</TableCell>

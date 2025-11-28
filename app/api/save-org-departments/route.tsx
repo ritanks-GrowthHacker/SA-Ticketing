@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, departments, organizations, eq, inArray } from '@/lib/db-helper';
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,27 +14,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!supabase) {
-      return NextResponse.json(
-        { error: 'Database configuration error' },
-        { status: 500 }
-      );
-    }
-
     // Validate departments exist
-    const { data: validDepartments, error: deptError } = await supabase
-      .from('departments')
-      .select('id')
-      .in('id', selectedDepartments)
-      .eq('is_active', true);
-
-    if (deptError) {
-      console.error('Error validating departments:', deptError);
-      return NextResponse.json(
-        { error: 'Failed to validate departments' },
-        { status: 500 }
-      );
-    }
+    const validDepartments = await db.select({ id: departments.id })
+      .from(departments)
+      .where(inArray(departments.id, selectedDepartments));
 
     if (!validDepartments || validDepartments.length !== selectedDepartments.length) {
       return NextResponse.json(
@@ -43,15 +27,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Update organization with selected departments
-    const { error: updateError } = await supabase
-      .from('organizations')
-      .update({ 
-        associated_departments: selectedDepartments,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', orgId);
-
-    if (updateError) {
+    const currentTime = new Date();
+    try {
+      await db.update(organizations)
+        .set({ 
+          associatedDepartments: selectedDepartments,
+          updatedAt: currentTime
+        })
+        .where(eq(organizations.id, orgId));
+    } catch (updateError) {
       console.error('Error updating organization:', updateError);
       return NextResponse.json(
         { error: 'Failed to save departments' },

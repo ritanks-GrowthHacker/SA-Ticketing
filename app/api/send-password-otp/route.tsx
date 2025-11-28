@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, eq } from "@/lib/db-helper";
 import crypto from "crypto";
 import { emailService } from "@/lib/emailService";
 
@@ -45,14 +46,19 @@ export async function POST(req: Request) {
     }
 
     // Get user email
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, name, email")
-      .eq("id", decodedToken.sub)
-      .single();
+    const user = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email
+      })
+      .from(users)
+      .where(eq(users.id, decodedToken.sub))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (userError || !user) {
-      console.error("User fetch error:", userError);
+    if (!user) {
+      console.error("User fetch error");
       return NextResponse.json(
         { error: "User not found" }, 
         { status: 404 }
@@ -65,27 +71,17 @@ export async function POST(req: Request) {
 
     console.log(`🔐 Generated OTP for ${user.email}: ${otp} (expires at ${expiresAt})`);
 
-    // Store OTP in database (you might want to create an otps table or use a temporary storage)
-    // For now, we'll use a simple approach and store it in memory or database
-    // You should create an 'password_reset_otps' table for production
-    
+    // Store OTP in users table
     try {
-      // Try to store OTP in a temporary table or use existing mechanism
-      const { error: otpError } = await supabase
-        .from("user_otps")
-        .upsert({
-          user_id: user.id,
+      await db
+        .update(users)
+        .set({
           otp: otp,
-          purpose: 'password_change',
-          expires_at: expiresAt.toISOString(),
-          created_at: new Date().toISOString()
-        });
-
-      if (otpError) {
-        console.log("⚠️ OTP table doesn't exist, using in-memory storage for development");
-      }
+          otpExpiresAt: expiresAt
+        })
+        .where(eq(users.id, user.id));
     } catch (e) {
-      console.log("⚠️ Using fallback OTP storage");
+      console.log("⚠️ Failed to store OTP");
     }
 
     // Send OTP email using the email service

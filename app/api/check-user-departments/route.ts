@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase } from '@/app/db/connections';
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from '@/app/db/connections';
+
+// PostgreSQL with Drizzle ORM
+import { db, userDepartmentRoles, departments, eq, and } from '@/lib/db-helper';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
@@ -17,23 +21,32 @@ export async function GET(request: NextRequest) {
     const organizationId = decoded.org_id;
 
     // Get all department roles for this user in this organization
-    const { data: departmentRoles, error } = await supabase
-      .from('user_department_roles')
-      .select(`
-        department_id,
-        departments!inner(name)
-      `)
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId);
+    // Supabase (commented out)
+    // const { data: departmentRoles, error } = await supabase.from('user_department_roles').select(`...`)
 
-    if (error) {
-      console.error('Error fetching user departments:', error);
+    // PostgreSQL with Drizzle
+    const departmentRoles = await db
+      .select({
+        departmentId: userDepartmentRoles.departmentId,
+        deptName: departments.name
+      })
+      .from(userDepartmentRoles)
+      .innerJoin(departments, eq(userDepartmentRoles.departmentId, departments.id))
+      .where(
+        and(
+          eq(userDepartmentRoles.userId, userId),
+          eq(userDepartmentRoles.organizationId, organizationId)
+        )
+      );
+
+    if (!departmentRoles) {
+      console.error('Error fetching user departments');
       return NextResponse.json({ error: 'Failed to fetch departments' }, { status: 500 });
     }
 
     // Check if user only has Sales department role
     const departmentNames = (departmentRoles || []).map((dr: any) => 
-      dr.departments?.name?.toLowerCase()
+      dr.deptName?.toLowerCase()
     );
 
     const isSalesOnly = departmentNames.length === 1 && 

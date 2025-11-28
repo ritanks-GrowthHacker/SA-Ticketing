@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+import { db, users, userOrganizationRoles, globalRoles, organizations, eq, and, ne } from '@/lib/db-helper';
 
 interface JWTPayload {
   sub: string;        // user ID
@@ -55,6 +55,7 @@ export async function PUT(req: Request) {
     let body: UpdateProfileRequest;
     try {
       body = await req.json();
+      console.log('📥 Update profile request body:', JSON.stringify(body, null, 2));
     } catch (parseError) {
       return NextResponse.json(
         { error: "Invalid request body" }, 
@@ -70,32 +71,47 @@ export async function PUT(req: Request) {
       );
     }
 
-    // Prepare update object
+    // Prepare update object - only add fields that have actual values
     const updateData: any = {};
     
-    if (body.name !== undefined) updateData.name = body.name;
-    if (body.email !== undefined) updateData.email = body.email;
-    if (body.profilePictureUrl !== undefined) updateData.profile_picture_url = body.profilePictureUrl;
-    if (body.about !== undefined) updateData.about = body.about;
-    if (body.phone !== undefined) updateData.phone = body.phone;
-    if (body.location !== undefined) updateData.location = body.location;
-    if (body.jobTitle !== undefined) updateData.job_title = body.jobTitle;
-    if (body.department !== undefined) updateData.department = body.department;
-    if (body.dateOfBirth !== undefined) updateData.date_of_birth = body.dateOfBirth;
-    if (body.emailNotificationsEnabled !== undefined) updateData.email_notifications_enabled = body.emailNotificationsEnabled;
-    if (body.darkModeEnabled !== undefined) updateData.dark_mode_enabled = body.darkModeEnabled;
+    if (body.name !== undefined && body.name !== null && body.name !== '') updateData.name = body.name;
+    if (body.email !== undefined && body.email !== null && body.email !== '') updateData.email = body.email;
+    if (body.profilePictureUrl !== undefined && body.profilePictureUrl !== null && body.profilePictureUrl !== '') updateData.profilePictureUrl = body.profilePictureUrl;
+    if (body.about !== undefined && body.about !== null && body.about !== '') updateData.about = body.about;
+    if (body.phone !== undefined) updateData.phone = body.phone || null;
+    if (body.location !== undefined && body.location !== null && body.location !== '') updateData.location = body.location;
+    if (body.jobTitle !== undefined && body.jobTitle !== null && body.jobTitle !== '') updateData.jobTitle = body.jobTitle;
+    if (body.department !== undefined && body.department !== null && body.department !== '') updateData.department = body.department;
+    if (body.dateOfBirth !== undefined && body.dateOfBirth !== null && body.dateOfBirth !== '') updateData.dateOfBirth = body.dateOfBirth;
+    if (body.emailNotificationsEnabled !== undefined) updateData.emailNotificationsEnabled = body.emailNotificationsEnabled;
+    if (body.darkModeEnabled !== undefined) updateData.darkModeEnabled = body.darkModeEnabled;
     
+    console.log('📊 Update data object:', JSON.stringify(updateData, null, 2));
+    
+    // Check if there are any fields to update (before adding timestamp)
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json(
+        { error: "No valid fields to update" }, 
+        { status: 400 }
+      );
+    }
+
     // Always update the profile_updated_at timestamp
-    updateData.profile_updated_at = new Date().toISOString();
+    updateData.profileUpdatedAt = new Date();
 
     // Check if email is being changed and if it's already taken
     if (body.email) {
-      const { data: existingUser, error: emailCheckError } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", body.email)
-        .neq("id", decodedToken.sub)
-        .single();
+      const existingUser = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          and(
+            eq(users.email, body.email),
+            ne(users.id, decodedToken.sub)
+          )
+        )
+        .limit(1)
+        .then(rows => rows[0] || null);
 
       if (existingUser) {
         return NextResponse.json(
@@ -106,38 +122,27 @@ export async function PUT(req: Request) {
     }
 
     // Update user profile
-    const { data: updatedUser, error: updateError } = await supabase
-      .from("users")
-      .update(updateData)
-      .eq("id", decodedToken.sub)
-      .select(`
-        id,
-        name,
-        email,
-        profile_picture_url,
-        about,
-        phone,
-        location,
-        job_title,
-        department,
-        date_of_birth,
-        email_notifications_enabled,
-        dark_mode_enabled,
-        created_at,
-        updated_at,
-        profile_updated_at
-      `)
-      .single();
-
-    if (updateError) {
-      console.error("❌ Profile update error:", updateError);
-      console.error("📝 Update data sent:", updateData);
-      console.error("👤 User ID:", decodedToken.sub);
-      return NextResponse.json(
-        { error: "Failed to update profile" }, 
-        { status: 500 }
-      );
-    }
+    const [updatedUser] = await db
+      .update(users)
+      .set(updateData)
+      .where(eq(users.id, decodedToken.sub))
+      .returning({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        profilePictureUrl: users.profilePictureUrl,
+        about: users.about,
+        phone: users.phone,
+        location: users.location,
+        jobTitle: users.jobTitle,
+        department: users.department,
+        dateOfBirth: users.dateOfBirth,
+        emailNotificationsEnabled: users.emailNotificationsEnabled,
+        darkModeEnabled: users.darkModeEnabled,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+        profileUpdatedAt: users.profileUpdatedAt
+      });
 
     if (!updatedUser) {
       return NextResponse.json(
@@ -147,26 +152,31 @@ export async function PUT(req: Request) {
     }
 
     // Get user role information
-    const { data: userRole, error: roleError } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        role_id,
-        global_roles!user_organization_roles_role_id_fkey(id, name, description)
-      `)
-      .eq("user_id", decodedToken.sub)
-      .eq("organization_id", decodedToken.org_id)
-      .single();
+    const userRole = await db
+      .select({
+        roleId: userOrganizationRoles.roleId,
+        globalRoleId: globalRoles.id,
+        globalRoleName: globalRoles.name,
+        globalRoleDescription: globalRoles.description
+      })
+      .from(userOrganizationRoles)
+      .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userOrganizationRoles.userId, decodedToken.sub),
+          eq(userOrganizationRoles.organizationId, decodedToken.org_id)
+        )
+      )
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     // Get organization info separately
-    const { data: organization, error: orgError } = await supabase
-      .from("organizations")
-      .select("id, name, domain")
-      .eq("id", decodedToken.org_id)
-      .single();
-
-    if (orgError) {
-      console.error("Organization fetch error:", orgError);
-    }
+    const organization = await db
+      .select({ id: organizations.id, name: organizations.name, domain: organizations.domain })
+      .from(organizations)
+      .where(eq(organizations.id, decodedToken.org_id))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     console.log("✅ Profile updated successfully for user:", decodedToken.sub);
     console.log("📊 Updated fields:", Object.keys(updateData));
@@ -176,20 +186,20 @@ export async function PUT(req: Request) {
       id: updatedUser.id,
       name: updatedUser.name,
       email: updatedUser.email,
-      profilePicture: updatedUser.profile_picture_url,
+      profilePicture: updatedUser.profilePictureUrl,
       about: updatedUser.about,
       phone: updatedUser.phone,
       location: updatedUser.location,
-      jobTitle: updatedUser.job_title,
+      jobTitle: updatedUser.jobTitle,
       department: updatedUser.department,
-      dateOfBirth: updatedUser.date_of_birth,
-      emailNotificationsEnabled: updatedUser.email_notifications_enabled,
-      darkModeEnabled: updatedUser.dark_mode_enabled,
-      createdAt: updatedUser.created_at,
-      updatedAt: updatedUser.updated_at,
-      profileUpdatedAt: updatedUser.profile_updated_at,
+      dateOfBirth: updatedUser.dateOfBirth || null,
+      emailNotificationsEnabled: updatedUser.emailNotificationsEnabled,
+      darkModeEnabled: updatedUser.darkModeEnabled,
+      createdAt: updatedUser.createdAt?.toISOString(),
+      updatedAt: updatedUser.updatedAt?.toISOString(),
+      profileUpdatedAt: updatedUser.profileUpdatedAt?.toISOString() || null,
       organization: organization,
-      role: userRole ? (userRole as any).global_roles?.name : null
+      role: userRole?.globalRoleName || null
     };
 
     return NextResponse.json({

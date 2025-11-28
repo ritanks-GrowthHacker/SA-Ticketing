@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, quotes, eq, and, desc } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../helpers';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -26,24 +26,18 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const clientId = searchParams.get('client_id');
 
-    let query = supabaseAdminSales
-      .from('quotes')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .order('created_at', { ascending: false });
-
+    let whereConditions: any[] = [eq(quotes.organizationId, organizationId)];
     if (clientId) {
-      query = query.eq('client_id', clientId);
+      whereConditions.push(eq(quotes.clientId, clientId));
     }
 
-    const { data: quotes, error } = await query;
+    const quotesResult = await salesDb
+      .select()
+      .from(quotes)
+      .where(and(...whereConditions))
+      .orderBy(desc(quotes.createdAt));
 
-    if (error) {
-      console.error('Error fetching quotes:', error);
-      return NextResponse.json({ error: 'Failed to fetch quotes' }, { status: 500 });
-    }
-
-    return NextResponse.json({ quotes });
+    return NextResponse.json({ quotes: quotesResult });
   } catch (error) {
     console.error('Error in GET /api/sales/quotes:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
@@ -84,29 +78,29 @@ export async function POST(request: NextRequest) {
 
     const quoteNumber = generateQuoteNumber();
 
-    const { data: quote, error } = await supabaseAdminSales
-      .from('quotes')
-      .insert([{
-        organization_id: organizationId,
-        created_by_user_id: userId,
-        client_id,
-        quote_number: quoteNumber,
-        quote_title,
-        quote_amount: quote_amount || 0,
-        tax_amount: tax_amount || 0,
-        total_amount,
+    const quoteResult = await salesDb
+      .insert(quotes)
+      .values({
+        organizationId,
+        createdByUserId: userId,
+        clientId: client_id,
+        quoteNumber,
+        quoteTitle: quote_title,
+        quoteAmount: quote_amount || 0,
+        taxAmount: tax_amount || 0,
+        totalAmount: total_amount,
         currency: currency || 'INR',
-        valid_until: valid_until || null,
-        quote_items: quote_items || [],
-        terms_conditions: terms_conditions || '',
+        validUntil: valid_until ? new Date(valid_until) : null,
+        quoteItems: quote_items || [],
+        termsConditions: terms_conditions || '',
         notes: notes || '',
         status: 'draft'
-      }])
-      .select()
-      .single();
+      })
+      .returning();
 
-    if (error) {
-      console.error('Error creating quote:', error);
+    const quote = quoteResult[0];
+    if (!quote) {
+      console.error('Error creating quote: No result returned');
       return NextResponse.json({ error: 'Failed to create quote' }, { status: 500 });
     }
 

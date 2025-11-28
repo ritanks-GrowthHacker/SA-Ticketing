@@ -1,17 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from '@/app/db/connections';
+
+// PostgreSQL with Drizzle ORM
+import { db, departments, eq } from '@/lib/db-helper';
 
 export async function GET(request: NextRequest) {
   try {
     // Get all departments from the global departments table
-    const { data: departments, error } = await supabase
-      .from('departments')
-      .select('id, name, description, is_active')
-      .eq('is_active', true)
-      .order('name');
+    // Supabase (commented out)
+    // const { data: departments, error } = await supabase.from('departments').select('...')
 
-    if (error) {
-      console.error('Error fetching departments:', error);
+    // PostgreSQL with Drizzle
+    const depts = await db
+      .select({
+        id: departments.id,
+        name: departments.name,
+        description: departments.description,
+        isActive: departments.isActive
+      })
+      .from(departments)
+      .where(eq(departments.isActive, true))
+      .orderBy(departments.name);
+
+    if (!depts) {
+      console.error('Error fetching departments');
       return NextResponse.json(
         { error: 'Failed to fetch departments' },
         { status: 500 }
@@ -20,7 +33,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      departments: departments || []
+      departments: depts || []
     });
 
   } catch (error) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, users, departments, eq, inArray } from '@/lib/db-helper';
 import { InvitationEmailService } from '@/lib/invitationEmailService';
 
 interface UserInvite {
@@ -29,20 +30,27 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify organization exists and is verified
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('id, name, org_email, otp_verified, domain')
-      .eq('id', orgId)
-      .single();
+    const orgResults = await db.select({
+      id: organizations.id,
+      name: organizations.name,
+      orgEmail: organizations.orgEmail,
+      otpVerified: organizations.otpVerified,
+      domain: organizations.domain
+    })
+      .from(organizations)
+      .where(eq(organizations.id, orgId))
+      .limit(1);
+    
+    const organization = orgResults[0] || null;
 
-    if (orgError || !organization) {
+    if (!organization) {
       return NextResponse.json(
         { error: 'Organization not found' },
         { status: 404 }
       );
     }
 
-    if (!organization.otp_verified) {
+    if (!organization.otpVerified) {
       return NextResponse.json(
         { error: 'Organization email must be verified first' },
         { status: 400 }
@@ -70,14 +78,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Update organization with selected departments
-    const { error: updateError } = await supabase
-      .from('organizations')
-      .update({
-        associated_departments: selectedDepartments
-      })
-      .eq('id', orgId);
-
-    if (updateError) {
+    try {
+      await db.update(organizations)
+        .set({
+          associatedDepartments: selectedDepartments
+        })
+        .where(eq(organizations.id, orgId));
+    } catch (updateError) {
       console.error('Error updating organization departments:', updateError);
       return NextResponse.json(
         { error: 'Failed to update organization departments' },
@@ -95,32 +102,41 @@ export async function POST(request: NextRequest) {
 
       try {
         // Check if user already exists
-        const { data: existingUser } = await supabase
-          .from('users')
-          .select('id, email')
-          .eq('email', invite.email)
-          .single();
+        const existingUserResults = await db.select({
+          id: users.id,
+          email: users.email
+        })
+          .from(users)
+          .where(eq(users.email, invite.email))
+          .limit(1);
+        
+        const existingUser = existingUserResults[0] || null;
 
         if (existingUser) {
           // User exists, update their departments (add to existing)
-          const { data: userData } = await supabase
-            .from('users')
-            .select('departments, organization_id, job_title')
-            .eq('id', existingUser.id)
-            .single();
+          const userDataResults = await db.select({
+            department: users.department,
+            organizationId: users.organizationId,
+            jobTitle: users.jobTitle
+          })
+            .from(users)
+            .where(eq(users.id, existingUser.id))
+            .limit(1);
+          
+          const userData = userDataResults[0];
 
           if (userData) {
-            const currentDepartments = userData.departments || [];
-            const newDepartments = [...new Set([...currentDepartments, ...invite.selectedDepartments])];
+            // Note: Using single department field instead of array
+            // If you need to support multiple departments, update schema
+            const primaryDepartment = invite.selectedDepartments[0] || userData.department;
             
-            await supabase
-              .from('users')
-              .update({
-                departments: newDepartments,
-                organization_id: orgId, // Update organization if different
-                job_title: invite.jobTitle || userData.job_title
+            await db.update(users)
+              .set({
+                department: primaryDepartment,
+                organizationId: orgId, // Update organization if different
+                jobTitle: invite.jobTitle || userData.jobTitle
               })
-              .eq('id', existingUser.id);
+              .where(eq(users.id, existingUser.id));
 
             inviteResults.push({
               email: invite.email,
@@ -142,10 +158,12 @@ export async function POST(request: NextRequest) {
           });
 
           // Get department names for the invitation
-          const { data: deptData } = await supabase
-            .from('departments')
-            .select('id, name')
-            .in('id', invite.selectedDepartments);
+          const deptData = await db.select({
+            id: departments.id,
+            name: departments.name
+          })
+            .from(departments)
+            .where(inArray(departments.id, invite.selectedDepartments));
           
           const invitationService = new InvitationEmailService();
           const emailResult = await invitationService.sendUserInvitation({

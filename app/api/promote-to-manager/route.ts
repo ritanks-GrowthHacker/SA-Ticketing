@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, globalRoles, userOrganizationRoles, eq, and } from '@/lib/db-helper';
 
 export async function POST(req: Request) {
   try {
@@ -16,29 +17,53 @@ export async function POST(req: Request) {
     const organizationId = decoded.org_id;
 
     // Get Manager role ID
-    const { data: managerRole } = await supabase
-      .from('global_roles')
-      .select('id')
-      .eq('name', 'Manager')
-      .single();
+    const managerRole = await db
+      .select({ id: globalRoles.id })
+      .from(globalRoles)
+      .where(eq(globalRoles.name, 'Manager'))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (!managerRole) {
       return NextResponse.json({ error: "Manager role not found" }, { status: 404 });
     }
 
-    // Update user's organization role to Manager
-    const { data, error } = await supabase
-      .from('user_organization_roles')
-      .upsert({
-        user_id: userId,
-        organization_id: organizationId,
-        role_id: managerRole.id
-      })
-      .select();
+    // Check if user already has an org role
+    const existingRole = await db
+      .select({ id: userOrganizationRoles.id })
+      .from(userOrganizationRoles)
+      .where(
+        and(
+          eq(userOrganizationRoles.userId, userId),
+          eq(userOrganizationRoles.organizationId, organizationId)
+        )
+      )
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (error) {
-      console.error('Error promoting user to Manager:', error);
-      return NextResponse.json({ error: "Failed to promote user" }, { status: 500 });
+    let data;
+    if (existingRole) {
+      // Update existing role
+      [data] = await db
+        .update(userOrganizationRoles)
+        .set({ roleId: managerRole.id })
+        .where(
+          and(
+            eq(userOrganizationRoles.userId, userId),
+            eq(userOrganizationRoles.organizationId, organizationId)
+          )
+        )
+        .returning();
+    } else {
+      // Insert new role
+      [data] = await db
+        .insert(userOrganizationRoles)
+        .values({
+          userId: userId,
+          organizationId: organizationId,
+          roleId: managerRole.id
+        })
+        .returning();
     }
 
     return NextResponse.json({ 

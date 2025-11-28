@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from '@/app/db/connections';
+
+// PostgreSQL with Drizzle ORM
+import { db, resourceRequests, projects, users, departments, globalRoles, userProject, userDepartmentRoles, sharedProjects, notifications, projectDepartment, eq, and, sql } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 import { emailService } from '@/lib/emailService';
 
@@ -32,22 +36,40 @@ export async function POST(req: Request) {
     }
 
     // Get the resource request
-    const { data: request, error: requestError } = await supabase
-      .from('resource_requests')
-      .select(`
-        *,
-        projects(id, name),
-        requested_user:users!resource_requests_requested_user_id_fkey(id, name, email, department_id),
-        requester:users!resource_requests_requested_by_fkey(id, name, email, department_id),
-        user_department:departments!resource_requests_user_department_id_fkey(id, name),
-        requested_role:global_roles!resource_requests_requested_role_id_fkey(id, name)
-      `)
-      .eq('id', requestId)
-      .single();
+    // Supabase (commented out)
+    // const { data: request, error: requestError } = await supabase.from('resource_requests').select(`...`)
 
-    if (requestError || !request) {
+    // PostgreSQL with Drizzle
+    const requestData = await db
+      .select({
+        id: resourceRequests.id,
+        projectId: resourceRequests.projectId,
+        requestedUserId: resourceRequests.requestedUserId,
+        requestedBy: resourceRequests.requestedBy,
+        userDepartmentId: resourceRequests.userDepartmentId,
+        requestedRoleId: resourceRequests.requestedRoleId,
+        status: resourceRequests.status,
+        message: resourceRequests.message,
+        createdAt: resourceRequests.createdAt,
+        projectName: projects.name,
+        requestedUserName: users.name,
+        requestedUserEmail: users.email,
+        deptName: departments.name,
+        roleName: globalRoles.name
+      })
+      .from(resourceRequests)
+      .leftJoin(projects, eq(resourceRequests.projectId, projects.id))
+      .leftJoin(users, eq(resourceRequests.requestedUserId, users.id))
+      .leftJoin(departments, eq(resourceRequests.userDepartmentId, departments.id))
+      .leftJoin(globalRoles, eq(resourceRequests.requestedRoleId, globalRoles.id))
+      .where(eq(resourceRequests.id, requestId))
+      .limit(1);
+
+    if (!requestData || requestData.length === 0) {
       return NextResponse.json({ error: 'Resource request not found' }, { status: 404 });
     }
+
+    const request = requestData[0];
 
     if (request.status !== 'pending') {
       return NextResponse.json(
@@ -58,19 +80,30 @@ export async function POST(req: Request) {
 
     // If approving, check if user is already in project
     if (action === 'approved') {
-      const { data: existingAssignment } = await supabase
-        .from('user_project')
-        .select('id')
-        .eq('user_id', request.requested_user_id)
-        .eq('project_id', request.project_id)
-        .single();
+      // Supabase (commented out)
+      // const { data: existingAssignment } = await supabase.from('user_project').select('id')...
 
-      if (existingAssignment) {
+      // PostgreSQL with Drizzle
+      const existingAssignment = await db
+        .select({ userId: userProject.userId, projectId: userProject.projectId })
+        .from(userProject)
+        .where(
+          and(
+            eq(userProject.userId, request.requestedUserId),
+            eq(userProject.projectId, request.projectId)
+          )
+        )
+        .limit(1);
+
+      if (existingAssignment && existingAssignment.length > 0) {
         // User already in project - delete this request and notify
-        await supabase
-          .from('resource_requests')
-          .delete()
-          .eq('id', requestId);
+        // Supabase (commented out)
+        // await supabase.from('resource_requests').delete().eq('id', requestId);
+
+        // PostgreSQL with Drizzle
+        await db
+          .delete(resourceRequests)
+          .where(eq(resourceRequests.id, requestId));
 
         return NextResponse.json(
           { 
@@ -83,27 +116,30 @@ export async function POST(req: Request) {
     }
 
     // Update the request status
-    const { error: updateError } = await supabase
-      .from('resource_requests')
-      .update({
-        status: action,
-        reviewed_by: decoded.sub,
-        reviewed_at: new Date().toISOString(),
-        review_notes: reviewNotes || null,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', requestId);
+    // Supabase (commented out)
+    // const { error: updateError } = await supabase.from('resource_requests').update({...})
 
-    if (updateError) {
+    // PostgreSQL with Drizzle
+    try {
+      await db
+        .update(resourceRequests)
+        .set({
+          status: action,
+          reviewedBy: decoded.sub,
+          reviewedAt: new Date(),
+          reviewNotes: reviewNotes || null,
+          updatedAt: new Date()
+        })
+        .where(eq(resourceRequests.id, requestId));
+    } catch (updateError: any) {
       console.error('Error updating resource request:', updateError);
       
       // Handle duplicate status constraint error
       if (updateError.code === '23505') {
         // Delete the duplicate request
-        await supabase
-          .from('resource_requests')
-          .delete()
-          .eq('id', requestId);
+        await db
+          .delete(resourceRequests)
+          .where(eq(resourceRequests.id, requestId));
 
         return NextResponse.json(
           { 
@@ -119,29 +155,33 @@ export async function POST(req: Request) {
 
     // If approved, add project sharing and notifications
     if (action === 'approved') {
-      const projectId = request.project_id;
-      const requestedUserId = request.requested_user_id;
-      const requestedUserEmail = (request.requested_user as any).email;
-      const requestedUserName = (request.requested_user as any).name;
-      const projectName = (request.projects as any).name;
+      const projectId = request.projectId;
+      const requestedUserId = request.requestedUserId;
+      const requestedUserEmail = request.requestedUserEmail;
+      const requestedUserName = request.requestedUserName;
+      const projectName = request.projectName;
 
       // CRITICAL FIX: Get department ID from PROJECT, not from resource_request table
-      // Resource request might have wrong dept ID (employee's dept instead of project's dept)
-      const { data: projectData, error: projectError } = await supabase
-        .from('projects')
-        .select(`
-          id,
-          project_department!inner(department_id)
-        `)
-        .eq('id', projectId)
-        .single();
+      // Supabase (commented out)
+      // const { data: projectData, error: projectError } = await supabase.from('projects').select(`...`)
 
-      if (projectError || !projectData) {
-        console.error('Error fetching project department:', projectError);
+      // PostgreSQL with Drizzle
+      const projectData = await db
+        .select({
+          id: projects.id,
+          departmentId: projectDepartment.departmentId
+        })
+        .from(projects)
+        .innerJoin(projectDepartment, eq(projects.id, projectDepartment.projectId))
+        .where(eq(projects.id, projectId))
+        .limit(1);
+
+      if (!projectData || projectData.length === 0) {
+        console.error('Error fetching project department');
         return NextResponse.json({ error: 'Failed to fetch project details' }, { status: 500 });
       }
 
-      const projectDepartmentId = projectData.project_department[0]?.department_id;
+      const projectDepartmentId = projectData[0]?.departmentId;
       
       if (!projectDepartmentId) {
         console.error('Project has no department:', projectId);
@@ -151,117 +191,110 @@ export async function POST(req: Request) {
       console.log('✅ Using project department ID:', projectDepartmentId);
 
       // 1. Share project with the project's department (not user's dept)
-      const { error: shareError } = await supabase
-        .from('shared_projects')
-        .insert({
-          project_id: projectId,
-          department_id: projectDepartmentId,
-          shared_by: decoded.sub
-        })
-        .select()
-        .single();
+      // Supabase (commented out)
+      // const { error: shareError } = await supabase.from('shared_projects').insert({...})
 
-      if (shareError && shareError.code !== '23505') { // Ignore duplicate error
-        console.error('Error sharing project:', shareError);
+      // PostgreSQL with Drizzle
+      try {
+        await db
+          .insert(sharedProjects)
+          .values({
+            projectId: projectId,
+            departmentId: projectDepartmentId,
+            sharedBy: decoded.sub
+          });
+      } catch (shareError: any) {
+        if (shareError.code !== '23505') { // Ignore duplicate error
+          console.error('Error sharing project:', shareError);
+        }
       }
 
       // 2. Assign user to PROJECT'S department (not their original department)
-      const { data: existingDeptAssignment } = await supabase
-        .from('user_department_roles')
-        .select('id')
-        .eq('user_id', requestedUserId)
-        .eq('department_id', projectDepartmentId)
-        .single();
+      // Supabase (commented out)
+      // const { data: existingDeptAssignment } = await supabase.from('user_department_roles').select('id')...
 
-      if (!existingDeptAssignment) {
+      // PostgreSQL with Drizzle
+      const existingDeptAssignment = await db
+        .select({ id: userDepartmentRoles.id })
+        .from(userDepartmentRoles)
+        .where(
+          and(
+            eq(userDepartmentRoles.userId, requestedUserId),
+            eq(userDepartmentRoles.departmentId, projectDepartmentId)
+          )
+        )
+        .limit(1);
+
+      if (!existingDeptAssignment || existingDeptAssignment.length === 0) {
         // Get Member role ID for department assignment
-        const { data: memberRole } = await supabase
-          .from('global_roles')
-          .select('id')
-          .eq('name', 'Member')
-          .single();
+        // Supabase (commented out)
+        // const { data: memberRole } = await supabase.from('global_roles').select('id').eq('name', 'Member').single();
 
-        if (memberRole) {
-          const { error: deptAssignError } = await supabase
-            .from('user_department_roles')
-            .insert({
-              user_id: requestedUserId,
-              department_id: projectDepartmentId,
-              role_id: memberRole.id,
-              organization_id: decoded.org_id
-            });
+        // PostgreSQL with Drizzle
+        const memberRole = await db
+          .select({ id: globalRoles.id })
+          .from(globalRoles)
+          .where(eq(globalRoles.name, 'Member'))
+          .limit(1);
 
-          if (deptAssignError && deptAssignError.code !== '23505') {
-            console.error('Error assigning user to department:', deptAssignError);
-          } else {
+        if (memberRole && memberRole.length > 0) {
+          try {
+            await db
+              .insert(userDepartmentRoles)
+              .values({
+                userId: requestedUserId,
+                departmentId: projectDepartmentId,
+                roleId: memberRole[0].id,
+                organizationId: decoded.org_id
+              });
+
             console.log('✅ User assigned to PROJECT department:', {
               userId: requestedUserId,
               departmentId: projectDepartmentId,
               roleName: 'Member',
               organizationId: decoded.org_id
             });
+          } catch (deptAssignError: any) {
+            if (deptAssignError.code !== '23505') {
+              console.error('Error assigning user to department:', deptAssignError);
+            }
           }
         }
       } else {
         console.log('ℹ️ User already in project department');
       }
 
-      // 3. Assign user to project (add to user_project table)
-      // Use the requested role if specified, otherwise default to Member
-      let roleId = request.requested_role_id;
-      
-      if (!roleId) {
-        const { data: memberRole } = await supabase
-          .from('global_roles')
-          .select('id')
-          .eq('name', 'Member')
-          .single();
-        roleId = memberRole?.id;
-      }
-
-      if (roleId) {
-        const { error: assignError } = await supabase
-          .from('user_project')
-          .insert({
-            user_id: requestedUserId,
-            project_id: projectId,
-            role_id: roleId
-          })
-          .select()
-          .single();
-
-        if (assignError && assignError.code !== '23505') { // Ignore duplicate error
-          console.error('Error assigning user to project:', assignError);
-        } else {
-          console.log('✅ User assigned to project:', { 
-            userId: requestedUserId, 
-            projectId, 
-            roleId,
-            roleName: request.requested_role ? (request.requested_role as any).name : 'Member'
-          });
-        }
-      }
+      // 3. DO NOT auto-assign user to project
+      // Resource request approval only grants ACCESS (department sharing)
+      // Actual project assignment with role must be done via Manage Access
+      console.log('ℹ️ Resource request approved - user can now be assigned via Manage Access');
+      console.log('📝 Next step: Manually assign user to project with appropriate role');
 
       // 4. Create notification for the requested user
-      const { error: notifError } = await supabase
-        .from('notifications')
-        .insert({
-          user_id: requestedUserId,
-          entity_type: 'project',
-          entity_id: projectId,
-          title: 'Project Access Approved',
-          message: `You have been granted access to project "${projectName}"`,
-          type: 'success'
-        });
+      // Supabase (commented out)
+      // const { error: notifError } = await supabase.from('notifications').insert({...});
 
-      if (notifError) {
+      // PostgreSQL with Drizzle
+      try {
+        await db
+          .insert(notifications)
+          .values({
+            userId: requestedUserId,
+            entityType: 'project',
+            entityId: projectId,
+            title: 'Project Access Approved',
+            message: `You have been granted access to project "${projectName}"`,
+            type: 'success'
+          });
+      } catch (notifError) {
         console.error('Error creating notification:', notifError);
       }
 
       // 5. Send email to the requested user
       try {
-        await emailService.sendEmail({
-          to: requestedUserEmail,
+        if (requestedUserEmail) {
+          await emailService.sendEmail({
+            to: requestedUserEmail,
           subject: `Project Access Approved - ${projectName}`,
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -281,6 +314,7 @@ export async function POST(req: Request) {
             </div>
           `
         });
+        }
       } catch (emailError) {
         console.error('Error sending approval email:', emailError);
         // Continue even if email fails
@@ -294,31 +328,36 @@ export async function POST(req: Request) {
       });
     } else {
       // If rejected, notify the requested user
-      const requestedUserId = request.requested_user_id;
-      const requestedUserEmail = (request.requested_user as any).email;
-      const requestedUserName = (request.requested_user as any).name;
-      const projectName = (request.projects as any).name;
+      const requestedUserId = request.requestedUserId;
+      const requestedUserEmail = request.requestedUserEmail;
+      const requestedUserName = request.requestedUserName;
+      const projectName = request.projectName;
 
       // Create rejection notification
-      const { error: notifError } = await supabase
-        .from('notifications')
-        .insert({
-          user_id: requestedUserId,
-          entity_type: 'project',
-          entity_id: request.project_id,
-          title: 'Project Access Rejected',
-          message: `Your request to access project "${projectName}" was not approved`,
-          type: 'error'
-        });
+      // Supabase (commented out)
+      // const { error: notifError } = await supabase.from('notifications').insert({...});
 
-      if (notifError) {
+      // PostgreSQL with Drizzle
+      try {
+        await db
+          .insert(notifications)
+          .values({
+            userId: requestedUserId,
+            entityType: 'project',
+            entityId: request.projectId,
+            title: 'Project Access Rejected',
+            message: `Your request to access project "${projectName}" was not approved`,
+            type: 'error'
+          });
+      } catch (notifError) {
         console.error('Error creating rejection notification:', notifError);
       }
 
       // Send rejection email
       try {
-        await emailService.sendEmail({
-          to: requestedUserEmail,
+        if (requestedUserEmail) {
+          await emailService.sendEmail({
+            to: requestedUserEmail,
           subject: `Project Access Request Update - ${projectName}`,
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -332,6 +371,7 @@ export async function POST(req: Request) {
             </div>
           `
         });
+        }
       } catch (emailError) {
         console.error('Error sending rejection email:', emailError);
       }
@@ -339,16 +379,18 @@ export async function POST(req: Request) {
 
     // Delete the processed request from database (both approved and rejected)
     console.log('🗑️ Deleting processed request:', requestId);
-    const { error: deleteError } = await supabase
-      .from('resource_requests')
-      .delete()
-      .eq('id', requestId);
+    // Supabase (commented out)
+    // const { error: deleteError } = await supabase.from('resource_requests').delete().eq('id', requestId);
 
-    if (deleteError) {
+    // PostgreSQL with Drizzle
+    try {
+      await db
+        .delete(resourceRequests)
+        .where(eq(resourceRequests.id, requestId));
+      console.log('✅ Processed request deleted successfully');
+    } catch (deleteError) {
       console.error('❌ Error deleting processed request:', deleteError);
       // Don't fail the request if delete fails - just log it
-    } else {
-      console.log('✅ Processed request deleted successfully');
     }
 
     return NextResponse.json({

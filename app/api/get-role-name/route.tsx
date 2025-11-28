@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, globalRoles, eq } from '@/lib/db-helper';
 import jwt from "jsonwebtoken";
 
 export async function GET(req: Request) {
@@ -39,19 +40,12 @@ export async function GET(req: Request) {
     console.log(`🔍 Getting role name for roleId: ${roleId}`);
 
     // Fetch role name from global_roles table
-    const { data: role, error } = await supabase
-      .from('global_roles')
-      .select('name')
-      .eq('id', roleId)
-      .single();
-
-    if (error) {
-      console.error("❌ Failed to fetch role name:", error);
-      return NextResponse.json(
-        { error: "Failed to fetch role name" },
-        { status: 500 }
-      );
-    }
+    const role = await db
+      .select({ name: globalRoles.name })
+      .from(globalRoles)
+      .where(eq(globalRoles.id, roleId))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (!role) {
       return NextResponse.json(

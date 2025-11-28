@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, tickets, projects, users, notifications, eq, inArray } from '@/lib/db-helper';
 import { emailService } from '@/lib/emailService';
 
 interface JWTPayload {
@@ -51,23 +52,23 @@ export async function POST(req: NextRequest) {
 
     console.log('🔔 Processing mention notifications:', { ticketId, commentId, mentionedUserIds });
 
-    // Get ticket details
-    const { data: ticket, error: ticketError } = await supabase
-      .from('tickets')
-      .select(`
-        id,
-        title,
-        description,
-        projects!inner(
-          id,
-          name
-        )
-      `)
-      .eq('id', ticketId)
-      .single();
+    // Get ticket details with project info
+    const ticket = await db
+      .select({
+        id: tickets.id,
+        title: tickets.title,
+        description: tickets.description,
+        projectId: projects.id,
+        projectName: projects.name
+      })
+      .from(tickets)
+      .leftJoin(projects, eq(tickets.projectId, projects.id))
+      .where(eq(tickets.id, ticketId))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (ticketError || !ticket) {
-      console.error('Error fetching ticket:', ticketError);
+    if (!ticket) {
+      console.error('Error fetching ticket');
       return NextResponse.json(
         { error: "Ticket not found" }, 
         { status: 404 }
@@ -75,14 +76,19 @@ export async function POST(req: NextRequest) {
     }
 
     // Get commenter details
-    const { data: commenter, error: commenterError } = await supabase
-      .from('users')
-      .select('id, name, email')
-      .eq('id', decodedToken.sub)
-      .single();
+    const commenter = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email
+      })
+      .from(users)
+      .where(eq(users.id, decodedToken.sub))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (commenterError || !commenter) {
-      console.error('Error fetching commenter:', commenterError);
+    if (!commenter) {
+      console.error('Error fetching commenter');
       return NextResponse.json(
         { error: "Commenter not found" }, 
         { status: 404 }
@@ -90,18 +96,14 @@ export async function POST(req: NextRequest) {
     }
 
     // Get mentioned users' details
-    const { data: mentionedUsers, error: usersError } = await supabase
-      .from('users')
-      .select('id, name, email')
-      .in('id', mentionedUserIds);
-
-    if (usersError) {
-      console.error('Error fetching mentioned users:', usersError);
-      return NextResponse.json(
-        { error: "Failed to fetch mentioned users" }, 
-        { status: 500 }
-      );
-    }
+    const mentionedUsers = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email
+      })
+      .from(users)
+      .where(inArray(users.id, mentionedUserIds));
 
     // Send emails to mentioned users
     const emailPromises = mentionedUsers.map(async (user) => {
@@ -109,7 +111,7 @@ export async function POST(req: NextRequest) {
         const emailSubject = `You were mentioned in a comment on "${ticket.title}"`;
         const emailBody = `
           <h2>You were mentioned in a comment</h2>
-          <p><strong>${commenter.name}</strong> mentioned you in a comment on the ticket "<strong>${ticket.title}</strong>" in project "<strong>${(ticket.projects as any).name}</strong>".</p>
+          <p><strong>${commenter.name}</strong> mentioned you in a comment on the ticket "<strong>${ticket.title}</strong>" in project "<strong>${ticket.projectName}</strong>".</p>
           
           <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
             <h3>Comment:</h3>
@@ -151,25 +153,19 @@ export async function POST(req: NextRequest) {
 
     // Store notification records in database
     try {
-      const notifications = mentionedUsers.map(user => ({
-        user_id: user.id,
-        entity_type: 'ticket',
-        entity_id: ticketId,
+      const notificationRecords = mentionedUsers.map(user => ({
+        userId: user.id,
+        entityType: 'ticket',
+        entityId: ticketId,
         type: 'info',
         title: `You were mentioned in a comment`,
         message: `${commenter.name} mentioned you in a comment on "${ticket.title}"`,
-        is_read: false
+        isRead: false,
+        createdAt: new Date()
       }));
 
-      const { error: notificationError } = await supabase
-        .from('notifications')
-        .insert(notifications);
-      
-      if (notificationError) {
-        console.error('Error storing notifications:', notificationError);
-      } else {
-        console.log(`✅ Created ${notifications.length} in-app notifications for mentions`);
-      }
+      await db.insert(notifications).values(notificationRecords);
+      console.log(`✅ Created ${notificationRecords.length} in-app notifications for mentions`);
     } catch (notificationError) {
       console.error('Error storing notification records:', notificationError);
       // Non-critical error, don't fail the request

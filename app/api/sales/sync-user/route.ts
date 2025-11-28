@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, salesTeamHierarchy, eq, and } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../helpers';
 
 export async function POST(req: NextRequest) {
@@ -14,20 +14,28 @@ export async function POST(req: NextRequest) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as DecodedToken;
     const { userId, organizationId } = extractUserAndOrgId(decoded);
 
+    if (!userId || !organizationId) {
+      return NextResponse.json({ error: 'Invalid token: missing user or organization ID' }, { status: 401 });
+    }
+
     const { full_name, phone } = await req.json();
 
     // Check if user already exists in sales_team_hierarchy
-    const { data: existingUser } = await supabaseAdminSales
-      .from('sales_team_hierarchy')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId)
-      .single();
+    const existingUser = await salesDb
+      .select()
+      .from(salesTeamHierarchy)
+      .where(
+        and(
+          eq(salesTeamHierarchy.userId, userId),
+          eq(salesTeamHierarchy.organizationId, organizationId)
+        )
+      )
+      .limit(1);
 
-    if (existingUser) {
+    if (existingUser && existingUser.length > 0) {
       return NextResponse.json({ 
         message: 'User already synced',
-        user: existingUser 
+        user: existingUser[0]
       });
     }
 
@@ -46,29 +54,23 @@ export async function POST(req: NextRequest) {
     }
 
     // Insert user into sales_team_hierarchy
-    const { data: newUser, error } = await supabaseAdminSales
-      .from('sales_team_hierarchy')
-      .insert({
-        user_id: userId,
-        organization_id: organizationId,
-        email: decoded.email,
-        full_name: full_name || decoded.email?.split('@')[0] || 'Unknown',
+    const newUser = await salesDb
+      .insert(salesTeamHierarchy)
+      .values({
+        userId: userId,
+        organizationId: organizationId,
+        email: decoded.email || '',
+        fullName: full_name || decoded.email?.split('@')[0] || 'Unknown',
         phone: phone || null,
-        sales_role: salesRole,
-        manager_id: null, // Will be assigned by admin later
-        is_active: true
+        salesRole: salesRole,
+        managerId: null, // Will be assigned by admin later
+        isActive: true
       })
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error syncing user to sales DB:', error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+      .returning();
 
     return NextResponse.json({ 
       message: 'User synced successfully',
-      user: newUser 
+      user: newUser[0]
     });
 
   } catch (error: any) {

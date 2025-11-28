@@ -10,32 +10,32 @@ import { SalesToast } from '@/app/sales/components/SalesToast';
 import { SalesLoader } from '@/app/sales/components/SalesLoader';
 
 interface Quote {
-  quote_id: string;
-  quote_number: string;
-  quote_title: string;
-  quote_amount: number;
-  tax_amount: number;
-  total_amount: number;
+  quoteId: string;
+  quoteNumber: string;
+  quoteTitle: string;
+  quoteAmount: number;
+  taxAmount: number;
+  totalAmount: number;
   currency: string;
   status: string;
-  valid_until: string;
-  quote_items: {
+  validUntil: string;
+  quoteItems: {
     description: string;
     quantity: number;
     rate: number;
     amount: number;
   }[];
-  terms_conditions: string;
+  termsConditions: string;
   notes: string;
-  created_at: string;
-  magic_link_expires_at: string;
-  organization_name?: string;
-  organization_email?: string;
-  organization_phone?: string;
-  organization_address?: string;
+  createdAt: string;
+  magicLinkExpiresAt: string;
+  organizationName?: string;
+  organizationEmail?: string;
+  organizationPhone?: string;
+  organizationAddress?: string;
   client: {
-    client_name: string;
-    contact_person: string;
+    clientName: string;
+    contactPerson: string;
     email: string;
     phone: string;
     address: string;
@@ -132,7 +132,7 @@ export default function QuotePreviewPage() {
     setAccepting(true);
 
     try {
-      const response = await fetch(`/api/sales/quotes/${quote.quote_id}/accept-public`, {
+      const response = await fetch(`/api/sales/quotes/${quote.quoteId}/accept-public`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token })
@@ -180,7 +180,7 @@ export default function QuotePreviewPage() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`/api/sales/quotes/${quote.quote_id}/reject-public`, {
+      const response = await fetch(`/api/sales/quotes/${quote.quoteId}/reject-public`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token })
@@ -222,7 +222,7 @@ export default function QuotePreviewPage() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`/api/sales/quotes/${quote.quote_id}/hold-public`, {
+      const response = await fetch(`/api/sales/quotes/${quote.quoteId}/hold-public`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token })
@@ -260,8 +260,8 @@ export default function QuotePreviewPage() {
   };
 
   const isExpired = () => {
-    if (!quote?.magic_link_expires_at) return false;
-    return new Date(quote.magic_link_expires_at) < new Date();
+    if (!quote?.magicLinkExpiresAt) return false;
+    return new Date(quote.magicLinkExpiresAt) < new Date();
   };
 
   if (loading) {
@@ -314,25 +314,25 @@ export default function QuotePreviewPage() {
                 <div className="flex items-center gap-2 mb-4">
                   <Building2 className="h-8 w-8 text-blue-600" />
                   <h1 className="text-3xl font-bold text-gray-900">
-                    {quote.organization_name || 'Your Company Name'}
+                    {quote.organizationName || 'Your Company Name'}
                   </h1>
                 </div>
-                {quote.organization_email && (
+                {quote.organizationEmail && (
                   <div className="flex items-center gap-2 text-gray-600 mb-1">
                     <Mail className="h-4 w-4" />
-                    <span>{quote.organization_email}</span>
+                    <span>{quote.organizationEmail}</span>
                   </div>
                 )}
-                {quote.organization_phone && (
+                {quote.organizationPhone && (
                   <div className="flex items-center gap-2 text-gray-600 mb-1">
                     <Phone className="h-4 w-4" />
-                    <span>{quote.organization_phone}</span>
+                    <span>{quote.organizationPhone}</span>
                   </div>
                 )}
-                {quote.organization_address && (
+                {quote.organizationAddress && (
                   <div className="flex items-center gap-2 text-gray-600">
                     <MapPin className="h-4 w-4" />
-                    <span>{quote.organization_address}</span>
+                    <span>{quote.organizationAddress}</span>
                   </div>
                 )}
               </div>
@@ -360,21 +360,21 @@ export default function QuotePreviewPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <p className="text-sm text-gray-500">Quote Number</p>
-                  <p className="font-semibold text-lg">{quote.quote_number}</p>
+                  <p className="font-semibold text-lg">{quote.quoteNumber}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Date</p>
-                  <p className="font-semibold">{new Date(quote.created_at).toLocaleDateString()}</p>
+                  <p className="font-semibold">{new Date(quote.createdAt).toLocaleDateString()}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Valid Until</p>
                   <p className="font-semibold">
-                    {quote.valid_until ? new Date(quote.valid_until).toLocaleDateString() : 'N/A'}
+                    {quote.validUntil ? new Date(quote.validUntil).toLocaleDateString() : 'N/A'}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Quote Title</p>
-                  <p className="font-semibold">{quote.quote_title}</p>
+                  <p className="font-semibold">{quote.quoteTitle}</p>
                 </div>
               </div>
             </div>
@@ -382,9 +382,9 @@ export default function QuotePreviewPage() {
             {/* Client Info */}
             <div className="bg-gray-50 p-4 rounded-lg">
               <h3 className="font-semibold text-gray-900 mb-2">Bill To:</h3>
-              <p className="font-medium text-gray-900">{quote.client.client_name}</p>
-              {quote.client.contact_person && (
-                <p className="text-gray-600">Attn: {quote.client.contact_person}</p>
+              <p className="font-medium text-gray-900">{quote.client.clientName}</p>
+              {quote.client.contactPerson && (
+                <p className="text-gray-600">Attn: {quote.client.contactPerson}</p>
               )}
               {quote.client.email && <p className="text-gray-600">{quote.client.email}</p>}
               {quote.client.phone && <p className="text-gray-600">{quote.client.phone}</p>}
@@ -413,7 +413,7 @@ export default function QuotePreviewPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {quote.quote_items?.map((item, index) => (
+                {quote.quoteItems?.map((item, index) => (
                   <TableRow key={index}>
                     <TableCell className="font-medium">{item.description}</TableCell>
                     <TableCell className="text-right">{item.quantity}</TableCell>
@@ -430,15 +430,15 @@ export default function QuotePreviewPage() {
                 <div className="w-64 space-y-2">
                   <div className="flex justify-between text-gray-700">
                     <span>Subtotal:</span>
-                    <span className="font-semibold">{formatCurrency(quote.quote_amount)}</span>
+                    <span className="font-semibold">{formatCurrency(quote.quoteAmount)}</span>
                   </div>
                   <div className="flex justify-between text-gray-700">
                     <span>Tax:</span>
-                    <span className="font-semibold">{formatCurrency(quote.tax_amount)}</span>
+                    <span className="font-semibold">{formatCurrency(quote.taxAmount)}</span>
                   </div>
                   <div className="flex justify-between text-xl font-bold text-gray-900 border-t pt-2">
                     <span>Total:</span>
-                    <span>{formatCurrency(quote.total_amount)}</span>
+                    <span>{formatCurrency(quote.totalAmount)}</span>
                   </div>
                 </div>
               </div>
@@ -447,13 +447,13 @@ export default function QuotePreviewPage() {
         </Card>
 
         {/* Terms & Notes */}
-        {(quote.terms_conditions || quote.notes) && (
+        {(quote.termsConditions || quote.notes) && (
           <Card className="mb-6">
             <CardContent className="pt-6">
-              {quote.terms_conditions && (
+              {quote.termsConditions && (
                 <div className="mb-4">
                   <h3 className="font-semibold text-gray-900 mb-2">Terms & Conditions</h3>
-                  <p className="text-gray-700 whitespace-pre-wrap text-sm">{quote.terms_conditions}</p>
+                  <p className="text-gray-700 whitespace-pre-wrap text-sm">{quote.termsConditions}</p>
                 </div>
               )}
               {quote.notes && (
@@ -516,7 +516,7 @@ export default function QuotePreviewPage() {
         {/* Footer */}
         <div className="text-center mt-8 pb-4">
           <p className="text-sm text-gray-500">
-            If you have any questions, please contact us at {quote.organization_email || 'support@company.com'}
+            If you have any questions, please contact us at {quote.organizationEmail || 'support@company.com'}
           </p>
         </div>
       </div>

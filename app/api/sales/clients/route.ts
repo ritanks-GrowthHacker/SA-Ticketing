@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { salesDb, clients, salesTeamHierarchy, eq, and, inArray } from '@/lib/sales-db-helper';
 import { DecodedToken, extractUserAndOrgId } from '../helpers';
 
 export async function POST(req: NextRequest) {
@@ -16,41 +16,41 @@ export async function POST(req: NextRequest) {
 
     const clientData = await req.json();
 
-    const { data: newClient, error } = await supabaseAdminSales
-      .from('clients')
-      .insert({
-        organization_id: organizationId,
-        client_name: clientData.client_name,
-        contact_person: clientData.contact_person,
-        contact_designation: clientData.contact_designation,
+    const newClientResult = await salesDb
+      .insert(clients)
+      .values({
+        organizationId,
+        clientName: clientData.client_name,
+        contactPerson: clientData.contact_person,
+        contactDesignation: clientData.contact_designation,
         email: clientData.email,
         phone: clientData.phone,
         address: clientData.address,
         city: clientData.city,
         state: clientData.state,
         country: clientData.country,
-        postal_code: clientData.postal_code,
+        postalCode: clientData.postal_code,
         industry: clientData.industry,
-        client_type: clientData.client_type,
-        company_size: clientData.company_size,
-        annual_revenue_bracket: clientData.annual_revenue_bracket,
-        tax_number: clientData.tax_number,
-        gst_number: clientData.gst_number,
-        payment_terms: clientData.payment_terms,
-        preferred_payment_method: clientData.preferred_payment_method,
-        credit_limit: clientData.credit_limit,
-        client_source: clientData.client_source,
-        created_by_user_id: userId,
-        assigned_sales_member_id: clientData.assigned_sales_member_id || userId,
+        clientType: clientData.client_type,
+        companySize: clientData.company_size,
+        annualRevenueBracket: clientData.annual_revenue_bracket,
+        taxNumber: clientData.tax_number,
+        gstNumber: clientData.gst_number,
+        paymentTerms: clientData.payment_terms,
+        preferredPaymentMethod: clientData.preferred_payment_method,
+        creditLimit: clientData.credit_limit,
+        clientSource: clientData.client_source,
+        createdByUserId: userId,
+        assignedSalesMemberId: clientData.assigned_sales_member_id || userId,
         notes: clientData.notes,
         status: 'active'
       })
-      .select()
-      .single();
+      .returning();
 
-    if (error) {
-      console.error('Error creating client:', error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    const newClient = newClientResult[0];
+    if (!newClient) {
+      console.error('Error creating client: No result returned');
+      return NextResponse.json({ error: 'Failed to create client' }, { status: 500 });
     }
 
     return NextResponse.json({ 
@@ -84,12 +84,10 @@ export async function GET(req: NextRequest) {
 
     console.log('🔍 Get Clients API - View:', viewType, 'User:', userId, 'Org:', organizationId);
 
-    let query = supabaseAdminSales
-      .from('clients')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .eq('status', 'active')
-      .order('created_at', { ascending: false });
+    let whereConditions: any[] = [
+      eq(clients.organizationId, organizationId),
+      eq(clients.status, 'active')
+    ];
 
     // Admin: All clients in organization
     if (viewType === 'admin') {
@@ -100,36 +98,42 @@ export async function GET(req: NextRequest) {
     else if (viewType === 'manager') {
       console.log('👔 Manager view - Fetching team clients');
       // Get manager's team member IDs
-      const { data: teamMembers } = await supabaseAdminSales
-        .from('sales_team_hierarchy')
-        .select('user_id')
-        .eq('manager_id', userId)
-        .eq('organization_id', organizationId);
+      const teamMembers = await salesDb
+        .select({ userId: salesTeamHierarchy.userId })
+        .from(salesTeamHierarchy)
+        .where(
+          and(
+            eq(salesTeamHierarchy.managerId, userId),
+            eq(salesTeamHierarchy.organizationId, organizationId)
+          )
+        );
 
-      const memberIds = teamMembers?.map(m => m.user_id) || [];
+      const memberIds = teamMembers?.map(m => m.userId) || [];
       memberIds.push(userId); // Include manager's own clients
 
       console.log('👥 Team member IDs:', memberIds);
-      query = query.in('assigned_sales_member_id', memberIds);
+      whereConditions.push(inArray(clients.assignedSalesMemberId, memberIds));
     }
     // Member: Only own clients
     else if (viewType === 'my') {
       console.log('👤 Member view - Fetching own clients');
-      query = query.eq('assigned_sales_member_id', userId);
+      whereConditions.push(eq(clients.assignedSalesMemberId, userId));
     }
     // Specific member filter
     else if (salesMemberId) {
       console.log('🎯 Specific member filter:', salesMemberId);
-      query = query.eq('assigned_sales_member_id', salesMemberId);
+      whereConditions.push(eq(clients.assignedSalesMemberId, salesMemberId));
     }
 
-    const { data: clients, error } = await query;
+    const clientsResult = await salesDb
+      .select()
+      .from(clients)
+      .where(and(...whereConditions))
+      .orderBy(clients.createdAt);
 
-    if (error) throw error;
+    console.log('📦 Returning', clientsResult?.length || 0, 'clients');
 
-    console.log('📦 Returning', clients?.length || 0, 'clients');
-
-    return NextResponse.json({ clients: clients || [] });
+    return NextResponse.json({ clients: clientsResult || [] });
 
   } catch (error: any) {
     console.error('Get clients error:', error);

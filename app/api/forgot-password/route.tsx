@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, eq } from '@/lib/db-helper';
 import crypto from "crypto";
 import { emailService } from "@/lib/emailService";
 
@@ -32,13 +33,18 @@ export async function POST(req: Request) {
     const email = body.email.toLowerCase().trim();
 
     // Check if user exists
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, name, email")
-      .eq("email", email)
-      .single();
+    const userResults = await db.select({
+      id: users.id,
+      name: users.name,
+      email: users.email
+    })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1);
+    
+    const user = userResults[0];
 
-    if (userError || !user) {
+    if (!user) {
       console.log(`❌ Password reset attempted for non-existent email: ${email}`);
       // Don't reveal that the email doesn't exist for security
       return NextResponse.json(
@@ -66,24 +72,15 @@ export async function POST(req: Request) {
     console.log(`   Timezone Offset: ${expiresAt.getTimezoneOffset()} minutes`);
     
     try {
-      const { error: updateError } = await supabase
-        .from("users")
-        .update({ 
+      await db.update(users)
+        .set({ 
           otp: otp,
-          otp_expires_at: localExpiryTime.toISOString().replace('Z', ''),
-          otp_verified: false,
-          updated_at: new Date().toISOString()
+          otpExpiresAt: localExpiryTime,
+          otpVerified: false,
+          updatedAt: new Date()
         })
-        .eq("id", user.id);
+        .where(eq(users.id, user.id));
         
-      if (updateError) {
-        console.error("Failed to store OTP in users table:", updateError);
-        return NextResponse.json(
-          { error: "Failed to process password reset request" }, 
-          { status: 500 }
-        );
-      }
-      
       console.log(`✅ OTP stored in users table for ${user.email}`);
     } catch (e) {
       console.error("Error storing OTP in users table:", e);

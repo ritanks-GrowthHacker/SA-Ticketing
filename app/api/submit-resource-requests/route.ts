@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from '@/app/db/connections';
+
+// PostgreSQL with Drizzle ORM
+import { db, resourceRequests, users, departments, eq, inArray } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 export async function POST(request: NextRequest) {
@@ -24,34 +28,58 @@ export async function POST(request: NextRequest) {
 
     // Prepare bulk insert data
     const requestsData = requests.map((req: any) => ({
-      project_id,
-      requested_by: decoded.sub,
-      requested_user_id: req.user_id,
-      user_department_id: req.department_id,
-      requested_role_id: req.role_id || null, // Add role_id field
+      projectId: project_id,
+      requestedBy: decoded.sub,
+      requestedUserId: req.user_id,
+      userDepartmentId: req.department_id,
+      requestedRoleId: req.role_id || null,
       message: req.message || null,
       status: 'pending'
     }));
 
     // Insert all requests
-    const { data, error } = await supabase
-      .from('resource_requests')
-      .insert(requestsData)
-      .select(`
-        id,
-        requested_user_id,
-        user_department_id,
-        status,
-        message,
-        created_at,
-        users!resource_requests_requested_user_id_fkey(name, email, job_title),
-        departments!resource_requests_user_department_id_fkey(name, color_code)
-      `);
+    // Supabase (commented out)
+    // const { data, error } = await supabase.from('resource_requests').insert(requestsData).select(`...`);
 
-    if (error) {
-      console.error('Error creating resource requests:', error);
+    // PostgreSQL with Drizzle
+    const insertedRequests = await db
+      .insert(resourceRequests)
+      .values(requestsData)
+      .returning();
+
+    if (!insertedRequests || insertedRequests.length === 0) {
+      console.error('Error creating resource requests');
       return NextResponse.json(
         { error: 'Failed to create resource requests' },
+        { status: 500 }
+      );
+    }
+
+    // Fetch the requests with user and department details
+    const requestIds = insertedRequests.map(r => r.id);
+    const data = await db
+      .select({
+        id: resourceRequests.id,
+        requested_user_id: resourceRequests.requestedUserId,
+        user_department_id: resourceRequests.userDepartmentId,
+        status: resourceRequests.status,
+        message: resourceRequests.message,
+        created_at: resourceRequests.createdAt,
+        user_name: users.name,
+        user_email: users.email,
+        user_job_title: users.jobTitle,
+        dept_name: departments.name,
+        dept_color_code: departments.colorCode
+      })
+      .from(resourceRequests)
+      .leftJoin(users, eq(resourceRequests.requestedUserId, users.id))
+      .leftJoin(departments, eq(resourceRequests.userDepartmentId, departments.id))
+      .where(inArray(resourceRequests.id, requestIds));
+
+    if (!data) {
+      console.error('Error fetching created resource requests');
+      return NextResponse.json(
+        { error: 'Failed to fetch created requests' },
         { status: 500 }
       );
     }

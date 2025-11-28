@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// Supabase (commented out - migrated to PostgreSQL)
+// import { supabase } from '@/app/db/connections';
+
+// PostgreSQL with Drizzle ORM
+import { db, users, userOrganizationRoles, userDepartmentRoles, globalRoles, eq, and } from '@/lib/db-helper';
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,58 +18,84 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get employees in this department - support both org and department roles
-    const { data: employees, error } = await supabase
-      .from('users')
-      .select(`
-        id,
-        name,
-        email,
-        job_title,
-        department,
-        department_id,
-        organization_id,
-        user_organization_roles(
-          organization_id,
-          global_roles(name)
-        ),
-        user_department_roles(
-          organization_id,
-          department_id,
-          global_roles(name)
-        )
-      `)
-      .eq('department_id', departmentId)
-      .eq('organization_id', orgId)
-      .order('name');
+    // Get employees in this department
+    // Supabase (commented out)
+    // const { data: employees, error } = await supabase.from('users').select(`...`)
 
-    if (error) {
-      console.error('Error fetching department employees:', error);
+    // PostgreSQL with Drizzle
+    const employees = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        jobTitle: users.jobTitle,
+        department: users.department,
+        departmentId: users.departmentId,
+        organizationId: users.organizationId
+      })
+      .from(users)
+      .where(
+        and(
+          eq(users.departmentId, departmentId),
+          eq(users.organizationId, orgId)
+        )
+      )
+      .orderBy(users.name);
+
+    if (!employees) {
+      console.error('Error fetching department employees');
       return NextResponse.json(
         { error: 'Failed to fetch employees' },
         { status: 500 }
       );
     }
 
+    // Get org roles for these employees
+    const employeeIds = employees.map(e => e.id);
+    const orgRoles = await db
+      .select({
+        userId: userOrganizationRoles.userId,
+        organizationId: userOrganizationRoles.organizationId,
+        roleName: globalRoles.name
+      })
+      .from(userOrganizationRoles)
+      .innerJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(eq(userOrganizationRoles.organizationId, orgId));
+
+    // Get dept roles for these employees
+    const deptRoles = await db
+      .select({
+        userId: userDepartmentRoles.userId,
+        organizationId: userDepartmentRoles.organizationId,
+        departmentId: userDepartmentRoles.departmentId,
+        roleName: globalRoles.name
+      })
+      .from(userDepartmentRoles)
+      .innerJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+      .where(
+        and(
+          eq(userDepartmentRoles.organizationId, orgId),
+          eq(userDepartmentRoles.departmentId, departmentId)
+        )
+      );
+
     // Format the response - prioritize org role, fallback to dept role
     const formattedEmployees = (employees || []).map((emp: any) => {
       let role = 'Member';
       
       // Check org role first
-      if (emp.user_organization_roles && emp.user_organization_roles.length > 0) {
-        const orgRole = emp.user_organization_roles.find((r: any) => r.organization_id === orgId);
-        if (orgRole?.global_roles?.name) {
-          role = orgRole.global_roles.name;
-        }
+      const orgRole = orgRoles.find((r: any) => r.userId === emp.id && r.organizationId === orgId);
+      if (orgRole?.roleName) {
+        role = orgRole.roleName;
       }
       
       // Fallback to department role
-      if (role === 'Member' && emp.user_department_roles && emp.user_department_roles.length > 0) {
-        const deptRole = emp.user_department_roles.find((r: any) => 
-          r.organization_id === orgId && r.department_id === departmentId
+      if (role === 'Member') {
+        const deptRole = deptRoles.find((r: any) => 
+          r.userId === emp.id && r.organizationId === orgId && r.departmentId === departmentId
         );
-        if (deptRole?.global_roles?.name) {
-          role = deptRole.global_roles.name;
+        if (deptRole?.roleName) {
+          role = deptRole.roleName;
         }
       }
       
@@ -73,7 +103,7 @@ export async function GET(request: NextRequest) {
         id: emp.id,
         name: emp.name,
         email: emp.email,
-        job_title: emp.job_title,
+        job_title: emp.jobTitle,
         department: emp.department,
         role: role
       };

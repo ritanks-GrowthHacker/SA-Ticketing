@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, projects, projectStatuses, userProject, globalRoles, notifications, eq, and, ne } from '@/lib/db-helper';
 
 interface JWTPayload {
   sub: string;        // user ID
@@ -48,14 +49,23 @@ export async function PUT(req: NextRequest) {
     }
 
     // Verify the project belongs to the user's organization
-    const { data: project, error: projectError } = await supabase
-      .from('projects')
-      .select('id, organization_id, created_by')
-      .eq('id', project_id)
-      .eq('organization_id', decodedToken.org_id)
-      .single();
+    const project = await db
+      .select({
+        id: projects.id,
+        organizationId: projects.organizationId,
+        createdBy: projects.createdBy
+      })
+      .from(projects)
+      .where(
+        and(
+          eq(projects.id, project_id),
+          eq(projects.organizationId, decodedToken.org_id)
+        )
+      )
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (projectError || !project) {
+    if (!project) {
       return NextResponse.json(
         { error: "Project not found or access denied" }, 
         { status: 404 }
@@ -72,16 +82,17 @@ export async function PUT(req: NextRequest) {
       "df41226f-a012-4f83-95e0-c91b0f25f70a"  // Cancelled
     ];
 
-    const { data: status, error: statusError } = await supabase
-      .from('project_statuses')
-      .select('id, name')
-      .eq('id', status_id)
-      .single();
+    const status = await db
+      .select({ id: projectStatuses.id, name: projectStatuses.name })
+      .from(projectStatuses)
+      .where(eq(projectStatuses.id, status_id))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     // If database query fails, check if it's a valid status ID from our known list
-    if (statusError || !status) {
+    if (!status) {
       if (!validStatusIds.includes(status_id)) {
-        console.error('Status validation failed:', { status_id, statusError, status });
+        console.error('Status validation failed:', { status_id, status });
         return NextResponse.json(
           { error: "Invalid status or status not found" }, 
           { status: 400 }
@@ -101,28 +112,34 @@ export async function PUT(req: NextRequest) {
       // For non-Admins: Check if user has Manager role for this specific project
       console.log('🔍 Checking if user is Manager of this project...');
       
-      const { data: userProjectRole, error: roleCheckError } = await supabase
-        .from('user_project')
-        .select(`
-          user_id,
-          global_roles!user_project_role_id_fkey(name)
-        `)
-        .eq('project_id', project_id)
-        .eq('user_id', decodedToken.sub)
-        .single();
+      const userProjectRole = await db
+        .select({
+          userId: userProject.userId,
+          roleName: globalRoles.name
+        })
+        .from(userProject)
+        .leftJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+        .where(
+          and(
+            eq(userProject.projectId, project_id),
+            eq(userProject.userId, decodedToken.sub)
+          )
+        )
+        .limit(1)
+        .then(rows => rows[0] || null);
 
-      if (roleCheckError || !userProjectRole) {
-        console.log('❌ User not assigned to this project:', { roleCheckError, userId: decodedToken.sub, project_id });
+      if (!userProjectRole) {
+        console.log('❌ User not assigned to this project:', { userId: decodedToken.sub, project_id });
         return NextResponse.json(
           { error: "Access denied. You are not assigned to this project." }, 
           { status: 403 }
         );
       }
 
-      const userRole = (userProjectRole.global_roles as any)?.name;
+      const userRole = userProjectRole.roleName;
       console.log('🔍 User role in this project:', userRole);
 
-      if (userRole !== 'Manager') {
+      if (userRole !== 'Manager' && userRole !== 'Admin') {
         console.log('❌ User does not have Manager role in this project:', { 
           userRole, 
           userId: decodedToken.sub,
@@ -138,60 +155,56 @@ export async function PUT(req: NextRequest) {
     }
 
     // Update the project status
-    const { data: updatedProject, error: updateError } = await supabase
-      .from('projects')
-      .update({ 
-        status_id: status_id,
-        updated_at: new Date().toISOString()
+    const [updatedProject] = await db
+      .update(projects)
+      .set({ 
+        statusId: status_id,
+        updatedAt: new Date()
       })
-      .eq('id', project_id)
-      .select(`
-        id,
-        name,
-        description,
-        status_id,
-        updated_at,
-        project_statuses!projects_status_id_fkey(
-          id,
-          name,
-          description,
-          color_code,
-          sort_order
-        )
-      `)
-      .single();
+      .where(eq(projects.id, project_id))
+      .returning({
+        id: projects.id,
+        name: projects.name,
+        description: projects.description,
+        statusId: projects.statusId,
+        updatedAt: projects.updatedAt
+      });
 
-    if (updateError) {
-      console.error('Error updating project status:', updateError);
-      return NextResponse.json(
-        { error: "Failed to update project status" }, 
-        { status: 500 }
-      );
-    }
+    // Get status details separately for response
+    const statusDetails = await db
+      .select()
+      .from(projectStatuses)
+      .where(eq(projectStatuses.id, status_id))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    const statusName = status?.name || 'new status';
+    const statusName = status?.name || statusDetails?.name || 'new status';
     
     // Send notifications to all project members about status change
     try {
-      const { data: projectMembers } = await supabase
-        .from('user_project')
-        .select('user_id')
-        .eq('project_id', project_id)
-        .neq('user_id', decodedToken.sub); // Exclude the user who made the change
+      const projectMembers = await db
+        .select({ userId: userProject.userId })
+        .from(userProject)
+        .where(
+          and(
+            eq(userProject.projectId, project_id),
+            ne(userProject.userId, decodedToken.sub)
+          )
+        );
 
       if (projectMembers && projectMembers.length > 0) {
-        const notifications = projectMembers.map(member => ({
-          user_id: member.user_id,
-          entity_type: 'project',
-          entity_id: project_id,
-          type: 'info',
+        const notificationValues = projectMembers.map(member => ({
+          userId: member.userId,
+          entityType: 'project' as const,
+          entityId: project_id,
+          type: 'info' as const,
           title: 'Project Status Updated',
           message: `Project "${updatedProject.name}" status changed to ${statusName}`,
-          is_read: false
+          isRead: false
         }));
 
-        await supabase.from('notifications').insert(notifications);
-        console.log(`✅ Sent ${notifications.length} project status change notifications`);
+        await db.insert(notifications).values(notificationValues);
+        console.log(`✅ Sent ${notificationValues.length} project status change notifications`);
       }
     } catch (notifError) {
       console.error('Failed to send project status notifications:', notifError);
@@ -201,7 +214,11 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({
       success: true,
       message: `Project status updated to ${statusName}`,
-      project: updatedProject,
+      project: {
+        ...updatedProject,
+        updated_at: updatedProject.updatedAt?.toISOString(),
+        project_statuses: statusDetails
+      },
       status_id: status_id
     });
 

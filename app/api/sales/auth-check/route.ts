@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdmin } from '@/app/db/connections';
+import { salesDb, salesTeamHierarchy, eq, and } from '@/lib/sales-db-helper';
+import { db, userDepartmentRoles, departments, globalRoles, inArray } from '@/lib/db-helper';
 
 interface DecodedToken {
   sub: string;
@@ -79,24 +80,26 @@ export async function POST(req: NextRequest) {
     // Fallback to database query for old JWT format
     console.log('🔍 Using database query (old JWT format)');
 
-    // Get ALL departments for this user
-    const { data: userDepts, error: userDeptsError } = await supabaseAdmin
-      .from('user_department_roles')
-      .select('role, department_id')
-      .eq('user_id', userId)
-      .eq('organization_id', organizationId);
-
-    console.log('📦 User departments:', JSON.stringify(userDepts));
-    console.log('❌ User departments error:', JSON.stringify(userDeptsError));
-
-    if (userDeptsError) {
-      console.error('❌ Error fetching user departments:', userDeptsError);
+    if (!userId || !organizationId) {
       return NextResponse.json({ 
         isSalesUser: false,
         redirectTo: '/dashboard',
-        message: `Error: ${userDeptsError.message || 'Database error'}`
+        message: 'Invalid token data'
       });
     }
+
+    // Get ALL departments for this user
+    const userDepts = await db
+      .select()
+      .from(userDepartmentRoles)
+      .where(
+        and(
+          eq(userDepartmentRoles.userId, userId),
+          eq(userDepartmentRoles.organizationId, organizationId)
+        )
+      );
+
+    console.log('📦 User departments:', JSON.stringify(userDepts));
 
     if (!userDepts || userDepts.length === 0) {
       console.log('ℹ️ No departments found');
@@ -108,24 +111,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Get department names separately
-    const deptIds = userDepts.map((d: any) => d.department_id);
+    const deptIds = userDepts.map((d: any) => d.departmentId);
     console.log('🔍 Fetching departments for IDs:', deptIds);
     
-    const { data: depts, error: deptsError } = await supabaseAdmin
-      .from('departments')
-      .select('department_id, name')
-      .in('department_id', deptIds);
+    const depts = await db
+      .select()
+      .from(departments)
+      .where(inArray(departments.id, deptIds));
 
-    console.log('📦 Departments:', depts, 'Error:', deptsError);
-
-    if (deptsError) {
-      console.error('❌ Error fetching departments:', deptsError);
-      return NextResponse.json({ 
-        isSalesUser: false,
-        redirectTo: '/dashboard',
-        message: 'Error fetching departments'
-      });
-    }
+    console.log('📦 Departments:', depts);
 
     // Find Sales department
     const salesDept = depts?.find((d: any) => d.name?.toLowerCase() === 'sales');
@@ -141,7 +135,24 @@ export async function POST(req: NextRequest) {
     }
 
     // Get role for Sales department
-    const salesRole = userDepts.find((d: any) => d.department_id === salesDept.department_id)?.role;
+    const userDeptRole = userDepts.find((d: any) => d.departmentId === salesDept.id);
+    
+    // Fetch role name from global_roles
+    if (!userDeptRole) {
+      return NextResponse.json({ 
+        isSalesUser: false,
+        redirectTo: '/dashboard',
+        message: 'No role found for Sales department'
+      });
+    }
+
+    const roleResult = await db
+      .select({ name: globalRoles.name })
+      .from(globalRoles)
+      .where(eq(globalRoles.id, userDeptRole.roleId))
+      .limit(1);
+    
+    const salesRole = roleResult[0]?.name;
     console.log('✅ Sales role:', salesRole, 'Type:', typeof salesRole);
 
     let dashboardRoute = '/sales/member-dashboard';
@@ -159,7 +170,7 @@ export async function POST(req: NextRequest) {
       salesRole,
       userId: userId,
       organizationId: organizationId,
-      departmentId: salesDept.department_id,
+      departmentId: salesDept.id,
       email: decoded.email,
       redirectTo: dashboardRoute
     });
@@ -173,3 +184,4 @@ export async function POST(req: NextRequest) {
     });
   }
 }
+

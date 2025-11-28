@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, organizations, eq } from '@/lib/db-helper';
 
 interface VerifyLoginOTPRequest {
   orgId: string;
@@ -20,13 +21,14 @@ export async function POST(request: NextRequest) {
     }
 
     // Get organization from database
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('*')
-      .eq('id', orgId)
-      .single();
+    const orgResults = await db.select()
+      .from(organizations)
+      .where(eq(organizations.id, orgId))
+      .limit(1);
+    
+    const organization = orgResults[0] || null;
 
-    if (orgError || !organization) {
+    if (!organization) {
       return NextResponse.json(
         { error: 'Organization not found' },
         { status: 404 }
@@ -51,18 +53,17 @@ export async function POST(request: NextRequest) {
 
     // Check if OTP has expired
     const now = new Date();
-    const otpExpiry = new Date(organization.otp_expires_at);
+    const otpExpiry = new Date(organization.otpExpiresAt || now);
     
     if (now > otpExpiry) {
       // Clear expired OTP
-      await supabase
-        .from('organizations')
-        .update({ 
+      await db.update(organizations)
+        .set({ 
           otp: null,
-          otp_expires_at: null,
-          updated_at: new Date().toISOString()
+          otpExpiresAt: null,
+          updatedAt: new Date()
         })
-        .eq('id', orgId);
+        .where(eq(organizations.id, orgId));
 
       return NextResponse.json(
         { error: 'OTP has expired. Please log in again to get a new OTP.' },
@@ -71,15 +72,14 @@ export async function POST(request: NextRequest) {
     }
 
     // OTP is valid - clear it and mark login as verified
-    await supabase
-      .from('organizations')
-      .update({ 
+    await db.update(organizations)
+      .set({ 
         otp: null,
-        otp_expires_at: null,
-        otp_verified: true,  // Mark as verified if not already
-        updated_at: new Date().toISOString()
+        otpExpiresAt: null,
+        otpVerified: true,  // Mark as verified if not already
+        updatedAt: new Date()
       })
-      .eq('id', orgId);
+      .where(eq(organizations.id, orgId));
 
     // Return success response
     return NextResponse.json({
@@ -89,9 +89,8 @@ export async function POST(request: NextRequest) {
         id: organization.id,
         name: organization.name,
         domain: organization.domain,
-        email: organization.org_email,
-        onboarding_completed: organization.onboarding_completed || false,
-        has_departments: !!(organization.associated_departments && organization.associated_departments.length > 0)
+        email: organization.orgEmail,
+        has_departments: !!(organization.associatedDepartments && organization.associatedDepartments.length > 0)
       }
     }, { status: 200 });
 

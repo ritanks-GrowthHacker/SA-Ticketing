@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, organizations, globalRoles, statuses, eq, asc } from '@/lib/db-helper';
 
 export async function POST(req: Request) {
   try {
@@ -20,26 +21,26 @@ export async function POST(req: Request) {
       );
     }
 
-    const { data: existingOrg } = await supabase
-      .from("organizations")
-      .select("id")
-      .eq("domain", domain)
-      .maybeSingle();
+    const existingOrgResults = await db.select({ id: organizations.id })
+      .from(organizations)
+      .where(eq(organizations.domain, domain))
+      .limit(1);
 
-    if (existingOrg) {
+    if (existingOrgResults.length > 0) {
       return NextResponse.json(
         { error: "Organization with this domain already exists" }, 
         { status: 400 }
       );
     }
 
-    const { data: organization, error: orgError } = await supabase
-      .from("organizations")
-      .insert([{ name, domain }])
-      .select("id, name, domain, created_at")
-      .single();
-
-    if (orgError || !organization) {
+    let organization;
+    try {
+      const newOrgs = await db.insert(organizations)
+        .values({ name, domain })
+        .returning({ id: organizations.id, name: organizations.name, domain: organizations.domain, createdAt: organizations.createdAt });
+      
+      organization = newOrgs[0];
+    } catch (orgError) {
       console.error("Organization creation error:", orgError);
       return NextResponse.json(
         { error: "Failed to create organization" }, 
@@ -49,34 +50,38 @@ export async function POST(req: Request) {
 
     // Roles are now global - no need to create organization-specific roles
     // Just fetch the existing global roles for reference
-    const { data: roles, error: rolesError } = await supabase
-      .from("global_roles")
-      .select("id, name, description")
-      .order("name");
-
-    if (rolesError) {
+    let roles: any[] = [];
+    try {
+      roles = await db.select({
+        id: globalRoles.id,
+        name: globalRoles.name,
+        description: globalRoles.description
+      })
+        .from(globalRoles)
+        .orderBy(asc(globalRoles.name)) as any[];
+    } catch (rolesError) {
       console.error("Global roles fetch error:", rolesError);
     }
 
     const defaultStatuses = [
-      { name: "Open", type: "ticket", color_code: "#3B82F6", sort_order: 1, organization_id: organization.id },
-      { name: "In Progress", type: "ticket", color_code: "#F59E0B", sort_order: 2, organization_id: organization.id },
-      { name: "Under Review", type: "ticket", color_code: "#8B5CF6", sort_order: 3, organization_id: organization.id },
-      { name: "Resolved", type: "ticket", color_code: "#10B981", sort_order: 4, organization_id: organization.id },
-      { name: "Closed", type: "ticket", color_code: "#6B7280", sort_order: 5, organization_id: organization.id },
+      { name: "Open", type: "ticket", colorCode: "#3B82F6", sortOrder: 1, organizationId: organization.id },
+      { name: "In Progress", type: "ticket", colorCode: "#F59E0B", sortOrder: 2, organizationId: organization.id },
+      { name: "Under Review", type: "ticket", colorCode: "#8B5CF6", sortOrder: 3, organizationId: organization.id },
+      { name: "Resolved", type: "ticket", colorCode: "#10B981", sortOrder: 4, organizationId: organization.id },
+      { name: "Closed", type: "ticket", colorCode: "#6B7280", sortOrder: 5, organizationId: organization.id },
       
-      { name: "Low", type: "priority", color_code: "#10B981", sort_order: 1, organization_id: organization.id },
-      { name: "Medium", type: "priority", color_code: "#F59E0B", sort_order: 2, organization_id: organization.id },
-      { name: "High", type: "priority", color_code: "#EF4444", sort_order: 3, organization_id: organization.id },
-      { name: "Critical", type: "priority", color_code: "#DC2626", sort_order: 4, organization_id: organization.id }
+      { name: "Low", type: "priority", colorCode: "#10B981", sortOrder: 1, organizationId: organization.id },
+      { name: "Medium", type: "priority", colorCode: "#F59E0B", sortOrder: 2, organizationId: organization.id },
+      { name: "High", type: "priority", colorCode: "#EF4444", sortOrder: 3, organizationId: organization.id },
+      { name: "Critical", type: "priority", colorCode: "#DC2626", sortOrder: 4, organizationId: organization.id }
     ];
 
-    const { data: statuses, error: statusesError } = await supabase
-      .from("statuses")
-      .insert(defaultStatuses)
-      .select("id, name, type, color_code");
-
-    if (statusesError) {
+    let insertedStatuses: any[] = [];
+    try {
+      insertedStatuses = await db.insert(statuses)
+        .values(defaultStatuses)
+        .returning({ id: statuses.id, name: statuses.name, type: statuses.type, colorCode: statuses.colorCode }) as any[];
+    } catch (statusesError) {
       console.error("Statuses creation error:", statusesError);
     }
 
@@ -89,10 +94,10 @@ export async function POST(req: Request) {
           id: organization.id,
           name: organization.name,
           domain: organization.domain,
-          created_at: organization.created_at
+          created_at: organization.createdAt || new Date()
         },
         roles: roles || [],
-        statuses: statuses || []
+        statuses: insertedStatuses || []
       },
       { status: 201 }
     );

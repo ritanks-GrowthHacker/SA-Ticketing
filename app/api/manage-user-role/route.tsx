@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, userOrganizationRoles, users as usersTable, globalRoles, eq, and } from "@/lib/db-helper";
 
 // Helper function to verify JWT token and extract user info
 async function verifyToken(authHeader: string | null) {
@@ -67,44 +68,43 @@ export async function GET(req: Request) {
     }
 
     // Get all users in the organization with their roles
-    const { data: users, error: usersError } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        user_id,
-        role_id,
-        users(id, name, email, created_at, profile_picture_url),
-        global_roles!user_organization_roles_role_id_fkey(id, name, description)
-      `)
-      .eq("organization_id", orgId);
-
-    if (usersError) {
-      console.error("Users lookup error:", usersError);
-      return NextResponse.json({ error: "Failed to fetch users" }, { status: 500 });
-    }
+    const usersData = await db.select({
+      userId: userOrganizationRoles.userId,
+      roleId: userOrganizationRoles.roleId,
+      userName: usersTable.name,
+      userEmail: usersTable.email,
+      userCreatedAt: usersTable.createdAt,
+      userProfilePictureUrl: usersTable.profilePictureUrl,
+      globalRoleId: globalRoles.id,
+      globalRoleName: globalRoles.name,
+      globalRoleDescription: globalRoles.description
+    })
+    .from(userOrganizationRoles)
+    .leftJoin(usersTable, eq(userOrganizationRoles.userId, usersTable.id))
+    .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+    .where(eq(userOrganizationRoles.organizationId, orgId));
 
     // Get all available global roles
-    const { data: availableRoles, error: rolesError } = await supabase
-      .from("global_roles")
-      .select("id, name, description");
-
-    if (rolesError) {
-      console.error("Roles lookup error:", rolesError);
-      return NextResponse.json({ error: "Failed to fetch roles" }, { status: 500 });
-    }
+    const availableRoles = await db.select({
+      id: globalRoles.id,
+      name: globalRoles.name,
+      description: globalRoles.description
+    })
+    .from(globalRoles);
 
     // Format the response
-    const formattedUsers = users?.map((userOrg: any) => ({
-      userId: userOrg.users.id,
-      name: userOrg.users.name,
-      email: userOrg.users.email,
-      joinedAt: userOrg.users.created_at,
-      profile_picture_url: userOrg.users.profile_picture_url,
-      currentRole: userOrg.global_roles ? {
-        id: userOrg.global_roles.id,
-        name: userOrg.global_roles.name,
-        description: userOrg.global_roles.description
+    const formattedUsers = usersData.map((userOrg) => ({
+      userId: userOrg.userId,
+      name: userOrg.userName,
+      email: userOrg.userEmail,
+      joinedAt: userOrg.userCreatedAt,
+      profile_picture_url: userOrg.userProfilePictureUrl,
+      currentRole: userOrg.globalRoleId ? {
+        id: userOrg.globalRoleId,
+        name: userOrg.globalRoleName,
+        description: userOrg.globalRoleDescription
       } : null
-    })) || [];
+    }));
 
     return NextResponse.json({
       success: true,
@@ -155,28 +155,28 @@ export async function PUT(req: Request) {
     }
 
     // Verify the role exists (global role)
-    const { data: role, error: roleError } = await supabase
-      .from("global_roles")
-      .select("id, name")
-      .eq("id", roleId)
-      .single();
+    const role = await db.select({ id: globalRoles.id, name: globalRoles.name })
+      .from(globalRoles)
+      .where(eq(globalRoles.id, roleId))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (roleError || !role) {
+    if (!role) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
     // Get current user's role and target user's current role for hierarchy validation
-    const { data: targetUserOrg, error: targetUserError } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        user_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq("user_id", userId)
-      .eq("organization_id", orgId)
-      .single();
+    const targetUserOrgData = await db.select({
+      userId: userOrganizationRoles.userId,
+      roleName: globalRoles.name
+    })
+    .from(userOrganizationRoles)
+    .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+    .where(and(eq(userOrganizationRoles.userId, userId), eq(userOrganizationRoles.organizationId, orgId)))
+    .limit(1);
 
-    if (targetUserError || !targetUserOrg) {
+    const targetUserOrg = targetUserOrgData[0];
+    if (!targetUserOrg) {
       return NextResponse.json({ error: "User not found in this organization" }, { status: 404 });
     }
 
@@ -184,7 +184,7 @@ export async function PUT(req: Request) {
     const currentUserRoles = tokenData.roles || [];
     const currentUserIsAdmin = currentUserRoles.includes('Admin');
     const currentUserIsManager = currentUserRoles.includes('Manager');
-    const targetUserCurrentRole = (targetUserOrg as any).global_roles?.name;
+    const targetUserCurrentRole = targetUserOrg.roleName;
     
     // Only Admins can assign Admin roles
     if (role.name === 'Admin' && !currentUserIsAdmin) {
@@ -208,40 +208,16 @@ export async function PUT(req: Request) {
     }
 
     // Get user details for activity logging
-    const { data: userDetails } = await supabase
-      .from("users")
-      .select("name, email")
-      .eq("id", userId)
-      .single();
+    const userDetails = await db.select({ name: usersTable.name, email: usersTable.email })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     // Update user role
-    const { error: updateError } = await supabase
-      .from("user_organization_roles")
-      .update({ role_id: roleId })
-      .eq("user_id", userId)
-      .eq("organization_id", orgId);
-
-    if (updateError) {
-      console.error("Role update error:", updateError);
-      return NextResponse.json({ error: "Failed to update user role" }, { status: 500 });
-    }
-
-    // Log the activity
-    await supabase
-      .from("activity_logs")
-      .insert({
-        user_id: tokenData.sub,
-        entity_type: "user_role",
-        entity_id: userId,
-        action: "role_updated",
-        details: {
-          target_user: userDetails?.name || "Unknown User",
-          target_email: userDetails?.email,
-          new_role: role.name,
-          updated_by: tokenData.name || tokenData.email,
-          organization_id: orgId
-        }
-      });
+    await db.update(userOrganizationRoles)
+      .set({ roleId: roleId })
+      .where(and(eq(userOrganizationRoles.userId, userId), eq(userOrganizationRoles.organizationId, orgId)));
 
     return NextResponse.json({
       success: true,
@@ -291,36 +267,35 @@ export async function POST(req: Request) {
     const orgId = organizationId || tokenData.org_id;
 
     // Check if user exists
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, name, email")
-      .eq("email", email.toLowerCase())
-      .single();
+    const user = await db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email })
+      .from(usersTable)
+      .where(eq(usersTable.email, email.toLowerCase()))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (userError || !user) {
+    if (!user) {
       return NextResponse.json({ error: "User not found with this email" }, { status: 404 });
     }
 
     // Check if user is already in the organization
-    const { data: existingMember } = await supabase
-      .from("user_organization_roles")
-      .select("user_id")
-      .eq("user_id", user.id)
-      .eq("organization_id", orgId)
-      .single();
+    const existingMember = await db.select({ userId: userOrganizationRoles.userId })
+      .from(userOrganizationRoles)
+      .where(and(eq(userOrganizationRoles.userId, user.id), eq(userOrganizationRoles.organizationId, orgId)))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (existingMember) {
       return NextResponse.json({ error: "User is already a member of this organization" }, { status: 400 });
     }
 
     // Verify the role exists (global role)
-    const { data: role, error: roleError } = await supabase
-      .from("global_roles")
-      .select("id, name")
-      .eq("id", roleId)
-      .single();
+    const role = await db.select({ id: globalRoles.id, name: globalRoles.name })
+      .from(globalRoles)
+      .where(eq(globalRoles.id, roleId))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (roleError || !role) {
+    if (!role) {
       return NextResponse.json({ error: "Invalid role" }, { status: 400 });
     }
 
@@ -336,34 +311,11 @@ export async function POST(req: Request) {
     }
 
     // Add user to organization
-    const { error: addError } = await supabase
-      .from("user_organization_roles")
-      .insert({
-        user_id: user.id,
-        organization_id: orgId,
-        role_id: roleId
-      });
-
-    if (addError) {
-      console.error("Add user error:", addError);
-      return NextResponse.json({ error: "Failed to add user to organization" }, { status: 500 });
-    }
-
-    // Log the activity
-    await supabase
-      .from("activity_logs")
-      .insert({
-        user_id: tokenData.sub,
-        entity_type: "user_organization",
-        entity_id: user.id,
-        action: "user_added",
-        details: {
-          added_user: user.name,
-          added_email: user.email,
-          assigned_role: role.name,
-          added_by: tokenData.name || tokenData.email,
-          organization_id: orgId
-        }
+    await db.insert(userOrganizationRoles)
+      .values({
+        userId: user.id,
+        organizationId: orgId,
+        roleId: roleId
       });
 
     return NextResponse.json({
@@ -422,17 +374,19 @@ export async function DELETE(req: Request) {
     }
 
     // Get user details before removal
-    const { data: userOrg, error: userOrgError } = await supabase
-      .from("user_organization_roles")
-      .select(`
-        users(name, email),
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq("user_id", userId)
-      .eq("organization_id", orgId)
-      .single();
+    const userOrgData = await db.select({
+      userName: usersTable.name,
+      userEmail: usersTable.email,
+      roleName: globalRoles.name
+    })
+    .from(userOrganizationRoles)
+    .leftJoin(usersTable, eq(userOrganizationRoles.userId, usersTable.id))
+    .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+    .where(and(eq(userOrganizationRoles.userId, userId), eq(userOrganizationRoles.organizationId, orgId)))
+    .limit(1);
 
-    if (userOrgError || !userOrg) {
+    const userOrg = userOrgData[0];
+    if (!userOrg) {
       return NextResponse.json({ error: "User not found in this organization" }, { status: 404 });
     }
 
@@ -440,7 +394,7 @@ export async function DELETE(req: Request) {
     const currentUserRoles = tokenData.roles || [];
     const currentUserIsAdmin = currentUserRoles.includes('Admin');
     const currentUserIsManager = currentUserRoles.includes('Manager');
-    const targetUserRole = (userOrg as any).global_roles?.name;
+    const targetUserRole = userOrg.roleName;
     
     // Managers cannot remove Admins or other Managers
     if (currentUserIsManager && !currentUserIsAdmin) {
@@ -457,37 +411,12 @@ export async function DELETE(req: Request) {
     }
 
     // Remove user from organization
-    const { error: deleteError } = await supabase
-      .from("user_organization_roles")
-      .delete()
-      .eq("user_id", userId)
-      .eq("organization_id", orgId);
-
-    if (deleteError) {
-      console.error("Remove user error:", deleteError);
-      return NextResponse.json({ error: "Failed to remove user from organization" }, { status: 500 });
-    }
-
-    // Log the activity
-    await supabase
-      .from("activity_logs")
-      .insert({
-        user_id: tokenData.sub,
-        entity_type: "user_organization",
-        entity_id: userId,
-        action: "user_removed",
-        details: {
-          removed_user: (userOrg as any).users.name,
-          removed_email: (userOrg as any).users.email,
-          previous_role: (userOrg as any).global_roles?.name,
-          removed_by: tokenData.name || tokenData.email,
-          organization_id: orgId
-        }
-      });
+    await db.delete(userOrganizationRoles)
+      .where(and(eq(userOrganizationRoles.userId, userId), eq(userOrganizationRoles.organizationId, orgId)));
 
     return NextResponse.json({
       success: true,
-      message: `User ${(userOrg as any).users.name} removed from organization successfully`
+      message: `User ${userOrg.userName} removed from organization successfully`
     }, { status: 200 });
 
   } catch (error) {

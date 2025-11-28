@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, eq } from "@/lib/db-helper";
 
 export async function POST(req: Request) {
   try {
@@ -27,30 +28,21 @@ export async function POST(req: Request) {
 
     console.log(`🔍 Verifying password reset OTP for ${email}...`);
 
-    // Get user
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .select("id, email")
-      .eq("email", email)
-      .single();
+    // Get user with OTP details
+    const userData = await db
+      .select({
+        id: users.id,
+        email: users.email,
+        otp: users.otp,
+        otpExpiresAt: users.otpExpiresAt
+      })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
-    if (userError || !user) {
+    if (!userData) {
       console.log(`❌ User not found for email: ${email}`);
-      return NextResponse.json(
-        { error: "Invalid email or OTP" }, 
-        { status: 400 }
-      );
-    }
-
-    // Check OTP from users table
-    const { data: userData, error: userDataError } = await supabase
-      .from("users")
-      .select("id, otp, otp_expires_at, otp_verified")
-      .eq("email", email)
-      .single();
-
-    if (userDataError || !userData) {
-      console.log(`❌ User data not found for ${email}`);
       return NextResponse.json(
         { error: "Invalid email or OTP" }, 
         { status: 400 }
@@ -67,13 +59,13 @@ export async function POST(req: Request) {
 
     const now = new Date();
     // Handle timezone for database timestamp without timezone
-    const expiresAt = userData.otp_expires_at ? new Date(userData.otp_expires_at + 'Z') : null;
+    const expiresAt = userData.otpExpiresAt ? new Date(userData.otpExpiresAt.toString() + (userData.otpExpiresAt.toString().includes('Z') ? '' : 'Z')) : null;
     
     // Debug logging for timezone issues
     console.log(`🔍 OTP Debug Info for ${email}:`);
     console.log(`   Stored OTP: ${userData.otp}`);
     console.log(`   Provided OTP: ${otp}`);
-    console.log(`   Raw DB Expiry: ${userData.otp_expires_at}`);
+    console.log(`   Raw DB Expiry: ${userData.otpExpiresAt}`);
     console.log(`   Current Time: ${now.toISOString()} (${now.getTime()})`);
     console.log(`   Expires At: ${expiresAt ? expiresAt.toISOString() : 'null'} (${expiresAt ? expiresAt.getTime() : 'null'})`);
     console.log(`   Time Difference: ${expiresAt ? (expiresAt.getTime() - now.getTime()) / 1000 : 'null'} seconds`);
@@ -92,15 +84,14 @@ export async function POST(req: Request) {
     if (otpExpired) {
       console.log(`❌ Expired OTP used for ${email}`);
       // Clear expired OTP
-      await supabase
-        .from("users")
-        .update({ 
+      await db
+        .update(users)
+        .set({ 
           otp: null,
-          otp_expires_at: null,
-          otp_verified: false,
-          updated_at: new Date().toISOString()
+          otpExpiresAt: null,
+          updatedAt: new Date()
         })
-        .eq("id", userData.id);
+        .where(eq(users.id, userData.id));
       
       return NextResponse.json(
         { error: "OTP has expired. Please request a new one." }, 
@@ -108,23 +99,22 @@ export async function POST(req: Request) {
       );
     }
 
-    // OTP is valid, mark as verified and clear it (one-time use)
-    await supabase
-      .from("users")
-      .update({ 
+    // OTP is valid, clear it (one-time use)
+    await db
+      .update(users)
+      .set({ 
         otp: null,
-        otp_expires_at: null,
-        otp_verified: true,
-        updated_at: new Date().toISOString()
+        otpExpiresAt: null,
+        updatedAt: new Date()
       })
-      .eq("id", userData.id);
+      .where(eq(users.id, userData.id));
 
     console.log(`✅ Password reset OTP verified successfully for ${email}`);
 
     return NextResponse.json({
       success: true,
       message: "OTP verified successfully",
-      userId: user.id
+      userId: userData.id
     }, { status: 200 });
 
   } catch (error) {

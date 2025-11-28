@@ -1,0 +1,238 @@
+import { pgTable, uuid, varchar, text, numeric, integer, boolean, date, timestamp, jsonb, check } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+
+// Clients table
+export const clients = pgTable('clients', {
+  clientId: uuid('client_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  clientName: varchar('client_name').notNull(),
+  contactPerson: varchar('contact_person'),
+  contactDesignation: varchar('contact_designation'),
+  email: varchar('email'),
+  phone: varchar('phone'),
+  address: text('address'),
+  city: varchar('city'),
+  state: varchar('state'),
+  country: varchar('country'),
+  postalCode: varchar('postal_code'),
+  industry: varchar('industry'),
+  clientType: varchar('client_type'),
+  companySize: varchar('company_size'),
+  annualRevenueBracket: varchar('annual_revenue_bracket'),
+  taxNumber: varchar('tax_number'),
+  gstNumber: varchar('gst_number'),
+  paymentTerms: varchar('payment_terms'),
+  preferredPaymentMethod: varchar('preferred_payment_method'),
+  creditLimit: numeric('credit_limit'),
+  registrationDate: date('registration_date').defaultNow(),
+  createdByUserId: uuid('created_by_user_id').notNull(),
+  assignedSalesMemberId: uuid('assigned_sales_member_id'),
+  clientSource: varchar('client_source'),
+  status: varchar('status').default('active'),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+  nextInteractionDate: timestamp('next_interaction_date'),
+});
+
+// Products table
+export const products = pgTable('products', {
+  productId: uuid('product_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  productName: varchar('product_name').notNull(),
+  productCode: varchar('product_code').unique(),
+  sku: varchar('sku').unique(),
+  description: text('description'),
+  productCategory: varchar('product_category'),
+  unitPrice: numeric('unit_price').notNull(),
+  costPrice: numeric('cost_price'),
+  currency: varchar('currency').default('INR'),
+  subscriptionType: varchar('subscription_type'),
+  billingCycleDays: integer('billing_cycle_days'),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Transactions table
+export const transactions = pgTable('transactions', {
+  transactionId: uuid('transaction_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  clientId: uuid('client_id').notNull().references(() => clients.clientId),
+  salesMemberId: uuid('sales_member_id').notNull(),
+  transactionDate: date('transaction_date').defaultNow(),
+  invoiceNumber: varchar('invoice_number').notNull().unique(),
+  subtotalAmount: numeric('subtotal_amount').notNull(),
+  discountPercentage: numeric('discount_percentage').default('0'),
+  discountAmount: numeric('discount_amount').default('0'),
+  taxPercentage: numeric('tax_percentage').default('0'),
+  taxAmount: numeric('tax_amount').default('0'),
+  totalAmount: numeric('total_amount').notNull(),
+  currency: varchar('currency').default('INR'),
+  paymentStatus: varchar('payment_status').default('pending'),
+  amountPaid: numeric('amount_paid').default('0'),
+  amountDue: numeric('amount_due'),
+  paymentDate: date('payment_date'),
+  paymentMethod: varchar('payment_method'),
+  paymentReference: varchar('payment_reference'),
+  contractStartDate: date('contract_start_date'),
+  contractEndDate: date('contract_end_date'),
+  contractDurationMonths: integer('contract_duration_months'),
+  renewalDate: date('renewal_date'),
+  isRenewed: boolean('is_renewed').default(false),
+  commissionPercentage: numeric('commission_percentage'),
+  commissionAmount: numeric('commission_amount'),
+  commissionPaid: boolean('commission_paid').default(false),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Transaction Line Items table
+export const transactionLineItems = pgTable('transaction_line_items', {
+  lineItemId: uuid('line_item_id').primaryKey().defaultRandom(),
+  transactionId: uuid('transaction_id').notNull().references(() => transactions.transactionId),
+  productId: uuid('product_id').references(() => products.productId),
+  productName: varchar('product_name').notNull(),
+  productCode: varchar('product_code'),
+  quantity: integer('quantity').notNull().default(1),
+  unitPrice: numeric('unit_price').notNull(),
+  costPrice: numeric('cost_price'),
+  discountPercentage: numeric('discount_percentage').default('0'),
+  lineTotal: numeric('line_total').notNull(),
+  totalCost: numeric('total_cost'),
+  profitMargin: numeric('profit_margin'),
+  profitPercentage: numeric('profit_percentage'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Sales Team Hierarchy table
+export const salesTeamHierarchy = pgTable('sales_team_hierarchy', {
+  hierarchyId: uuid('hierarchy_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  salesRole: varchar('sales_role').notNull(),
+  managerId: uuid('manager_id'),
+  email: varchar('email').notNull(),
+  fullName: varchar('full_name').notNull(),
+  phone: varchar('phone'),
+  hireDate: date('hire_date').defaultNow(),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Quotes table
+export const quotes = pgTable('quotes', {
+  quoteId: uuid('quote_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  clientId: uuid('client_id').notNull().references(() => clients.clientId),
+  createdByUserId: uuid('created_by_user_id').notNull(),
+  quoteNumber: varchar('quote_number').notNull().unique(),
+  quoteTitle: varchar('quote_title').notNull(),
+  quoteAmount: numeric('quote_amount').notNull(),
+  taxAmount: numeric('tax_amount').default('0'),
+  totalAmount: numeric('total_amount').notNull(),
+  currency: varchar('currency').default('INR'),
+  validUntil: timestamp('valid_until'),
+  status: varchar('status').default('draft'),
+  quoteItems: jsonb('quote_items'),
+  termsConditions: text('terms_conditions'),
+  notes: text('notes'),
+  fileUrl: text('file_url'),
+  magicLinkToken: varchar('magic_link_token').unique(),
+  magicLinkExpiresAt: timestamp('magic_link_expires_at'),
+  viewedAt: timestamp('viewed_at'),
+  acceptedAt: timestamp('accepted_at'),
+  rejectedAt: timestamp('rejected_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Client Interactions table
+export const clientInteractions = pgTable('client_interactions', {
+  interactionId: uuid('interaction_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  clientId: uuid('client_id').notNull().references(() => clients.clientId),
+  salesMemberId: uuid('sales_member_id').notNull(),
+  interactionType: varchar('interaction_type'),
+  interactionDate: timestamp('interaction_date').defaultNow(),
+  subject: varchar('subject'),
+  notes: text('notes'),
+  outcome: varchar('outcome'),
+  nextFollowUpDate: date('next_follow_up_date'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Sales Notifications table
+export const salesNotifications = pgTable('sales_notifications', {
+  notificationId: uuid('notification_id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull(),
+  organizationId: uuid('organization_id').notNull(),
+  entityType: varchar('entity_type').notNull(),
+  entityId: uuid('entity_id').notNull(),
+  title: varchar('title').notNull(),
+  message: text('message').notNull(),
+  type: varchar('type').notNull(),
+  metadata: jsonb('metadata').default({}),
+  isRead: boolean('is_read').default(false),
+  readAt: timestamp('read_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Sales Targets table
+export const salesTargets = pgTable('sales_targets', {
+  targetId: uuid('target_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  userId: uuid('user_id').notNull(),
+  salesRole: varchar('sales_role').notNull(),
+  targetType: varchar('target_type'),
+  targetYear: integer('target_year').notNull(),
+  targetMonth: integer('target_month'),
+  targetQuarter: integer('target_quarter'),
+  targetRevenue: numeric('target_revenue').notNull(),
+  targetClients: integer('target_clients'),
+  targetTransactions: integer('target_transactions'),
+  achievedRevenue: numeric('achieved_revenue').default('0'),
+  achievedClients: integer('achieved_clients').default(0),
+  achievedTransactions: integer('achieved_transactions').default(0),
+  revenueAchievementPercentage: numeric('revenue_achievement_percentage').default('0'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Member Assignment Audit table
+export const memberAssignmentAudit = pgTable('member_assignment_audit', {
+  auditId: uuid('audit_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  memberUserId: uuid('member_user_id').notNull(),
+  oldManagerId: uuid('old_manager_id'),
+  newManagerId: uuid('new_manager_id'),
+  assignedByAdminId: uuid('assigned_by_admin_id').notNull(),
+  assignmentDate: timestamp('assignment_date').defaultNow(),
+  reason: text('reason'),
+});
+
+// AI Revenue Forecasts table
+export const aiRevenueForecasts = pgTable('ai_revenue_forecasts', {
+  forecastId: uuid('forecast_id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id').notNull(),
+  forecastType: varchar('forecast_type'),
+  scopeUserId: uuid('scope_user_id'),
+  clientId: uuid('client_id').references(() => clients.clientId),
+  forecastMonth: date('forecast_month').notNull(),
+  forecastQuarter: integer('forecast_quarter'),
+  forecastYear: integer('forecast_year'),
+  predictedRevenue: numeric('predicted_revenue').notNull(),
+  predictedTransactions: integer('predicted_transactions'),
+  predictedNewClients: integer('predicted_new_clients'),
+  confidenceScore: numeric('confidence_score'),
+  lowerBound: numeric('lower_bound'),
+  upperBound: numeric('upper_bound'),
+  seasonalityFactor: numeric('seasonality_factor'),
+  trendFactor: numeric('trend_factor'),
+  historicalAccuracy: numeric('historical_accuracy'),
+  modelVersion: varchar('model_version'),
+  trainingDataMonths: integer('training_data_months'),
+  createdAt: timestamp('created_at').defaultNow(),
+});

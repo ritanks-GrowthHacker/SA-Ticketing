@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '../../db/connections';
+// import { supabase } from '../../db/connections';
+import { db, tickets, projects, users, statuses, priorities, userProject, globalRoles, eq, and } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
@@ -46,105 +47,109 @@ export async function GET(request: NextRequest) {
     }
 
     // Fetch ticket information with all related data
-    const { data: ticket, error: fetchError } = await supabase
-      .from('tickets')
-      .select(`
-        id,
-        project_id,
-        created_by,
-        assigned_to,
-        title,
-        description,
-        status_id,
-        priority_id,
-        expected_closing_date,
-        actual_closing_date,
-        created_at,
-        updated_at,
-        updated_by
-      `)
-      .eq('id', ticketId)
-      .single();
+    const ticket = await db.select({
+      id: tickets.id,
+      projectId: tickets.projectId,
+      createdBy: tickets.createdBy,
+      assignedTo: tickets.assignedTo,
+      title: tickets.title,
+      description: tickets.description,
+      statusId: tickets.statusId,
+      priorityId: tickets.priorityId,
+      expectedClosingDate: tickets.expectedClosingDate,
+      actualClosingDate: tickets.actualClosingDate,
+      createdAt: tickets.createdAt,
+      updatedAt: tickets.updatedAt,
+      updatedBy: tickets.updatedBy
+    })
+      .from(tickets)
+      .where(eq(tickets.id, ticketId))
+      .limit(1)
+      .then(rows => rows[0]);
 
-    if (fetchError) {
-      console.error('Database error:', fetchError);
-      
-      if ((fetchError as any)?.code === 'PGRST116') {
-        return NextResponse.json(
-          { error: 'Ticket not found' },
-          { status: 404 }
-        );
-      }
-      
+    if (!ticket) {
       return NextResponse.json(
-        { error: 'Failed to fetch ticket' },
-        { status: 500 }
+        { error: 'Ticket not found' },
+        { status: 404 }
       );
     }
 
     // Fetch related data separately for better control
-    const [projectResult, creatorResult, assigneeResult, updaterResult, statusResult, priorityResult] = await Promise.all([
+    const [project, creator, assignee, updater, status, priority] = await Promise.all([
       // Project
-      supabase
-        .from('projects')
-        .select('id, name, description, organization_id')
-        .eq('id', ticket.project_id)
-        .single(),
+      db.select({
+        id: projects.id,
+        name: projects.name,
+        description: projects.description,
+        organizationId: projects.organizationId
+      })
+        .from(projects)
+        .where(eq(projects.id, ticket.projectId))
+        .limit(1)
+        .then(rows => rows[0]),
       
       // Creator
-      supabase
-        .from('users')
-        .select('id, name, email')
-        .eq('id', ticket.created_by)
-        .single(),
+      db.select({
+        id: users.id,
+        name: users.name,
+        email: users.email
+      })
+        .from(users)
+        .where(eq(users.id, ticket.createdBy))
+        .limit(1)
+        .then(rows => rows[0]),
       
       // Assignee (if exists)
-      ticket.assigned_to ? supabase
-        .from('users')
-        .select('id, name, email')
-        .eq('id', ticket.assigned_to)
-        .single() : Promise.resolve({ data: null, error: null }),
+      ticket.assignedTo ? db.select({
+        id: users.id,
+        name: users.name,
+        email: users.email
+      })
+        .from(users)
+        .where(eq(users.id, ticket.assignedTo))
+        .limit(1)
+        .then(rows => rows[0]) : Promise.resolve(null),
       
       // Updater (if exists)
-      ticket.updated_by ? supabase
-        .from('users')
-        .select('id, name, email')
-        .eq('id', ticket.updated_by)
-        .single() : Promise.resolve({ data: null, error: null }),
+      ticket.updatedBy ? db.select({
+        id: users.id,
+        name: users.name,
+        email: users.email
+      })
+        .from(users)
+        .where(eq(users.id, ticket.updatedBy))
+        .limit(1)
+        .then(rows => rows[0]) : Promise.resolve(null),
       
       // Status (if exists)
-      ticket.status_id ? supabase
-        .from('statuses')
-        .select('id, name, type, color_code, sort_order')
-        .eq('id', ticket.status_id)
-        .single() : Promise.resolve({ data: null, error: null }),
+      ticket.statusId ? db.select({
+        id: statuses.id,
+        name: statuses.name,
+        type: statuses.type,
+        colorCode: statuses.colorCode,
+        sortOrder: statuses.sortOrder
+      })
+        .from(statuses)
+        .where(eq(statuses.id, ticket.statusId))
+        .limit(1)
+        .then(rows => rows[0]) : Promise.resolve(null),
       
       // Priority (if exists) - check priorities table
-      ticket.priority_id ? supabase
-        .from('priorities')
-        .select('id, name, description, color_code, sort_order')
-        .eq('id', ticket.priority_id)
-        .maybeSingle() : Promise.resolve({ data: null, error: null })
+      ticket.priorityId ? db.select({
+        id: priorities.id,
+        name: priorities.name,
+        description: priorities.description,
+        colorCode: priorities.colorCode,
+        sortOrder: priorities.sortOrder
+      })
+        .from(priorities)
+        .where(eq(priorities.id, ticket.priorityId))
+        .limit(1)
+        .then(rows => rows[0]) : Promise.resolve(null)
     ]);
 
-    const project = projectResult.data;
-    const creator = creatorResult.data;
-    const assignee = assigneeResult.data;
-    const updater = updaterResult.data;
-    const status = statusResult.data;
-    const priority = priorityResult.data;
-
-    // Check for errors in any of the related data queries
-    if (projectResult.error || creatorResult.error) {
-      console.error('Database error:', projectResult.error || creatorResult.error);
-      return NextResponse.json(
-        { error: 'Failed to fetch ticket details' },
-        { status: 500 }
-      );
-    }
-
     // Check if project exists and belongs to user's organization
-    if (!project || project.organization_id !== decoded.org_id) {
+    if (!project || project.organizationId !== decoded.org_id) {
       return NextResponse.json(
         { error: 'Access denied - Ticket not found in your organization' },
         { status: 403 }
@@ -154,31 +159,34 @@ export async function GET(request: NextRequest) {
     // Role-based access control
     const userRole = decoded.role;
     // Try both sub and userId fields for creator comparison
-    const isCreator = ticket.created_by === decoded.sub || ticket.created_by === decoded.userId;
-    const isAssignee = ticket.assigned_to === decoded.sub || ticket.assigned_to === decoded.userId;
+    const isCreator = ticket.createdBy === decoded.sub || ticket.createdBy === decoded.userId;
+    const isAssignee = ticket.assignedTo === decoded.sub || ticket.assignedTo === decoded.userId;
 
     // Check if user has Manager role in the same project
     let isProjectManager = false;
     if (userRole === 'Manager') {
-      const { data: userProjectRole, error: roleError } = await supabase
-        .from('user_project')
-        .select(`
-          project_id, role_id,
-          global_roles!user_project_role_id_fkey(name)
-        `)
-        .eq('user_id', decoded.sub || decoded.userId)
-        .eq('project_id', ticket.project_id)
-        .single();
+      const userProjectRole = await db.select({
+        projectId: userProject.projectId,
+        roleId: userProject.roleId,
+        roleName: globalRoles.name
+      })
+        .from(userProject)
+        .innerJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+        .where(and(
+          eq(userProject.userId, decoded.sub || decoded.userId),
+          eq(userProject.projectId, ticket.projectId)
+        ))
+        .limit(1)
+        .then((rows: any[]) => rows[0]);
       
       console.log('🔧 PROJECT MANAGER CHECK:', {
         userProjectRole,
-        roleError,
         userId: decoded.sub || decoded.userId,
-        projectId: ticket.project_id,
-        globalRoleName: (userProjectRole as any)?.global_roles?.name
+        projectId: ticket.projectId,
+        globalRoleName: userProjectRole?.roleName
       });
       
-      if (!roleError && userProjectRole && (userProjectRole as any).global_roles?.name === 'Manager') {
+      if (userProjectRole && userProjectRole.roleName === 'Manager') {
         isProjectManager = true;
       }
     }
@@ -188,14 +196,14 @@ export async function GET(request: NextRequest) {
       requestMethod: 'GET',
       ticketId: ticketId,
       userRole,
-      ticketCreatedBy: ticket.created_by,
+      ticketCreatedBy: ticket.createdBy,
       decodedSub: decoded.sub,
       decodedUserId: decoded.userId,
-      ticketAssignedTo: ticket.assigned_to,
+      ticketAssignedTo: ticket.assignedTo,
       isCreator,
       isAssignee,
       isProjectManager,
-      projectId: ticket.project_id
+      projectId: ticket.projectId
     });
 
     // Check permissions based on role - Admin, Creator, Assignee, or Project Manager
@@ -218,10 +226,10 @@ export async function GET(request: NextRequest) {
         isCreator,
         isAssignee,
         isProjectManager,
-        ticketCreatedBy: ticket.created_by,
+        ticketCreatedBy: ticket.createdBy,
         userSubId: decoded.sub,
         userUserId: decoded.userId,
-        projectId: ticket.project_id,
+        projectId: ticket.projectId,
         hasAccess
       });
       
@@ -240,10 +248,10 @@ export async function GET(request: NextRequest) {
         id: ticket.id,
         title: ticket.title,
         description: ticket.description,
-        expected_closing_date: ticket.expected_closing_date,
-        actual_closing_date: ticket.actual_closing_date,
-        created_at: ticket.created_at,
-        updated_at: ticket.updated_at,
+        expected_closing_date: ticket.expectedClosingDate?.toISOString(),
+        actual_closing_date: ticket.actualClosingDate?.toISOString(),
+        created_at: ticket.createdAt?.toISOString(),
+        updated_at: ticket.updatedAt?.toISOString(),
         project: project ? {
           id: project.id,
           name: project.name,
@@ -268,15 +276,15 @@ export async function GET(request: NextRequest) {
           id: status.id,
           name: status.name,
           type: status.type,
-          color_code: status.color_code,
-          sort_order: status.sort_order
+          color_code: status.colorCode,
+          sort_order: status.sortOrder
         } : null,
         priority: priority ? {
           id: priority.id,
           name: priority.name,
           type: 'priority', // Priorities don't have type field, hardcode it
-          color_code: priority.color_code,
-          sort_order: priority.sort_order
+          color_code: priority.colorCode,
+          sort_order: priority.sortOrder
         } : null,
         permissions: {
           can_edit: userRole === 'Admin' || isProjectManager || isCreator || isAssignee,

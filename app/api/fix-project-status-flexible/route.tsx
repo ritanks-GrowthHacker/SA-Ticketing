@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, projectStatuses, projects, isNull, inArray } from '@/lib/db-helper';
 
 export async function POST(request: NextRequest) {
   try {
@@ -26,9 +27,7 @@ export async function POST(request: NextRequest) {
     });
 
     // First, let's see what project statuses are available
-    const { data: allProjectStatuses } = await supabase
-      .from('project_statuses')
-      .select('*');
+    const allProjectStatuses = await db.select().from(projectStatuses);
 
     console.log('📋 All project statuses in database:', allProjectStatuses);
 
@@ -64,27 +63,21 @@ export async function POST(request: NextRequest) {
 
 async function updateProjects(statusId: string, activeStatus: any) {
   // Get ALL projects that don't have a status_id
-  const { data: allProjects, error: allProjectsError } = await supabase
-    .from('projects')
-    .select('*');
+  const allProjects = await db.select().from(projects);
 
   console.log('📊 All projects in database:', {
     count: allProjects?.length || 0,
     projects: allProjects
   });
 
-  const { data: projectsToUpdate, error: projectsError } = await supabase
-    .from('projects')
-    .select('id, name, status_id, organization_id')
-    .is('status_id', null);
-
-  if (projectsError) {
-    console.error('❌ Error fetching projects:', projectsError);
-    return NextResponse.json(
-      { error: 'Failed to fetch projects', details: projectsError }, 
-      { status: 500 }
-    );
-  }
+  const projectsToUpdate = await db.select({
+    id: projects.id,
+    name: projects.name,
+    statusId: projects.statusId,
+    organizationId: projects.organizationId
+  })
+    .from(projects)
+    .where(isNull(projects.statusId));
 
   console.log('📊 Projects to update:', {
     count: projectsToUpdate?.length || 0,
@@ -103,19 +96,10 @@ async function updateProjects(statusId: string, activeStatus: any) {
   // Update all projects to have the Active status
   const projectIds = projectsToUpdate.map(p => p.id);
   
-  const { data: updateResult, error: updateError } = await supabase
-    .from('projects')
-    .update({ status_id: statusId })
-    .in('id', projectIds)
-    .select();
-
-  if (updateError) {
-    console.error('❌ Error updating projects:', updateError);
-    return NextResponse.json(
-      { error: 'Failed to update projects', details: updateError }, 
-      { status: 500 }
-    );
-  }
+  const updateResult = await db.update(projects)
+    .set({ statusId: statusId })
+    .where(inArray(projects.id, projectIds))
+    .returning();
 
   console.log('✅ Projects updated successfully:', updateResult);
 

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, userProject, projects, projectDepartment, userDepartmentRoles, globalRoles, eq, and, sql } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 /**
@@ -24,23 +25,23 @@ export async function POST(req: Request) {
 
     console.log('🔧 FIX: Starting missing department assignments fix...');
 
-    // Get all user_project assignments
-    const { data: userProjects, error: upError } = await supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        project_id,
-        projects!inner(
-          id,
-          organization_id,
-          project_department!inner(department_id)
-        )
-      `);
+    // Get all user_project assignments with project department info
+    const userProjectsResult = await db.execute<{
+      user_id: string;
+      project_id: string;
+      organization_id: string;
+      department_id: string;
+    }>(sql`
+      SELECT 
+        up.user_id, up.project_id,
+        p.organization_id,
+        pd.department_id
+      FROM user_project up
+      INNER JOIN projects p ON up.project_id = p.id
+      INNER JOIN project_department pd ON p.id = pd.project_id
+    `);
 
-    if (upError) {
-      console.error('Error fetching user projects:', upError);
-      return NextResponse.json({ error: 'Failed to fetch user projects' }, { status: 500 });
-    }
+    const userProjects = userProjectsResult.rows;
 
     console.log(`🔧 FIX: Found ${userProjects?.length || 0} user-project assignments`);
 
@@ -49,12 +50,14 @@ export async function POST(req: Request) {
     const errors: string[] = [];
 
     // Get Member role ID
-    const { data: memberRole } = await supabase
-      .from('global_roles')
-      .select('id')
-      .eq('name', 'Member')
-      .single();
+    const memberRoleResults = await db.select({
+      id: globalRoles.id
+    })
+      .from(globalRoles)
+      .where(eq(globalRoles.name, 'Member'))
+      .limit(1);
 
+    const memberRole = memberRoleResults[0];
     if (!memberRole) {
       return NextResponse.json({ error: 'Member role not found' }, { status: 500 });
     }
@@ -62,11 +65,8 @@ export async function POST(req: Request) {
     // For each user-project assignment, ensure user is in department
     for (const up of userProjects || []) {
       const userId = up.user_id;
-      const projectData = up.projects;
-      
-      // projects is an object, not array
-      const departmentId = (projectData as any).project_department?.[0]?.department_id;
-      const organizationId = (projectData as any).organization_id;
+      const departmentId = up.department_id;
+      const organizationId = up.organization_id;
 
       if (!departmentId) {
         console.log(`⚠️ FIX: Project ${up.project_id} has no department, skipping`);
@@ -75,34 +75,34 @@ export async function POST(req: Request) {
       }
 
       // Check if user already has department assignment
-      const { data: existing } = await supabase
-        .from('user_department_roles')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('department_id', departmentId)
-        .single();
+      const existing = await db.select()
+        .from(userDepartmentRoles)
+        .where(and(
+          eq(userDepartmentRoles.userId, userId),
+          eq(userDepartmentRoles.departmentId, departmentId)
+        ))
+        .limit(1);
 
-      if (existing) {
+      if (existing.length > 0) {
         skippedCount++;
         continue;
       }
 
       // Add department assignment
-      const { error: insertError } = await supabase
-        .from('user_department_roles')
-        .insert({
-          user_id: userId,
-          department_id: departmentId,
-          role_id: memberRole.id,
-          organization_id: organizationId
+      try {
+        await db.insert(userDepartmentRoles).values({
+          userId: userId,
+          departmentId: departmentId,
+          roleId: memberRole.id,
+          organizationId: organizationId
         });
-
-      if (insertError && insertError.code !== '23505') {
-        console.error(`❌ FIX: Error adding user ${userId} to dept ${departmentId}:`, insertError);
-        errors.push(`User ${userId}, Dept ${departmentId}: ${insertError.message}`);
-      } else {
         console.log(`✅ FIX: Added user ${userId} to department ${departmentId}`);
         addedCount++;
+      } catch (insertError: any) {
+        if (insertError.code !== '23505') { // Ignore duplicate key errors
+          console.error(`❌ FIX: Error adding user ${userId} to dept ${departmentId}:`, insertError);
+          errors.push(`User ${userId}, Dept ${departmentId}: ${insertError.message}`);
+        }
       }
     }
 

@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
-import { supabase, supabaseAdmin } from "@/app/db/connections";
+// import { supabase, supabaseAdmin } from "@/app/db/connections";
+import { db, sql, eq, inArray, and } from '@/lib/db-helper';
+import { 
+  projects, userProject, projectDepartment, userOrganizationRoles,
+  userDepartmentRoles, globalRoles, organizations, users, 
+  projectStatuses, tickets, statuses, sharedProjects
+} from '@/lib/db-helper';
 
 interface JWTPayload {
   sub: string;        // user ID
@@ -52,24 +58,32 @@ export async function GET(req: Request) {
     const filterDepartmentId = url.searchParams.get("department_id"); // Filter by specific department
 
     // Check if user belongs to the organization - check both org and department roles
-    const { data: userOrgRoles, error: orgRoleError } = await supabase
-      .from('user_organization_roles')
-      .select(`
-        role_id,
-        global_roles!user_organization_roles_role_id_fkey(name)
-      `)
-      .eq('user_id', decodedToken.sub)
-      .eq('organization_id', decodedToken.org_id);
+    const userOrgRolesResult = await db.execute<any>(sql`
+      SELECT uor.role_id, gr.name as role_name
+      FROM user_organization_roles uor
+      INNER JOIN global_roles gr ON uor.role_id = gr.id
+      WHERE uor.user_id = ${decodedToken.sub}
+      AND uor.organization_id = ${decodedToken.org_id}
+    `);
+    const userOrgRoles = userOrgRolesResult.rows.map((r: any) => ({
+      role_id: r.role_id,
+      global_roles: { name: r.role_name }
+    }));
+    const orgRoleError = null;
 
-    const { data: userDeptRoles, error: deptRoleError } = await supabase
-      .from('user_department_roles')
-      .select(`
-        role_id,
-        department_id,
-        global_roles(name)
-      `)
-      .eq('user_id', decodedToken.sub)
-      .eq('organization_id', decodedToken.org_id);
+    const userDeptRolesResult = await db.execute<any>(sql`
+      SELECT udr.role_id, udr.department_id, gr.name as role_name
+      FROM user_department_roles udr
+      INNER JOIN global_roles gr ON udr.role_id = gr.id
+      WHERE udr.user_id = ${decodedToken.sub}
+      AND udr.organization_id = ${decodedToken.org_id}
+    `);
+    const userDeptRoles = userDeptRolesResult.rows.map((r: any) => ({
+      role_id: r.role_id,
+      department_id: r.department_id,
+      global_roles: { name: r.role_name }
+    }));
+    const deptRoleError = null;
 
     // User must have either org role or department role
     if ((!userOrgRoles || userOrgRoles.length === 0) && (!userDeptRoles || userDeptRoles.length === 0)) {
@@ -111,35 +125,48 @@ export async function GET(req: Request) {
     });
 
     // **PROJECT-BASED SYSTEM**: Get ALL projects user is assigned to from user_project table
-    const { data: userProjects, error: userProjectsError } = await supabase
-      .from("user_project")
-      .select(`
-        project_id,
-        role_id,
-        projects!inner(
-          id,
-          name,
-          description,
-          status_id,
-          created_at,
-          updated_at,
-          organization_id,
-          created_by,
-          organizations(id, name, domain),
-          users!projects_created_by_fkey(id, name, email),
-          project_statuses(
-            id,
-            name,
-            description,
-            color_code,
-            sort_order,
-            is_active
-          )
-        ),
-        global_roles!user_project_role_id_fkey(id, name)
-      `)
-      .eq("user_id", decodedToken.sub)
-      .eq("projects.organization_id", decodedToken.org_id);
+    const userProjectsResult = await db.execute<any>(sql`
+      SELECT 
+        up.project_id, up.role_id,
+        p.id as p_id, p.name as p_name, p.description as p_description, p.status_id as p_status_id,
+        p.created_at as p_created_at, p.updated_at as p_updated_at, p.organization_id as p_organization_id,
+        p.created_by as p_created_by,
+        o.id as org_id, o.name as org_name, o.domain as org_domain,
+        u.id as user_id, u.name as user_name, u.email as user_email,
+        ps.id as ps_id, ps.name as ps_name, ps.description as ps_description,
+        ps.color_code as ps_color_code, ps.sort_order as ps_sort_order, ps.is_active as ps_is_active,
+        gr.id as gr_id, gr.name as gr_name
+      FROM user_project up
+      INNER JOIN projects p ON up.project_id = p.id
+      LEFT JOIN organizations o ON p.organization_id = o.id
+      LEFT JOIN users u ON p.created_by = u.id
+      LEFT JOIN project_statuses ps ON p.status_id = ps.id
+      LEFT JOIN global_roles gr ON up.role_id = gr.id
+      WHERE up.user_id = ${decodedToken.sub}
+      AND p.organization_id = ${decodedToken.org_id}
+    `);
+    const userProjects = userProjectsResult.rows.map((row: any) => ({
+      project_id: row.project_id,
+      role_id: row.role_id,
+      projects: {
+        id: row.p_id,
+        name: row.p_name,
+        description: row.p_description,
+        status_id: row.p_status_id,
+        created_at: row.p_created_at,
+        updated_at: row.p_updated_at,
+        organization_id: row.p_organization_id,
+        created_by: row.p_created_by,
+        organizations: { id: row.org_id, name: row.org_name, domain: row.org_domain },
+        users: { id: row.user_id, name: row.user_name, email: row.user_email },
+        project_statuses: {
+          id: row.ps_id, name: row.ps_name, description: row.ps_description,
+          color_code: row.ps_color_code, sort_order: row.ps_sort_order, is_active: row.ps_is_active
+        }
+      },
+      global_roles: { id: row.gr_id, name: row.gr_name }
+    }));
+    const userProjectsError = null;
 
     if (userProjectsError) {
       console.error("User projects retrieval error:", userProjectsError);
@@ -170,29 +197,28 @@ export async function GET(req: Request) {
     
     if (isOrgAdmin) {
       // Org Admin: Get ALL organization projects
-      const { data: allOrgProjects, error: orgProjectsError } = await supabase
-        .from("projects")
-        .select(`
-          id,
-          name,
-          description,
-          status_id,
-          created_at,
-          updated_at,
-          organization_id,
-          created_by,
-          organizations(id, name, domain),
-          users!projects_created_by_fkey(id, name, email),
-          project_statuses(
-            id,
-            name,
-            description,
-            color_code,
-            sort_order,
-            is_active
-          )
-        `)
-        .eq("organization_id", decodedToken.org_id);
+      const allOrgProjectsResult = await db.execute<any>(sql`
+        SELECT 
+          p.id, p.name, p.description, p.status_id, p.created_at, p.updated_at,
+          p.organization_id, p.created_by,
+          o.id as org_id, o.name as org_name, o.domain as org_domain,
+          u.id as user_id, u.name as user_name, u.email as user_email,
+          ps.id as ps_id, ps.name as ps_name, ps.description as ps_description,
+          ps.color_code as ps_color_code, ps.sort_order as ps_sort_order, ps.is_active as ps_is_active
+        FROM projects p
+        LEFT JOIN organizations o ON p.organization_id = o.id
+        LEFT JOIN users u ON p.created_by = u.id
+        LEFT JOIN project_statuses ps ON p.status_id = ps.id
+        WHERE p.organization_id = ${decodedToken.org_id}
+      `);
+      const allOrgProjects = allOrgProjectsResult.rows.map((row: any) => ({
+        id: row.id, name: row.name, description: row.description, status_id: row.status_id,
+        created_at: row.created_at, updated_at: row.updated_at, organization_id: row.organization_id, created_by: row.created_by,
+        organizations: { id: row.org_id, name: row.org_name, domain: row.org_domain },
+        users: { id: row.user_id, name: row.user_name, email: row.user_email },
+        project_statuses: { id: row.ps_id, name: row.ps_name, description: row.ps_description, color_code: row.ps_color_code, sort_order: row.ps_sort_order, is_active: row.ps_is_active }
+      }));
+      const orgProjectsError = null;
 
       if (!orgProjectsError && allOrgProjects) {
         additionalProjects = allOrgProjects;
@@ -203,39 +229,44 @@ export async function GET(req: Request) {
       const deptIds = userDeptRoles?.map((r: any) => r.department_id) || [];
       
       if (deptIds.length > 0) {
-        const { data: deptProjectLinks, error: deptProjError } = await supabase
-          .from("project_department")
-          .select("project_id")
-          .in("department_id", deptIds);
+        const deptProjectLinksResult = await db.select({
+          projectId: projectDepartment.projectId
+        })
+        .from(projectDepartment)
+        .where(inArray(projectDepartment.departmentId, deptIds));
+        const deptProjectLinks = deptProjectLinksResult;
+        const deptProjError = null;
 
         if (!deptProjError && deptProjectLinks) {
-          const deptProjectIds = deptProjectLinks.map(dp => dp.project_id);
+          const deptProjectIds = deptProjectLinks.map((dp: any) => dp.projectId);
           
           if (deptProjectIds.length > 0) {
-            const { data: deptProjects, error: fetchError } = await supabase
-              .from("projects")
-              .select(`
-                id,
-                name,
-                description,
-                status_id,
-                created_at,
-                updated_at,
-                organization_id,
-                created_by,
-                organizations(id, name, domain),
-                users!projects_created_by_fkey(id, name, email),
-                project_statuses(
-                  id,
-                  name,
-                  description,
-                  color_code,
-                  sort_order,
-                  is_active
-                )
-              `)
-              .in("id", deptProjectIds)
-              .eq("organization_id", decodedToken.org_id);
+            const deptProjectsResult = await db.execute<any>(sql`
+              SELECT 
+                p.id, p.name, p.description, p.status_id, p.created_at, p.updated_at,
+                p.organization_id, p.created_by,
+                o.id as org_id, o.name as org_name, o.domain as org_domain,
+                u.id as user_id, u.name as user_name, u.email as user_email,
+                ps.id as ps_id, ps.name as ps_name, ps.description as ps_description,
+                ps.color_code as ps_color_code, ps.sort_order as ps_sort_order, ps.is_active as ps_is_active
+              FROM projects p
+              LEFT JOIN organizations o ON p.organization_id = o.id
+              LEFT JOIN users u ON p.created_by = u.id
+              LEFT JOIN project_statuses ps ON p.status_id = ps.id
+              WHERE p.id = ANY(ARRAY[
+  ${sql.join(deptProjectIds.map((id: string) => sql`${id}::uuid`), sql`, `)}
+]::uuid[])
+AND p.organization_id = ${decodedToken.org_id}::uuid
+
+            `);
+            const deptProjects = deptProjectsResult.rows.map((row: any) => ({
+              id: row.id, name: row.name, description: row.description, status_id: row.status_id,
+              created_at: row.created_at, updated_at: row.updated_at, organization_id: row.organization_id, created_by: row.created_by,
+              organizations: { id: row.org_id, name: row.org_name, domain: row.org_domain },
+              users: { id: row.user_id, name: row.user_name, email: row.user_email },
+              project_statuses: { id: row.ps_id, name: row.ps_name, description: row.ps_description, color_code: row.ps_color_code, sort_order: row.ps_sort_order, is_active: row.ps_is_active }
+            }));
+            const fetchError = null;
 
             if (!fetchError && deptProjects) {
               additionalProjects = deptProjects;
@@ -287,62 +318,107 @@ export async function GET(req: Request) {
       );
     }
 
-    // Apply department filter if provided - PROPERLY filter by project_department table
+    // Apply department filter if provided - include BOTH department projects AND shared projects
+    // Get all departments user belongs to for shared project check
+    const userDepartmentIds = userDeptRoles?.map((dr: any) => dr.department_id) || [];
+    
     if (filterDepartmentId) {
       console.log(`🔍 GET-ALL-PROJECTS: Filtering projects by department ${filterDepartmentId}`);
       
       // Get projects that belong to this department from project_department table
-      const { data: deptProjects, error: deptProjectsError } = await supabase
-        .from('project_department')
-        .select('project_id')
-        .eq('department_id', filterDepartmentId);
+      const deptProjectsResult = await db.select({
+        projectId: projectDepartment.projectId
+      })
+      .from(projectDepartment)
+      .where(eq(projectDepartment.departmentId, filterDepartmentId));
+      const deptProjects = deptProjectsResult;
+      const deptProjectsError = null;
+
+      // ALSO get shared projects for this specific department
+      const sharedToDeptResult = await db.execute<any>(sql`
+        SELECT
+          sp.project_id, sp.department_id,
+          p.id as p_id, p.name as p_name, p.description as p_description, p.status_id as p_status_id,
+          p.created_at as p_created_at, p.updated_at as p_updated_at, p.organization_id as p_organization_id, p.created_by as p_created_by,
+          o.id as org_id, o.name as org_name, o.domain as org_domain,
+          u.id as user_id, u.name as user_name, u.email as user_email,
+          ps.id as ps_id, ps.name as ps_name, ps.description as ps_description,
+          ps.color_code as ps_color_code, ps.sort_order as ps_sort_order, ps.is_active as ps_is_active
+        FROM shared_projects sp
+        INNER JOIN projects p ON sp.project_id = p.id
+        LEFT JOIN organizations o ON p.organization_id = o.id
+        LEFT JOIN users u ON p.created_by = u.id
+        LEFT JOIN project_statuses ps ON p.status_id = ps.id
+        WHERE sp.department_id = ${filterDepartmentId}::uuid
+      `);
+      const sharedToDept = sharedToDeptResult.rows.map((row: any) => ({
+        project_id: row.project_id,
+        department_id: row.department_id,
+        projects: {
+          id: row.p_id, name: row.p_name, description: row.p_description, status_id: row.p_status_id,
+          created_at: row.p_created_at, updated_at: row.p_updated_at, organization_id: row.p_organization_id, created_by: row.p_created_by,
+          organizations: { id: row.org_id, name: row.org_name, domain: row.org_domain },
+          users: { id: row.user_id, name: row.user_name, email: row.user_email },
+          project_statuses: { id: row.ps_id, name: row.ps_name, description: row.ps_description, color_code: row.ps_color_code, sort_order: row.ps_sort_order, is_active: row.ps_is_active }
+        }
+      }));
 
       if (deptProjectsError) {
         console.error('Error fetching department projects:', deptProjectsError);
       } else if (deptProjects) {
-        const deptProjectIds = deptProjects.map(dp => dp.project_id);
-        console.log(`   Found ${deptProjectIds.length} projects in department`);
+        // Combine department projects AND shared projects
+        const deptProjectIds = deptProjects.map((dp: any) => dp.projectId);
+        const sharedProjectIds = sharedToDept.map((sp: any) => sp.project_id);
+        const allValidProjectIds = [...new Set([...deptProjectIds, ...sharedProjectIds])];
         
-        // Filter to only show projects that belong to this department
-        allProjects = allProjects.filter((proj: any) => deptProjectIds.includes(proj.id));
-        console.log(`   After filtering: ${allProjects.length} projects`);
+        console.log(`   Found ${deptProjectIds.length} department projects + ${sharedProjectIds.length} shared projects`);
+        
+        // Filter to only show projects that belong to OR are shared with this department
+        allProjects = allProjects.filter((proj: any) => allValidProjectIds.includes(proj.id));
+        console.log(`   After filtering: ${allProjects.length} projects (dept + shared)`);
+        
+        // Mark shared projects
+        allProjects = allProjects.map((proj: any) => {
+          if (sharedProjectIds.includes(proj.id) && !deptProjectIds.includes(proj.id)) {
+            return { ...proj, is_shared: true };
+          }
+          return proj;
+        });
       }
     } else {
       // When no department filter is applied (e.g., "All Projects" view)
       // Include shared projects from shared_projects table
       console.log(`🔍 GET-ALL-PROJECTS: Including shared projects for user's departments`);
       
-      // Get all departments user belongs to
-      const userDepartmentIds = userDeptRoles?.map((dr: any) => dr.department_id) || [];
-      
       if (userDepartmentIds.length > 0) {
-        const { data: sharedProjects, error: sharedError } = await supabase
-          .from('shared_projects')
-          .select(`
-            project_id,
-            department_id,
-            projects!inner(
-              id,
-              name,
-              description,
-              status_id,
-              created_at,
-              updated_at,
-              organization_id,
-              created_by,
-              organizations(id, name, domain),
-              users!projects_created_by_fkey(id, name, email),
-              project_statuses(
-                id,
-                name,
-                description,
-                color_code,
-                sort_order,
-                is_active
-              )
-            )
-          `)
-          .in('department_id', userDepartmentIds);
+       const sharedProjectsResult = await db.execute<any>(sql`
+  SELECT
+    sp.project_id, sp.department_id,
+    p.id as p_id, p.name as p_name, p.description as p_description, p.status_id as p_status_id,
+    p.created_at as p_created_at, p.updated_at as p_updated_at, p.organization_id as p_organization_id, p.created_by as p_created_by,
+    o.id as org_id, o.name as org_name, o.domain as org_domain,
+    u.id as user_id, u.name as user_name, u.email as user_email,
+    ps.id as ps_id, ps.name as ps_name, ps.description as ps_description,
+    ps.color_code as ps_color_code, ps.sort_order as ps_sort_order, ps.is_active as ps_is_active
+  FROM shared_projects sp
+  INNER JOIN projects p ON sp.project_id = p.id
+  LEFT JOIN organizations o ON p.organization_id = o.id
+  LEFT JOIN users u ON p.created_by = u.id
+  LEFT JOIN project_statuses ps ON p.status_id = ps.id
+  WHERE sp.department_id = ANY(${`{${userDepartmentIds.join(",")}}`}::uuid[])
+`);
+        const sharedProjects = sharedProjectsResult.rows.map((row: any) => ({
+          project_id: row.project_id,
+          department_id: row.department_id,
+          projects: {
+            id: row.p_id, name: row.p_name, description: row.p_description, status_id: row.p_status_id,
+            created_at: row.p_created_at, updated_at: row.p_updated_at, organization_id: row.p_organization_id, created_by: row.p_created_by,
+            organizations: { id: row.org_id, name: row.org_name, domain: row.org_domain },
+            users: { id: row.user_id, name: row.user_name, email: row.user_email },
+            project_statuses: { id: row.ps_id, name: row.ps_name, description: row.ps_description, color_code: row.ps_color_code, sort_order: row.ps_sort_order, is_active: row.ps_is_active }
+          }
+        }));
+        const sharedError = null;
 
         if (!sharedError && sharedProjects) {
           // Add shared projects that aren't already in the list
@@ -515,21 +591,23 @@ export async function GET(req: Request) {
     if (format === "user-projects") {
       console.log("🔧 DEBUG: Fetching user project assignments for switching...");
       
-      const { data: userProjects, error: userProjectsError } = await supabase
-        .from("user_project")
-        .select(`
-          project_id,
-          role_id,
-          projects!user_project_project_id_fkey(
-            id,
-            name
-          ),
-          global_roles!user_project_role_id_fkey(
-            id,
-            name
-          )
-        `)
-        .eq('user_id', decodedToken.sub);
+      const userProjectsResult = await db.execute<any>(sql`
+        SELECT 
+          up.project_id, up.role_id,
+          p.id as p_id, p.name as p_name,
+          gr.id as gr_id, gr.name as gr_name
+        FROM user_project up
+        LEFT JOIN projects p ON up.project_id = p.id
+        LEFT JOIN global_roles gr ON up.role_id = gr.id
+        WHERE up.user_id = ${decodedToken.sub}
+      `);
+      const userProjects = userProjectsResult.rows.map((row: any) => ({
+        project_id: row.project_id,
+        role_id: row.role_id,
+        projects: { id: row.p_id, name: row.p_name },
+        global_roles: { id: row.gr_id, name: row.gr_name }
+      }));
+      const userProjectsError = null;
 
       if (userProjectsError) {
         console.error('❌ Error fetching user projects:', userProjectsError);
@@ -549,10 +627,10 @@ export async function GET(req: Request) {
     }
 
     // Get all project statuses for the organization first
-    const { data: projectStatuses, error: statusesError } = await supabase
-      .from("project_statuses")
-      .select("*")
-      .order("sort_order", { ascending: true });
+    const projectStatusesResult = await db.select()
+      .from(projectStatuses)
+      .orderBy(projectStatuses.sortOrder);
+    const statusesError = null;
 
     console.log('🔍 Status query debug:', {
       tokenOrgId: decodedToken.org_id,
@@ -564,7 +642,7 @@ export async function GET(req: Request) {
     if (statusesError) {
       console.error('❌ Error fetching project statuses:', statusesError);
     } else {
-      console.log('✅ Project statuses fetched:', projectStatuses?.length || 0, 'statuses');
+      console.log('✅ Project statuses fetched:', projectStatusesResult?.length || 0, 'statuses');
       console.log('📋 Project statuses data:', projectStatuses);
     }
 
@@ -575,20 +653,35 @@ export async function GET(req: Request) {
 
         if (includeStats) {
           // Get all tickets for this project with their status information
-          const { data: allProjectTickets } = await supabase
-            .from('tickets')
-            .select('id, status_id, statuses!tickets_status_id_fkey(name, type)')
-            .eq('project_id', project.id);
+          const allProjectTicketsResult = await db.execute<any>(sql`
+            SELECT t.id, t.status_id, s.name as status_name, s.type as status_type
+            FROM tickets t
+            LEFT JOIN statuses s ON t.status_id = s.id
+            WHERE t.project_id = ${project.id}
+          `);
+          const allProjectTickets = allProjectTicketsResult.rows.map((row: any) => ({
+            id: row.id,
+            status_id: row.status_id,
+            statuses: { name: row.status_name, type: row.status_type }
+          }));
 
           // Get team members count
-          const { data: teamMembers, error: teamMembersError } = await supabase
-            .from('user_project')
-            .select(`
-              user_id,
-              users!inner(id, name, email),
-              global_roles!user_project_role_id_fkey(name)
-            `, { count: 'exact' })
-            .eq('project_id', project.id);
+          const teamMembersResult = await db.execute<any>(sql`
+            SELECT 
+              up.user_id,
+              u.id as u_id, u.name as u_name, u.email as u_email,
+              gr.name as gr_name
+            FROM user_project up
+            INNER JOIN users u ON up.user_id = u.id
+            LEFT JOIN global_roles gr ON up.role_id = gr.id
+            WHERE up.project_id = ${project.id}
+          `);
+          const teamMembers = teamMembersResult.rows.map((row: any) => ({
+            user_id: row.user_id,
+            users: { id: row.u_id, name: row.u_name, email: row.u_email },
+            global_roles: { name: row.gr_name }
+          }));
+          const teamMembersError = null;
 
           if (teamMembersError) {
             console.error(`❌ Error fetching team members for project ${project.id}:`, teamMembersError);
@@ -604,7 +697,7 @@ export async function GET(req: Request) {
           const teamMembersCount = teamMembers?.length || 0;
 
           // Find project manager from team members
-          const projectManager = teamMembers?.find(member => 
+          const projectManager = teamMembers?.find((member: any) => 
             (member.global_roles as any)?.name === 'Manager'
           );
           const managerName = projectManager 
@@ -612,7 +705,7 @@ export async function GET(req: Request) {
             : null;
 
           // Count tickets by status - find completed/closed tickets  
-          const completedTickets = allProjectTickets?.filter(t => {
+          const completedTickets = allProjectTickets?.filter((t: any) => {
             const statusName = (t as any).statuses?.name?.toLowerCase() || '';
             const statusType = (t as any).statuses?.type?.toLowerCase() || '';
             return statusName.includes('complete') || 
@@ -625,7 +718,7 @@ export async function GET(req: Request) {
           
           // Create detailed status breakdown for debugging
           const statusBreakdown: { [key: string]: number } = {};
-          allProjectTickets?.forEach(t => {
+          allProjectTickets?.forEach((t: any) => {
             const statusName = (t as any).statuses?.name || 'No Status';
             statusBreakdown[statusName] = (statusBreakdown[statusName] || 0) + 1;
           });
@@ -677,7 +770,7 @@ export async function GET(req: Request) {
 
         // Find the status details using status_id
         const statusDetails = project.status_id 
-          ? (projectStatuses || []).find(s => s.id === project.status_id)
+          ? (projectStatusesResult || []).find((s: any) => s.id === project.status_id)
           : null;
 
         return {
@@ -699,8 +792,8 @@ export async function GET(req: Request) {
 
 
     // Fallback: If no statuses found, provide the known statuses
-    let statusesToReturn = projectStatuses;
-    if (!projectStatuses || projectStatuses.length === 0) {
+    let statusesToReturn: any = projectStatusesResult;
+    if (!projectStatusesResult || projectStatusesResult.length === 0) {
       console.log('⚠️ No statuses found in DB query, using fallback statuses for org:', decodedToken.org_id);
       statusesToReturn = [
         {

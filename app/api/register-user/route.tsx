@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import { supabase } from "@/app/db/connections";
+// import { supabase } from "@/app/db/connections";
+import { db, users, organizations, eq } from '@/lib/db-helper';
 import { OTPService } from "@/lib/otpService";
 
 export async function POST(req: Request) {
@@ -12,11 +13,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "All fields are required" }, { status: 400 });
     }
 
-    const { data: organization } = await supabase
-      .from("organizations")
-      .select("id, name, domain")
-      .eq("domain", organization_domain)
-      .maybeSingle();
+    const organization = await db
+      .select({ id: organizations.id, name: organizations.name, domain: organizations.domain })
+      .from(organizations)
+      .where(eq(organizations.domain, organization_domain))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (!organization) {
       return NextResponse.json({ error: "Organization not found" }, { status: 404 });
@@ -31,11 +33,12 @@ export async function POST(req: Request) {
 
     const organization_id = organization.id;
 
-    const { data: existingUser } = await supabase
-      .from("users")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle();
+    const existingUser = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.email, email))
+      .limit(1)
+      .then(rows => rows[0] || null);
 
     if (existingUser) {
       return NextResponse.json({ error: "User already exists" }, { status: 400 });
@@ -53,19 +56,23 @@ export async function POST(req: Request) {
     });
 
     // Store user with OTP
-    const { data: user, error: userError } = await supabase
-      .from("users")
-      .insert([{ 
+    const [user] = await db
+      .insert(users)
+      .values({ 
         name, 
         email, 
-        password_hash,
+        passwordHash: password_hash,
         otp,
-        otp_expires_at: otpExpiresAt.toISOString()
-      }])
-      .select("id, name, email, created_at")
-      .single();
+        otpExpiresAt
+      })
+      .returning({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        createdAt: users.createdAt
+      });
 
-    if (userError || !user) {
+    if (!user) {
       return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
     }
 
@@ -74,7 +81,7 @@ export async function POST(req: Request) {
     
     if (!emailSent) {
       // Clean up user if email fails
-      await supabase.from("users").delete().eq("id", user.id);
+      await db.delete(users).where(eq(users.id, user.id));
       return NextResponse.json({ 
         error: "Failed to send OTP. Please try again." 
       }, { status: 500 });

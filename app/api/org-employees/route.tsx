@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, users, departments, organizations, userDepartmentRoles, userOrganizationRoles, globalRoles, eq, inArray, and, sql } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 export async function GET(request: NextRequest) {
@@ -12,13 +13,6 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(
         { error: 'Organization ID is required' },
         { status: 400 }
-      );
-    }
-
-    if (!supabase) {
-      return NextResponse.json(
-        { error: 'Database configuration error' },
-        { status: 500 }
       );
     }
 
@@ -38,17 +32,22 @@ export async function GET(request: NextRequest) {
         
         // Get user's department roles
         if (!isOrgAdmin && decoded.sub) {
-          const { data: deptRoles } = await supabase
-            .from('user_department_roles')
-            .select('department_id, global_roles!inner(name)')
-            .eq('user_id', decoded.sub)
-            .eq('organization_id', orgId);
+          const deptRoles = await db.select({
+            departmentId: userDepartmentRoles.departmentId,
+            roleName: globalRoles.name
+          })
+            .from(userDepartmentRoles)
+            .innerJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+            .where(and(
+              eq(userDepartmentRoles.userId, decoded.sub),
+              eq(userDepartmentRoles.organizationId, orgId)
+            ));
           
           // Filter departments where user is Admin
           if (deptRoles) {
             userDepartments = deptRoles
-              .filter((dr: any) => dr.global_roles?.name === 'Admin')
-              .map((dr: any) => dr.department_id);
+              .filter((dr: any) => dr.roleName === 'Admin')
+              .map((dr: any) => dr.departmentId);
           }
         }
       } catch (error) {
@@ -57,14 +56,16 @@ export async function GET(request: NextRequest) {
     }
 
     // First, get the organization to find its associated departments
-    const { data: organization, error: orgError } = await supabase
-      .from('organizations')
-      .select('associated_departments')
-      .eq('id', orgId)
-      .single();
+    const orgResults = await db.select({
+      associatedDepartments: organizations.associatedDepartments
+    })
+      .from(organizations)
+      .where(eq(organizations.id, orgId))
+      .limit(1);
 
-    if (orgError) {
-      console.error('Error fetching organization:', orgError);
+    const organization = orgResults[0];
+    if (!organization) {
+      console.error('Error fetching organization');
       return NextResponse.json(
         { error: 'Failed to fetch organization' },
         { status: 500 }
@@ -72,21 +73,32 @@ export async function GET(request: NextRequest) {
     }
 
     // Get all departments for this organization
-    let departmentsQuery = supabase
-      .from('departments')
-      .select('id, name, color_code, description')
-      .in('id', organization.associated_departments || [])
-      .order('name');
-    
-    // If user is department admin (not org admin), filter to only their departments
+    let allDepartments;
     if (!isOrgAdmin && userDepartments.length > 0) {
-      departmentsQuery = departmentsQuery.in('id', userDepartments);
-    }
-
-    const { data: allDepartments, error: deptError } = await departmentsQuery;
-
-    if (deptError) {
-      console.error('Error fetching departments:', deptError);
+      // Department admin - only their departments
+      allDepartments = await db.select({
+        id: departments.id,
+        name: departments.name,
+        colorCode: departments.colorCode,
+        description: departments.description
+      })
+        .from(departments)
+        .where(and(
+          inArray(departments.id, organization.associatedDepartments || []),
+          inArray(departments.id, userDepartments)
+        ))
+        .orderBy(departments.name);
+    } else {
+      // Org admin - all departments
+      allDepartments = await db.select({
+        id: departments.id,
+        name: departments.name,
+        colorCode: departments.colorCode,
+        description: departments.description
+      })
+        .from(departments)
+        .where(inArray(departments.id, organization.associatedDepartments || []))
+        .orderBy(departments.name);
     }
 
     // Get ALL users who have either:
@@ -99,60 +111,74 @@ export async function GET(request: NextRequest) {
     let usersWithDeptRoles: any[] = [];
     
     if (departmentIds.length > 0) {
-      const { data: deptRoleUsers } = await supabase
-        .from('user_department_roles')
-        .select(`
-          user_id,
-          department_id,
-          role_id,
-          users!inner(
-            id,
-            name,
-            email,
-            job_title,
-            phone,
-            location,
-            department,
-            department_id,
-            organization_id,
-            created_at
-          ),
-          global_roles(id, name)
-        `)
-        .in('department_id', departmentIds)
-        .eq('organization_id', orgId);
+      // FIX: Use Drizzle ORM instead of raw SQL with ANY
+      const deptRoleResults = await db.select({
+        userId: userDepartmentRoles.userId,
+        departmentId: userDepartmentRoles.departmentId,
+        roleId: userDepartmentRoles.roleId,
+        userName: users.name,
+        userEmail: users.email,
+        userJobTitle: users.jobTitle,
+        userPhone: users.phone,
+        userLocation: users.location,
+        userDepartment: users.department,
+        userDepartmentId: users.departmentId,
+        userOrganizationId: users.organizationId,
+        userCreatedAt: users.createdAt,
+        roleName: globalRoles.name
+      })
+        .from(userDepartmentRoles)
+        .innerJoin(users, eq(userDepartmentRoles.userId, users.id))
+        .leftJoin(globalRoles, eq(userDepartmentRoles.roleId, globalRoles.id))
+        .where(and(
+          inArray(userDepartmentRoles.departmentId, departmentIds),
+          eq(userDepartmentRoles.organizationId, orgId)
+        ));
       
-      usersWithDeptRoles = deptRoleUsers || [];
+      // Map to match the old structure
+      usersWithDeptRoles = deptRoleResults.map(row => ({
+        user_id: row.userId,
+        department_id: row.departmentId,
+        role_id: row.roleId,
+        user_name: row.userName,
+        user_email: row.userEmail,
+        user_job_title: row.userJobTitle,
+        user_phone: row.userPhone,
+        user_location: row.userLocation,
+        user_department: row.userDepartment,
+        user_department_id: row.userDepartmentId,
+        user_organization_id: row.userOrganizationId,
+        user_created_at: row.userCreatedAt,
+        role_name: row.roleName
+      }));
     }
 
     // Get user IDs who are active in this organization (from user_organisation_role)
-    const { data: activeOrgUsers } = await supabase
-      .from('user_organisation_role')
-      .select('user_id')
-      .eq('organization_id', orgId);
+    const activeOrgUsersResult = await db.select({
+      userId: userOrganizationRoles.userId
+    })
+      .from(userOrganizationRoles)
+      .where(eq(userOrganizationRoles.organizationId, orgId));
     
-    const activeOrgUserIds = (activeOrgUsers || []).map(u => u.user_id);
+    const activeOrgUserIds = activeOrgUsersResult.map(u => u.userId);
     
     // Get users who have org roles
     let usersWithOrgRoles: any[] = [];
     if (activeOrgUserIds.length > 0) {
-      const { data: orgUsers } = await supabase
-        .from('users')
-        .select(`
-          id,
-          name,
-          email,
-          job_title,
-          phone,
-          location,
-          department,
-          department_id,
-          organization_id,
-          created_at
-        `)
-        .in('id', activeOrgUserIds);
-      
-      usersWithOrgRoles = orgUsers || [];
+      usersWithOrgRoles = await db.select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        jobTitle: users.jobTitle,
+        phone: users.phone,
+        location: users.location,
+        department: users.department,
+        departmentId: users.departmentId,
+        organizationId: users.organizationId,
+        createdAt: users.createdAt
+      })
+        .from(users)
+        .where(inArray(users.id, activeOrgUserIds));
     }
 
     // Merge and deduplicate users
@@ -165,14 +191,26 @@ export async function GET(request: NextRequest) {
     
     // Add/update users with dept roles
     usersWithDeptRoles.forEach((deptRole: any) => {
-      const user = deptRole.users;
-      if (!userMap.has(user.id)) {
-        userMap.set(user.id, { ...user, departmentRoles: [] });
+      const userId = deptRole.user_id;
+      if (!userMap.has(userId)) {
+        userMap.set(userId, {
+          id: userId,
+          name: deptRole.user_name,
+          email: deptRole.user_email,
+          jobTitle: deptRole.user_job_title,
+          phone: deptRole.user_phone,
+          location: deptRole.user_location,
+          department: deptRole.user_department,
+          departmentId: deptRole.user_department_id,
+          organizationId: deptRole.user_organization_id,
+          createdAt: deptRole.user_created_at,
+          departmentRoles: []
+        });
       }
-      userMap.get(user.id).departmentRoles.push({
+      userMap.get(userId).departmentRoles.push({
         department_id: deptRole.department_id,
         role_id: deptRole.role_id,
-        role_name: deptRole.global_roles?.name
+        role_name: deptRole.role_name
       });
     });
 
@@ -181,22 +219,31 @@ export async function GET(request: NextRequest) {
     // Now get org and dept role details for all users
     const userIds = allUsers.map((u: any) => u.id);
     
-    const { data: orgRoles } = userIds.length > 0 ? await supabase
-      .from('user_organisation_role')
-      .select(`
-        user_id,
-        role_id,
-        organization_id,
-        global_roles(id, name)
-      `)
-      .in('user_id', userIds)
-      .eq('organization_id', orgId)
-      : { data: [] };
+    const orgRoles = userIds.length > 0 ? await db.select({
+      userId: userOrganizationRoles.userId,
+      roleId: userOrganizationRoles.roleId,
+      organizationId: userOrganizationRoles.organizationId,
+      roleGlobalId: globalRoles.id,
+      roleName: globalRoles.name
+    })
+      .from(userOrganizationRoles)
+      .leftJoin(globalRoles, eq(userOrganizationRoles.roleId, globalRoles.id))
+      .where(and(
+        inArray(userOrganizationRoles.userId, userIds),
+        eq(userOrganizationRoles.organizationId, orgId)
+      ))
+      : [];
 
     // Create org role map
     const orgRoleMap = new Map();
     (orgRoles || []).forEach((role: any) => {
-      orgRoleMap.set(role.user_id, role);
+      orgRoleMap.set(role.userId, {
+        userId: role.userId,
+        global_roles: {
+          id: role.roleGlobalId,
+          name: role.roleName
+        }
+      });
     });
 
     // Filter employees based on department admin permissions
@@ -204,7 +251,7 @@ export async function GET(request: NextRequest) {
     if (!isOrgAdmin && userDepartments.length > 0) {
       filteredUsers = allUsers.filter((user: any) => {
         // Include if user's primary department matches
-        if (user.department_id && userDepartments.includes(user.department_id)) {
+        if (user.departmentId && userDepartments.includes(user.departmentId)) {
           return true;
         }
         // Include if user has any role in admin's departments
@@ -231,8 +278,8 @@ export async function GET(request: NextRequest) {
       const userDepts = new Set<string>();
       
       // Add primary department
-      if (employee.department_id) {
-        userDepts.add(employee.department_id);
+      if (employee.departmentId) {
+        userDepts.add(employee.departmentId);
       }
       
       // Add all departments from department roles
@@ -241,7 +288,7 @@ export async function GET(request: NextRequest) {
       });
       
       // Find primary department info
-      const primaryDeptId = employee.department_id || (employee.departmentRoles?.[0]?.department_id);
+      const primaryDeptId = employee.departmentId || (employee.departmentRoles?.[0]?.department_id);
       const matchingDept = allDepartments?.find(d => d.id === primaryDeptId);
       
       // Create department-specific role map
@@ -257,15 +304,15 @@ export async function GET(request: NextRequest) {
         id: employee.id,
         name: employee.name,
         email: employee.email,
-        job_title: employee.job_title,
+        job_title: employee.jobTitle,
         phone: employee.phone,
         location: employee.location,
         department: employee.department,
         department_id: primaryDeptId,
         department_name: matchingDept?.name || employee.department || 'Unassigned',
         all_departments: Array.from(userDepts), // All department IDs user belongs to
-        organization_id: employee.organization_id,
-        created_at: employee.created_at,
+        organization_id: employee.organizationId,
+        created_at: employee.createdAt,
         current_role: orgRoleInfo?.name || null, // Org-level role only
         current_role_id: orgRoleInfo?.id || null, // Org-level role ID only
         role_type: orgRoleType, // 'organization' or null
@@ -274,7 +321,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Create department list with employee counts (count users in ANY department role)
-    const departmentsWithCounts = (allDepartments || []).map(dept => {
+    const departmentsWithCounts = (allDepartments || []).map((dept: any) => {
       const employeeCount = employeesWithDepartments.filter(
         emp => emp.all_departments?.includes(dept.id) || emp.department_id === dept.id || emp.department === dept.name
       ).length;
@@ -283,7 +330,7 @@ export async function GET(request: NextRequest) {
         id: dept.id, // Use actual department UUID as ID
         name: dept.name,
         employee_count: employeeCount,
-        color_code: dept.color_code || '#3B82F6',
+        color_code: dept.colorCode || '#3B82F6',
         description: dept.description
       };
     });

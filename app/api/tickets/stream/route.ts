@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { supabase } from '@/app/db/connections';
+// import { supabase } from '@/app/db/connections';
+import { db, sql } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
 // SSE endpoint for real-time ticket updates
@@ -49,44 +50,79 @@ export async function GET(request: NextRequest) {
           // Poll for ticket updates every 2 seconds
           const pollInterval = setInterval(async () => {
             try {
-              // Build query based on filters
-              let query = supabase
-                .from('tickets')
-                .select(`
-                  id,
-                  title,
-                  description,
-                  status_id,
-                  priority_id,
-                  assigned_to,
-                  created_by,
-                  project_id,
-                  updated_at,
-                  created_at,
-                  projects!inner(name, organization_id),
-                  status:statuses!tickets_status_id_fkey(id, name, color_code),
-                  priority:priorities!tickets_priority_id_fkey(id, name, color_code),
-                  assignee:users!tickets_assigned_to_fkey(id, name, email),
-                  creator:users!tickets_created_by_fkey(id, name, email)
-                `)
-                .eq('projects.organization_id', orgId)
-                .gt('updated_at', lastCheckTime.toISOString())
-                .order('updated_at', { ascending: false });
-
-              // Filter by project if specified
+              // Build SQL query based on filters
+              let querySQL;
               if (projectId) {
-                query = query.eq('project_id', projectId);
+                querySQL = sql`
+                  SELECT 
+                    t.id, t.title, t.description, t.status_id, t.priority_id,
+                    t.assigned_to, t.created_by, t.project_id, t.updated_at, t.created_at,
+                    p.name as project_name, p.organization_id,
+                    s.id as status_id_val, s.name as status_name, s.color_code as status_color,
+                    pr.id as priority_id_val, pr.name as priority_name, pr.color_code as priority_color,
+                    assignee.id as assignee_id, assignee.name as assignee_name, assignee.email as assignee_email,
+                    creator.id as creator_id, creator.name as creator_name, creator.email as creator_email
+                  FROM tickets t
+                  INNER JOIN projects p ON t.project_id = p.id
+                  LEFT JOIN statuses s ON t.status_id = s.id
+                  LEFT JOIN statuses pr ON t.priority_id = pr.id
+                  LEFT JOIN users assignee ON t.assigned_to = assignee.id
+                  LEFT JOIN users creator ON t.created_by = creator.id
+                  WHERE p.organization_id = ${orgId}
+                  AND t.updated_at > ${lastCheckTime.toISOString()}
+                  AND t.project_id = ${projectId}
+                  ORDER BY t.updated_at DESC
+                `;
+              } else {
+                querySQL = sql`
+                  SELECT 
+                    t.id, t.title, t.description, t.status_id, t.priority_id,
+                    t.assigned_to, t.created_by, t.project_id, t.updated_at, t.created_at,
+                    p.name as project_name, p.organization_id,
+                    s.id as status_id_val, s.name as status_name, s.color_code as status_color,
+                    pr.id as priority_id_val, pr.name as priority_name, pr.color_code as priority_color,
+                    assignee.id as assignee_id, assignee.name as assignee_name, assignee.email as assignee_email,
+                    creator.id as creator_id, creator.name as creator_name, creator.email as creator_email
+                  FROM tickets t
+                  INNER JOIN projects p ON t.project_id = p.id
+                  LEFT JOIN statuses s ON t.status_id = s.id
+                  LEFT JOIN statuses pr ON t.priority_id = pr.id
+                  LEFT JOIN users assignee ON t.assigned_to = assignee.id
+                  LEFT JOIN users creator ON t.created_by = creator.id
+                  WHERE p.organization_id = ${orgId}
+                  AND t.updated_at > ${lastCheckTime.toISOString()}
+                  ORDER BY t.updated_at DESC
+                `;
               }
 
-              const { data: updatedTickets, error } = await query;
+              const result = await db.execute<any>(querySQL);
+              const updatedTickets = result.rows;
 
-              if (!error && updatedTickets && updatedTickets.length > 0) {
+              if (updatedTickets && updatedTickets.length > 0) {
                 // Send each updated ticket
                 for (const ticket of updatedTickets) {
+                  // Map to expected format
+                  const formattedTicket = {
+                    id: ticket.id,
+                    title: ticket.title,
+                    description: ticket.description,
+                    status_id: ticket.status_id,
+                    priority_id: ticket.priority_id,
+                    assigned_to: ticket.assigned_to,
+                    created_by: ticket.created_by,
+                    project_id: ticket.project_id,
+                    updated_at: ticket.updated_at,
+                    created_at: ticket.created_at,
+                    projects: { name: ticket.project_name, organization_id: ticket.organization_id },
+                    status: { id: ticket.status_id_val, name: ticket.status_name, color_code: ticket.status_color },
+                    priority: { id: ticket.priority_id_val, name: ticket.priority_name, color_code: ticket.priority_color },
+                    assignee: { id: ticket.assignee_id, name: ticket.assignee_name, email: ticket.assignee_email },
+                    creator: { id: ticket.creator_id, name: ticket.creator_name, email: ticket.creator_email }
+                  };
                   controller.enqueue(
                     encoder.encode(`data: ${JSON.stringify({
                       type: 'ticket_update',
-                      ticket: ticket
+                      ticket: formattedTicket
                     })}\n\n`)
                   );
                 }

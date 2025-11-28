@@ -13,31 +13,31 @@ import { ArrowLeft, DollarSign, FileText, CheckCircle, X, Eye, Download } from '
 import { useSalesRealtime } from '@/app/hooks/useSalesRealtime';
 
 interface Transaction {
-  transaction_id: string;
-  invoice_number: string;
-  client_id: string;
+  transactionId: string;
+  invoiceNumber: string;
+  clientId: string;
   client_name: string;
-  transaction_date: string;
-  total_amount: number;
-  amount_paid: number;
-  amount_due: number;
-  payment_status: string;
-  payment_method: string;
+  transactionDate: string;
+  totalAmount: number;
+  amountPaid: number;
+  amountDue: number;
+  paymentStatus: string;
+  paymentMethod: string;
   currency: string;
-  created_at: string;
+  createdAt: string;
 }
 
 interface TransactionDetail extends Transaction {
-  subtotal_amount: number;
-  discount_percentage: number;
-  discount_amount: number;
-  tax_percentage: number;
-  tax_amount: number;
-  line_items: {
-    product_name: string;
+  subtotalAmount: number;
+  discountPercentage: number;
+  discountAmount: number;
+  taxPercentage: number;
+  taxAmount: number;
+  lineItems: {
+    productName: string;
     quantity: number;
-    unit_price: number;
-    line_total: number;
+    unitPrice: number;
+    lineTotal: number;
   }[];
   notes: string;
 }
@@ -135,8 +135,8 @@ export default function TransactionsPage() {
 
   const openPaymentDialog = (transaction: Transaction) => {
     setPaymentData({
-      transaction_id: transaction.transaction_id,
-      amount_paid: transaction.amount_due,
+      transaction_id: transaction.transactionId,
+      amount_paid: transaction.amountDue,
       payment_method: 'Bank Transfer',
       payment_reference: '',
       payment_date: new Date().toISOString().split('T')[0]
@@ -267,35 +267,35 @@ export default function TransactionsPage() {
               </TableHeader>
               <TableBody>
                 {transactions.map((txn) => (
-                  <TableRow key={txn.transaction_id}>
-                    <TableCell className="font-medium">{txn.invoice_number}</TableCell>
+                  <TableRow key={txn.transactionId}>
+                    <TableCell className="font-medium">{txn.invoiceNumber}</TableCell>
                     <TableCell>{txn.client_name}</TableCell>
-                    <TableCell>{new Date(txn.transaction_date).toLocaleDateString()}</TableCell>
-                    <TableCell>{formatCurrency(txn.total_amount)}</TableCell>
-                    <TableCell>{formatCurrency(txn.amount_paid)}</TableCell>
-                    <TableCell>{formatCurrency(txn.amount_due)}</TableCell>
+                    <TableCell>{new Date(txn.transactionDate).toLocaleDateString()}</TableCell>
+                    <TableCell>{formatCurrency(txn.totalAmount)}</TableCell>
+                    <TableCell>{formatCurrency(txn.amountPaid)}</TableCell>
+                    <TableCell>{formatCurrency(txn.amountDue)}</TableCell>
                     <TableCell>
-                      <span className={`px-2 py-1 rounded text-xs ${getStatusColor(txn.payment_status)}`}>
-                        {txn.payment_status}
+                      <span className={`px-2 py-1 rounded text-xs ${getStatusColor(txn.paymentStatus)}`}>
+                        {txn.paymentStatus}
                       </span>
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-2">
                         <button
-                          onClick={() => fetchTransactionDetail(txn.transaction_id)}
+                          onClick={() => fetchTransactionDetail(txn.transactionId)}
                           className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
                           title="View Details"
                         >
                           <Eye className="h-3 w-3" />
                         </button>
                         <button
-                          onClick={() => downloadInvoice(txn.transaction_id, txn.invoice_number)}
+                          onClick={() => downloadInvoice(txn.transactionId, txn.invoiceNumber)}
                           className="px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700"
                           title="Download Invoice"
                         >
                           <Download className="h-3 w-3" />
                         </button>
-                        {txn.payment_status !== 'paid' && (
+                        {txn.paymentStatus !== 'paid' && (
                           <button
                             onClick={() => openPaymentDialog(txn)}
                             className="px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
@@ -317,7 +317,7 @@ export default function TransactionsPage() {
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Invoice Details - {selectedTransaction?.invoice_number}</DialogTitle>
+            <DialogTitle>Invoice Details - {selectedTransaction?.invoiceNumber}</DialogTitle>
           </DialogHeader>
           {selectedTransaction && (
             <div className="space-y-4">
@@ -328,19 +328,19 @@ export default function TransactionsPage() {
                 </div>
                 <div>
                   <Label className="text-xs text-gray-500">Date</Label>
-                  <div className="font-medium">{new Date(selectedTransaction.transaction_date).toLocaleDateString()}</div>
+                  <div className="font-medium">{new Date(selectedTransaction.transactionDate).toLocaleDateString()}</div>
                 </div>
                 <div>
                   <Label className="text-xs text-gray-500">Payment Status</Label>
                   <div>
-                    <span className={`px-2 py-1 rounded text-xs ${getStatusColor(selectedTransaction.payment_status)}`}>
-                      {selectedTransaction.payment_status}
+                    <span className={`px-2 py-1 rounded text-xs ${getStatusColor(selectedTransaction.paymentStatus)}`}>
+                      {selectedTransaction.paymentStatus}
                     </span>
                   </div>
                 </div>
                 <div>
                   <Label className="text-xs text-gray-500">Payment Method</Label>
-                  <div className="font-medium">{selectedTransaction.payment_method || 'N/A'}</div>
+                  <div className="font-medium">{selectedTransaction.paymentMethod || 'N/A'}</div>
                 </div>
               </div>
 
@@ -357,12 +357,12 @@ export default function TransactionsPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {selectedTransaction.line_items?.map((item, index) => (
+                    {selectedTransaction.lineItems?.map((item, index) => (
                       <TableRow key={index}>
-                        <TableCell>{item.product_name}</TableCell>
+                        <TableCell>{item.productName}</TableCell>
                         <TableCell className="text-right">{item.quantity}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(item.unit_price)}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(item.line_total)}</TableCell>
+                        <TableCell className="text-right">{formatCurrency(item.unitPrice)}</TableCell>
+                        <TableCell className="text-right">{formatCurrency(item.lineTotal)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -373,29 +373,29 @@ export default function TransactionsPage() {
               <div className="border-t pt-4 space-y-2">
                 <div className="flex justify-between">
                   <span>Subtotal:</span>
-                  <span className="font-semibold">{formatCurrency(selectedTransaction.subtotal_amount)}</span>
+                  <span className="font-semibold">{formatCurrency(selectedTransaction.subtotalAmount)}</span>
                 </div>
-                {selectedTransaction.discount_amount > 0 && (
+                {selectedTransaction.discountAmount > 0 && (
                   <div className="flex justify-between text-red-600">
-                    <span>Discount ({selectedTransaction.discount_percentage}%):</span>
-                    <span>-{formatCurrency(selectedTransaction.discount_amount)}</span>
+                    <span>Discount ({selectedTransaction.discountPercentage}%):</span>
+                    <span>-{formatCurrency(selectedTransaction.discountAmount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between">
-                  <span>Tax ({selectedTransaction.tax_percentage}%):</span>
-                  <span>{formatCurrency(selectedTransaction.tax_amount)}</span>
+                  <span>Tax ({selectedTransaction.taxPercentage}%):</span>
+                  <span>{formatCurrency(selectedTransaction.taxAmount)}</span>
                 </div>
                 <div className="flex justify-between text-lg font-bold border-t pt-2">
                   <span>Total:</span>
-                  <span>{formatCurrency(selectedTransaction.total_amount)}</span>
+                  <span>{formatCurrency(selectedTransaction.totalAmount)}</span>
                 </div>
                 <div className="flex justify-between text-green-600">
                   <span>Amount Paid:</span>
-                  <span>{formatCurrency(selectedTransaction.amount_paid)}</span>
+                  <span>{formatCurrency(selectedTransaction.amountPaid)}</span>
                 </div>
                 <div className="flex justify-between text-orange-600 font-bold">
                   <span>Amount Due:</span>
-                  <span>{formatCurrency(selectedTransaction.amount_due)}</span>
+                  <span>{formatCurrency(selectedTransaction.amountDue)}</span>
                 </div>
               </div>
 
