@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Building2, Mail, User, Lock, Eye, EyeOff, CheckCircle, AlertCircle } from 'lucide-react';
+import { Building2, Mail, User, Lock, Eye, EyeOff, CheckCircle, AlertCircle, Upload, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 interface OnboardingFormData {
@@ -60,6 +60,9 @@ const OrganizationOnboarding: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [submitMessage, setSubmitMessage] = useState('');
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState<string>('');
+  const [uploadMethod, setUploadMethod] = useState<'file' | 'url'>('file');
 
   // Validation functions
   const validateEmail = (email: string): boolean => {
@@ -139,6 +142,68 @@ const OrganizationOnboarding: React.FC = () => {
     }
   };
 
+  const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        setErrors(prev => ({ ...prev, logoUrl: 'Please select an image file' }));
+        return;
+      }
+
+      // Validate file size (max 5MB)
+      if (file.size > 5 * 1024 * 1024) {
+        setErrors(prev => ({ ...prev, logoUrl: 'Image size must be less than 5MB' }));
+        return;
+      }
+
+      setLogoFile(file);
+      
+      // Create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setLogoPreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+
+      // Clear any errors
+      if (errors.logoUrl) {
+        setErrors(prev => ({ ...prev, logoUrl: undefined }));
+      }
+    }
+  };
+
+  const handleRemoveLogo = () => {
+    setLogoFile(null);
+    setLogoPreview('');
+    setFormData(prev => ({ ...prev, logoUrl: '' }));
+  };
+
+  const uploadLogoToServer = async (): Promise<string | null> => {
+    if (!logoFile) return null;
+
+    const formData = new FormData();
+    formData.append('logo', logoFile);
+
+    try {
+      const response = await fetch('/api/upload-logo', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        return data.logoUrl;
+      } else {
+        console.error('Logo upload failed');
+        return null;
+      }
+    } catch (error) {
+      console.error('Error uploading logo:', error);
+      return null;
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -150,6 +215,16 @@ const OrganizationOnboarding: React.FC = () => {
     setSubmitStatus('idle');
 
     try {
+      let finalLogoUrl = formData.logoUrl;
+
+      // If user uploaded a file, upload it first
+      if (uploadMethod === 'file' && logoFile) {
+        const uploadedUrl = await uploadLogoToServer();
+        if (uploadedUrl) {
+          finalLogoUrl = uploadedUrl;
+        }
+      }
+
       const response = await fetch('/api/org-onboarding-new', {
         method: 'POST',
         headers: {
@@ -163,7 +238,7 @@ const OrganizationOnboarding: React.FC = () => {
           password: formData.password,
           mobileNumber: formData.mobileNumber,
           selectedDepartments: formData.selectedDepartments,
-          logoUrl: formData.logoUrl || null,
+          logoUrl: finalLogoUrl || null,
           address: formData.address || null,
           taxPercentage: formData.taxPercentage ? parseFloat(formData.taxPercentage) : null,
           gstNumber: formData.gstNumber || null,
@@ -280,25 +355,25 @@ const OrganizationOnboarding: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Username */}
             <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Username *
-            </label>
-            <div className="relative">
-              <User className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                type="text"
-                value={formData.username}
-                onChange={(e) => handleInputChange('username', e.target.value)}
-                className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.username ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="Choose a unique username"
-                disabled={isSubmitting}
-              />
-            </div>
-            {errors.username && (
-              <p className="mt-1 text-sm text-red-600">{errors.username}</p>
-            )}
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Username *
+              </label>
+              <div className="relative">
+                <User className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  value={formData.username}
+                  onChange={(e) => handleInputChange('username', e.target.value)}
+                  className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    errors.username ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  placeholder="Choose a unique username"
+                  disabled={isSubmitting}
+                />
+              </div>
+              {errors.username && (
+                <p className="mt-1 text-sm text-red-600">{errors.username}</p>
+              )}
             </div>
 
             {/* Organization Email */}
@@ -311,17 +386,17 @@ const OrganizationOnboarding: React.FC = () => {
                 <input
                   type="email"
                   value={formData.orgEmail}
-                onChange={(e) => handleInputChange('orgEmail', e.target.value)}
-                className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.orgEmail ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="admin@company.com"
-                disabled={isSubmitting}
-              />
-            </div>
-            {errors.orgEmail && (
-              <p className="mt-1 text-sm text-red-600">{errors.orgEmail}</p>
-            )}
+                  onChange={(e) => handleInputChange('orgEmail', e.target.value)}
+                  className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    errors.orgEmail ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  placeholder="admin@company.com"
+                  disabled={isSubmitting}
+                />
+              </div>
+              {errors.orgEmail && (
+                <p className="mt-1 text-sm text-red-600">{errors.orgEmail}</p>
+              )}
             </div>
           </div>
 
@@ -329,68 +404,170 @@ const OrganizationOnboarding: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Password */}
             <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Password *
-            </label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={formData.password}
-                onChange={(e) => handleInputChange('password', e.target.value)}
-                className={`w-full pl-10 pr-12 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.password ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="Create a strong password"
-                disabled={isSubmitting}
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
-                disabled={isSubmitting}
-              >
-                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-              </button>
-            </div>
-            {errors.password && (
-              <p className="mt-1 text-sm text-red-600">{errors.password}</p>
-            )}
-            <p className="mt-1 text-xs text-gray-500">
-              Must be 8+ characters with uppercase, lowercase, and number
-            </p>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Password *
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={formData.password}
+                  onChange={(e) => handleInputChange('password', e.target.value)}
+                  className={`w-full pl-10 pr-12 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    errors.password ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  placeholder="Create a strong password"
+                  disabled={isSubmitting}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
+                  disabled={isSubmitting}
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
+              </div>
+              {errors.password && (
+                <p className="mt-1 text-sm text-red-600">{errors.password}</p>
+              )}
+              <p className="mt-1 text-xs text-gray-500">
+                Must be 8+ characters with uppercase, lowercase, and number
+              </p>
             </div>
 
             {/* Confirm Password */}
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Confirm Password *
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  value={formData.confirmPassword}
+                  onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
+                  className={`w-full pl-10 pr-12 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    errors.confirmPassword ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  placeholder="Confirm your password"
+                  disabled={isSubmitting}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
+                  disabled={isSubmitting}
+                >
+                  {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
+              </div>
+              {errors.confirmPassword && (
+                <p className="mt-1 text-sm text-red-600">{errors.confirmPassword}</p>
+              )}
+            </div>
+          </div>
+
+          {/* Organization Logo - Full Width */}
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Confirm Password *
+              Organization Logo (Optional)
             </label>
-            <div className="relative">
-              <Lock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                type={showConfirmPassword ? 'text' : 'password'}
-                value={formData.confirmPassword}
-                onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
-                className={`w-full pl-10 pr-12 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.confirmPassword ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="Confirm your password"
-                disabled={isSubmitting}
-              />
+            
+            {/* Upload Method Selector */}
+            <div className="flex gap-4 mb-4">
               <button
                 type="button"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
+                onClick={() => setUploadMethod('file')}
+                className={`flex-1 py-2 px-4 rounded-lg border ${
+                  uploadMethod === 'file'
+                    ? 'bg-blue-50 border-blue-500 text-blue-700'
+                    : 'bg-white border-gray-300 text-gray-700'
+                }`}
                 disabled={isSubmitting}
               >
-                {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                Upload File
+              </button>
+              <button
+                type="button"
+                onClick={() => setUploadMethod('url')}
+                className={`flex-1 py-2 px-4 rounded-lg border ${
+                  uploadMethod === 'url'
+                    ? 'bg-blue-50 border-blue-500 text-blue-700'
+                    : 'bg-white border-gray-300 text-gray-700'
+                }`}
+                disabled={isSubmitting}
+              >
+                Enter URL
               </button>
             </div>
-            {errors.confirmPassword && (
-              <p className="mt-1 text-sm text-red-600">{errors.confirmPassword}</p>
+
+            {/* File Upload */}
+            {uploadMethod === 'file' && (
+              <div>
+                {!logoPreview ? (
+                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-500 transition-colors">
+                    <input
+                      type="file"
+                      id="logo-upload"
+                      accept="image/*"
+                      onChange={handleLogoFileChange}
+                      className="hidden"
+                      disabled={isSubmitting}
+                    />
+                    <label
+                      htmlFor="logo-upload"
+                      className="cursor-pointer flex flex-col items-center"
+                    >
+                      <Upload className="w-12 h-12 text-gray-400 mb-2" />
+                      <span className="text-sm text-gray-600 mb-1">
+                        Click to upload or drag and drop
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        PNG, JPG, GIF up to 5MB
+                      </span>
+                    </label>
+                  </div>
+                ) : (
+                  <div className="relative border-2 border-gray-300 rounded-lg p-4">
+                    <img
+                      src={logoPreview}
+                      alt="Logo preview"
+                      className="max-h-32 mx-auto"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleRemoveLogo}
+                      className="absolute top-2 right-2 bg-red-500 text-white rounded-full p-1 hover:bg-red-600"
+                      disabled={isSubmitting}
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
-            </div>
+
+            {/* URL Input */}
+            {uploadMethod === 'url' && (
+              <div className="relative">
+                <Building2 className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                <input
+                  type="url"
+                  value={formData.logoUrl}
+                  onChange={(e) => handleInputChange('logoUrl', e.target.value)}
+                  className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    errors.logoUrl ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                  placeholder="https://example.com/logo.png"
+                  disabled={isSubmitting}
+                />
+              </div>
+            )}
+
+            {errors.logoUrl && (
+              <p className="mt-1 text-sm text-red-600">{errors.logoUrl}</p>
+            )}
           </div>
 
           {/* Address - Full Width */}
@@ -413,109 +590,55 @@ const OrganizationOnboarding: React.FC = () => {
             )}
           </div>
 
-          {/* Row 4: Logo URL & Tax Percentage */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Logo URL */}
-            <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Logo URL (Optional)
-            </label>
-            <div className="relative">
-              <Building2 className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-              <input
-                type="url"
-                value={formData.logoUrl}
-                onChange={(e) => handleInputChange('logoUrl', e.target.value)}
-                className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.logoUrl ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="https://example.com/logo.png"
-                disabled={isSubmitting}
-              />
-            </div>
-            {errors.logoUrl && (
-              <p className="mt-1 text-sm text-red-600">{errors.logoUrl}</p>
-            )}
-            </div>
-
-            {/* Tax Percentage */}
-            <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Tax Percentage (Optional)
-            </label>
-            <div className="relative">
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                max="100"
-                value={formData.taxPercentage}
-                onChange={(e) => handleInputChange('taxPercentage', e.target.value)}
-                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                  errors.taxPercentage ? 'border-red-300' : 'border-gray-300'
-                }`}
-                placeholder="18.00"
-                disabled={isSubmitting}
-              />
-              <span className="absolute right-3 top-3 text-gray-400">%</span>
-            </div>
-            {errors.taxPercentage && (
-              <p className="mt-1 text-sm text-red-600">{errors.taxPercentage}</p>
-            )}
-            <p className="mt-1 text-xs text-gray-500">
-              Tax percentage that will be levied on customers (0-100)
-            </p>
-            </div>
-          </div>
 
           {/* Row 5: GST Number & CIN */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* GST Number */}
             <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              GST Number (Optional)
-            </label>
-            <input
-              type="text"
-              value={formData.gstNumber}
-              onChange={(e) => handleInputChange('gstNumber', e.target.value.toUpperCase())}
-              maxLength={15}
-              className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                errors.gstNumber ? 'border-red-300' : 'border-gray-300'
-              }`}
-              placeholder="22AAAAA0000A1Z5"
-              disabled={isSubmitting}
-            />
-            {errors.gstNumber && (
-              <p className="mt-1 text-sm text-red-600">{errors.gstNumber}</p>
-            )}
-            <p className="mt-1 text-xs text-gray-500">
-              15-character alphanumeric GST identification number
-            </p>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                GST Number (Optional)
+              </label>
+              <input
+                type="text"
+                value={formData.gstNumber}
+                onChange={(e) => handleInputChange('gstNumber', e.target.value.toUpperCase())}
+                maxLength={15}
+                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  errors.gstNumber ? 'border-red-300' : 'border-gray-300'
+                }`}
+                placeholder="22AAAAA0000A1Z5"
+                disabled={isSubmitting}
+              />
+              {errors.gstNumber && (
+                <p className="mt-1 text-sm text-red-600">{errors.gstNumber}</p>
+              )}
+              <p className="mt-1 text-xs text-gray-500">
+                15-character alphanumeric GST identification number
+              </p>
             </div>
 
             {/* CIN */}
             <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              CIN - Corporate Identification Number (Optional)
-            </label>
-            <input
-              type="text"
-              value={formData.cin}
-              onChange={(e) => handleInputChange('cin', e.target.value.toUpperCase())}
-              maxLength={21}
-              className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                errors.cin ? 'border-red-300' : 'border-gray-300'
-              }`}
-              placeholder="U12345AB2021PLC123456"
-              disabled={isSubmitting}
-            />
-            {errors.cin && (
-              <p className="mt-1 text-sm text-red-600">{errors.cin}</p>
-            )}
-            <p className="mt-1 text-xs text-gray-500">
-              21-character Corporate Identification Number
-            </p>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                CIN - Corporate Identification Number (Optional)
+              </label>
+              <input
+                type="text"
+                value={formData.cin}
+                onChange={(e) => handleInputChange('cin', e.target.value.toUpperCase())}
+                maxLength={21}
+                className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                  errors.cin ? 'border-red-300' : 'border-gray-300'
+                }`}
+                placeholder="U12345AB2021PLC123456"
+                disabled={isSubmitting}
+              />
+              {errors.cin && (
+                <p className="mt-1 text-sm text-red-600">{errors.cin}</p>
+              )}
+              <p className="mt-1 text-xs text-gray-500">
+                21-character Corporate Identification Number
+              </p>
             </div>
           </div>
 

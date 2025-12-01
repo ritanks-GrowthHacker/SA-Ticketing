@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Users, TrendingUp, DollarSign, Target, Plus } from 'lucide-react';
 import { Pagination } from '@/app/sales/components/Pagination';
+import { AttendanceCheckInOut } from '@/components/AttendanceCheckInOut';
 
 interface Client {
   clientId: string;
@@ -179,6 +180,7 @@ export default function SalesMemberDashboard() {
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold">My Sales Dashboard</h1>
         <div className="flex gap-2">
+          <AttendanceCheckInOut />
           <Dialog open={isAddClientOpen} onOpenChange={setIsAddClientOpen}>
             <DialogTrigger asChild>
               <button className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2">

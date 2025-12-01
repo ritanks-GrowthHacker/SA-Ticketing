@@ -13,6 +13,7 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, User, Target, Filter, LayoutGrid, List } from 'lucide-react';
 import { UserRoleModal, TicketModal, CreateProjectModal } from '../../../components/modals';
+import { AttendanceCheckInOut } from '../../../components/AttendanceCheckInOut';
 import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { DepartmentProjectFilter } from './DepartmentProjectFilter';
 import { useAuthStore } from '../../store/authStore';
@@ -480,6 +481,8 @@ const ManagerDashboard = ({ projectId }: ManagerDashboardProps) => {
           >
             Create Project
           </button>
+          
+          <AttendanceCheckInOut />
           
           <button 
             onClick={() => setIsTicketModalOpen(true)}

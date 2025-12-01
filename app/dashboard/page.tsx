@@ -7,6 +7,7 @@ import AdminDashboard from './components/AdminDashboard';
 import ManagerDashboard from './components/ManagerDashboard';
 import UserDashboard from './components/UserDashboard';
 import { Loader2 } from 'lucide-react';
+import { AttendanceCheckInOut } from '@/components/AttendanceCheckInOut';
 
 const Dashboard = () => {
   const { user, role, isAuthenticated, token, currentProject, switchProject } = useAuth();

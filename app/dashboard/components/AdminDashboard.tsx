@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, Filter } from 'lucide-react';
 import { UserRoleModal, CreateProjectModal, TicketModal } from '../../../components/modals';
+import { AttendanceCheckInOut } from '../../../components/AttendanceCheckInOut';
 import { ProjectSelect } from '../../../components/ui/ProjectSelect';
 import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
@@ -503,6 +504,7 @@ const AdminDashboard = ({ projectId }: AdminDashboardProps) => {
           >
             Create Project
           </button>
+          <AttendanceCheckInOut />
           <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
             Export Data
           </button>
