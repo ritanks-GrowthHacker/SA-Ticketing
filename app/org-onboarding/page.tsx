@@ -71,7 +71,8 @@ const OrganizationOnboarding: React.FC = () => {
   };
 
   const validateDomain = (domain: string): boolean => {
-    const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$/;
+    // Updated regex to support multi-level TLDs like .co.in, .com.au, etc.
+    const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9](\.[a-zA-Z]{2,})+$/;
     return domainRegex.test(domain);
   };
 
