@@ -1,4 +1,6 @@
-import { supabaseAdminSales } from '@/app/db/connections';
+import { db } from '@/db';
+import { salesNotifications } from '@/db/sales-schema';
+import { eq, and, count as drizzleCount } from 'drizzle-orm';
 
 interface CreateNotificationParams {
   userId: string;
@@ -13,30 +15,29 @@ interface CreateNotificationParams {
 
 export async function createSalesNotification(params: CreateNotificationParams) {
   try {
-    const { data, error } = await supabaseAdminSales
-      .from('sales_notifications')
-      .insert({
-        user_id: params.userId,
-        organization_id: params.organizationId,
-        entity_type: params.entityType,
-        entity_id: params.entityId,
+    const result = await db
+      .insert(salesNotifications)
+      .values({
+        userId: params.userId,
+        organizationId: params.organizationId,
+        entityType: params.entityType,
+        entityId: params.entityId,
         title: params.title,
         message: params.message,
         type: params.type,
         metadata: params.metadata || {},
-        is_read: false,
-        created_at: new Date().toISOString()
+        isRead: false,
+        createdAt: new Date()
       })
-      .select()
-      .single();
+      .returning();
 
-    if (error) {
-      console.error('❌ Error creating sales notification:', error);
+    if (!result || result.length === 0) {
+      console.error('❌ Error creating sales notification: No data returned');
       return null;
     }
 
-    console.log('✅ Sales notification created:', data);
-    return data;
+    console.log('✅ Sales notification created:', result[0]);
+    return result[0];
   } catch (error) {
     console.error('❌ Exception creating sales notification:', error);
     return null;
@@ -46,18 +47,15 @@ export async function createSalesNotification(params: CreateNotificationParams) 
 // Get unread notification count
 export async function getUnreadSalesNotificationCount(userId: string) {
   try {
-    const { count, error } = await supabaseAdminSales
-      .from('sales_notifications')
-      .select('*', { count: 'exact', head: true })
-      .eq('user_id', userId)
-      .eq('is_read', false);
+    const result = await db
+      .select({ count: drizzleCount() })
+      .from(salesNotifications)
+      .where(and(
+        eq(salesNotifications.userId, userId),
+        eq(salesNotifications.isRead, false)
+      ));
 
-    if (error) {
-      console.error('Error fetching notification count:', error);
-      return 0;
-    }
-
-    return count || 0;
+    return result[0]?.count || 0;
   } catch (error) {
     console.error('Exception fetching notification count:', error);
     return 0;
@@ -67,15 +65,13 @@ export async function getUnreadSalesNotificationCount(userId: string) {
 // Mark notification as read
 export async function markSalesNotificationAsRead(notificationId: string) {
   try {
-    const { error } = await supabaseAdminSales
-      .from('sales_notifications')
-      .update({ is_read: true, read_at: new Date().toISOString() })
-      .eq('notification_id', notificationId);
-
-    if (error) {
-      console.error('Error marking notification as read:', error);
-      return false;
-    }
+    await db
+      .update(salesNotifications)
+      .set({ 
+        isRead: true, 
+        readAt: new Date() 
+      })
+      .where(eq(salesNotifications.notificationId, notificationId));
 
     return true;
   } catch (error) {

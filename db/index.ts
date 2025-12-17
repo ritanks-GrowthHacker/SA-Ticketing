@@ -9,5 +9,3 @@ const ticketSystemPool = new Pool({
 
 export const db = drizzle(ticketSystemPool, { schema });
 
-// Keep existing Supabase connections for backward compatibility during migration
-export { supabase, supabaseSales } from '../app/db/connections';

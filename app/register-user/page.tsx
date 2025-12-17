@@ -173,7 +173,7 @@ const RegisterUser = () => {
 
       // Auto-verify when all digits are entered
       if (index === 5 && value && newOtp.every(digit => digit)) {
-        verifyOTP();
+        verifyOTP(newOtp.join(''));
       }
     }
   };
@@ -185,9 +185,10 @@ const RegisterUser = () => {
     }
   };
 
-  const verifyOTP = async () => {
-    const otpCode = otpDigits.join('');
-    if (!otpCode || otpCode.length !== 6) {
+  const verifyOTP = async (otpCode?: string) => {
+    // Use provided OTP code or join from state
+    const code = otpCode || otpDigits.join('');
+    if (!code || code.length !== 6) {
       setError('Please enter a valid 6-digit OTP');
       return;
     }
@@ -201,7 +202,7 @@ const RegisterUser = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email,
-          otp: otpCode,
+          otp: code,
           userData: { organization_id: invitation?.organizationId }
         })
       });
@@ -436,7 +437,7 @@ const RegisterUser = () => {
                 </div>
                 
                 <button
-                  onClick={verifyOTP}
+                  onClick={() => verifyOTP()}
                   disabled={otpLoading}
                   className="w-full bg-indigo-600 text-white py-3 px-4 rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-medium"
                 >

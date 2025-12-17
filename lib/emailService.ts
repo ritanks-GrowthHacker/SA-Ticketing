@@ -1,5 +1,7 @@
 import nodemailer from "nodemailer";
-import { supabase } from "@/app/db/connections";
+import { db } from '@/db';
+import { users } from '@/db/schema';
+import { eq } from 'drizzle-orm';
 
 // Helper to get base URL for all email links
 const getBaseUrl = () => process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
@@ -88,18 +90,20 @@ class EmailService {
   // Check if user has email notifications enabled
   async checkEmailPreference(userEmail: string): Promise<boolean> {
     try {
-      const { data: user, error } = await supabase
-        .from("users")
-        .select("email_notifications_enabled")
-        .eq("email", userEmail)
-        .single();
+      const userData = await db
+        .select({
+          emailNotificationsEnabled: users.emailNotificationsEnabled
+        })
+        .from(users)
+        .where(eq(users.email, userEmail))
+        .limit(1);
 
-      if (error) {
-        console.error("Error checking email preference:", error);
-        return true; // Default to sending emails if we can't check preference
+      if (!userData || userData.length === 0) {
+        console.log("User not found, defaulting to send email");
+        return true; // Default to sending emails if we can't find user
       }
 
-      return user?.email_notifications_enabled ?? true; // Default to true if not set
+      return userData[0]?.emailNotificationsEnabled ?? true; // Default to true if not set
     } catch (error) {
       console.error("Error checking email preference:", error);
       return true; // Default to sending emails on error

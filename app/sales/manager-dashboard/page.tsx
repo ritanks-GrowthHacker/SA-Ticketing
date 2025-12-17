@@ -11,7 +11,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Users, TrendingUp, DollarSign, Target, Plus } from 'lucide-react';
 import { Pagination } from '@/app/sales/components/Pagination';
-import { AttendanceCheckInOut } from '@/components/AttendanceCheckInOut';
 
 interface Member {
   userId: string;
@@ -263,7 +262,6 @@ export default function SalesManagerDashboard() {
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold">Sales Manager Dashboard</h1>
         <div className="flex gap-2">
-          <AttendanceCheckInOut />
           <Select value={viewType} onValueChange={(value: 'my' | 'team') => setViewType(value)}>
             <SelectTrigger className="w-[180px]">
               <SelectValue />

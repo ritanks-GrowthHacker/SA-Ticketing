@@ -12,7 +12,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Users, TrendingUp, DollarSign, Target, ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { useSalesRealtime } from '@/app/hooks/useSalesRealtime';
 import { Pagination } from '@/app/sales/components/Pagination';
-import { AttendanceCheckInOut } from '@/components/AttendanceCheckInOut';
 
 interface Manager {
   userId: string;
@@ -275,7 +274,6 @@ export default function SalesAdminDashboard() {
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold">Sales Admin Dashboard</h1>
         <div className="flex gap-2">
-          <AttendanceCheckInOut />
           <button
             onClick={() => router.push('/sales/transactions')}
             className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"

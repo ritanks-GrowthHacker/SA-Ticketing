@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import jwt from 'jsonwebtoken';
-import { supabaseAdminSales } from '@/app/db/connections';
+import { db } from '@/db';
+import { transactions, clients, salesTeamHierarchy, salesTargets } from '@/db/sales-schema';
+import { eq, and, count as drizzleCount, sql } from 'drizzle-orm';
+
 import { DecodedToken, extractUserAndOrgId } from '../helpers';
 
 export async function GET(req: NextRequest) {
@@ -24,38 +27,52 @@ export async function GET(req: NextRequest) {
 
     if (viewType === 'member') {
       // Member-level analytics - query transactions directly
-      const { data: transactions } = await supabaseAdminSales
-        .from('transactions')
-        .select('total_amount, subtotal_amount, tax_amount, client_id, clients(client_name)')
-        .eq('organization_id', organizationId)
-        .eq('sales_member_id', userId);
+      const transactionsData = await db
+        .select({
+          totalAmount: transactions.totalAmount,
+          subtotalAmount: transactions.subtotalAmount,
+          taxAmount: transactions.taxAmount,
+          clientId: transactions.clientId,
+          clientName: clients.clientName
+        })
+        .from(transactions)
+        .leftJoin(clients, eq(transactions.clientId, clients.clientId))
+        .where(and(
+          eq(transactions.organizationId, organizationId),
+          eq(transactions.salesMemberId, userId)
+        ));
 
-      const totalRevenue = transactions?.reduce((sum, t) => sum + (Number(t.total_amount) || 0), 0) || 0;
-      const totalTransactions = transactions?.length || 0;
-      const totalProfit = transactions?.reduce((sum, t) => sum + (Number(t.total_amount) - Number(t.tax_amount) || 0), 0) || 0;
+      const totalRevenue = transactionsData?.reduce((sum, t) => sum + (Number(t.totalAmount) || 0), 0) || 0;
+      const totalTransactions = transactionsData?.length || 0;
+      const totalProfit = transactionsData?.reduce((sum, t) => sum + (Number(t.totalAmount) - Number(t.taxAmount) || 0), 0) || 0;
 
       // Get total clients
-      const { count: clientCount } = await supabaseAdminSales
-        .from('clients')
-        .select('*', { count: 'exact', head: true })
-        .eq('assigned_sales_member_id', userId)
-        .eq('status', 'active');
+      const clientCountResult = await db
+        .select({ count: drizzleCount() })
+        .from(clients)
+        .where(and(
+          eq(clients.assignedSalesMemberId, userId),
+          eq(clients.status, 'active')
+        ));
+      const clientCount = clientCountResult[0]?.count || 0;
 
       // Get targets
-      const { data: target } = await supabaseAdminSales
-        .from('sales_targets')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('target_type', 'monthly')
-        .eq('target_year', currentYear)
-        .eq('target_month', currentMonth)
-        .single();
+      const targetData = await db
+        .select()
+        .from(salesTargets)
+        .where(and(
+          eq(salesTargets.userId, userId),
+          eq(salesTargets.targetType, 'monthly'),
+          eq(salesTargets.targetYear, currentYear),
+          eq(salesTargets.targetMonth, currentMonth)
+        ))
+        .limit(1);
 
       // Group by client
       const revenueByClient: any = {};
-      transactions?.forEach(txn => {
-        const clientId = txn.client_id;
-        const clientName = (txn.clients as any)?.client_name || 'Unknown';
+      transactionsData?.forEach(txn => {
+        const clientId = txn.clientId;
+        const clientName = txn.clientName || 'Unknown';
         if (!revenueByClient[clientId]) {
           revenueByClient[clientId] = {
             client_name: clientName,
@@ -63,7 +80,7 @@ export async function GET(req: NextRequest) {
             transactions: 0
           };
         }
-        revenueByClient[clientId].revenue += Number(txn.total_amount) || 0;
+        revenueByClient[clientId].revenue += Number(txn.totalAmount) || 0;
         revenueByClient[clientId].transactions += 1;
       });
 
@@ -72,7 +89,7 @@ export async function GET(req: NextRequest) {
         totalTransactions,
         totalProfit,
         totalClients: clientCount || 0,
-        target: target || null,
+        target: targetData[0] || null,
         revenueByClient: Object.values(revenueByClient)
       });
 
@@ -80,14 +97,16 @@ export async function GET(req: NextRequest) {
       // Manager sees their team's aggregated data (including their own transactions)
       console.log('📊 Manager Analytics - User ID:', userId, 'Org ID:', organizationId);
       
-      const { data: teamMembers } = await supabaseAdminSales
-        .from('sales_team_hierarchy')
-        .select('user_id')
-        .eq('manager_id', userId)
-        .eq('organization_id', organizationId)
-        .eq('is_active', true);
+      const teamMembersData = await db
+        .select({ userId: salesTeamHierarchy.userId })
+        .from(salesTeamHierarchy)
+        .where(and(
+          eq(salesTeamHierarchy.managerId, userId),
+          eq(salesTeamHierarchy.organizationId, organizationId),
+          eq(salesTeamHierarchy.isActive, true)
+        ));
 
-      const memberIds = teamMembers?.map(m => m.user_id) || [];
+      const memberIds = teamMembersData?.map(m => m.userId) || [];
       console.log('👥 Team Members:', memberIds);
       
       // Include manager's own ID in the list
@@ -95,30 +114,35 @@ export async function GET(req: NextRequest) {
       console.log('📋 All Member IDs (including manager):', allMemberIds);
 
       // Query transactions directly for team members + manager
-      const { data: transactions, error: txnError } = await supabaseAdminSales
-        .from('transactions')
-        .select('total_amount, tax_amount, sales_member_id')
-        .eq('organization_id', organizationId)
-        .in('sales_member_id', allMemberIds);
+      const transactionsData = await db
+        .select({
+          totalAmount: transactions.totalAmount,
+          taxAmount: transactions.taxAmount,
+          salesMemberId: transactions.salesMemberId
+        })
+        .from(transactions)
+        .where(and(
+          eq(transactions.organizationId, organizationId),
+          sql`${transactions.salesMemberId} = ANY(${allMemberIds})`
+        ));
 
-      console.log('💰 Transactions found:', transactions?.length || 0);
-      if (txnError) console.error('❌ Transaction query error:', txnError);
-      if (transactions) console.log('💵 Sample transaction:', transactions[0]);
+      console.log('💰 Transactions found:', transactionsData?.length || 0);
+      if (transactionsData) console.log('💵 Sample transaction:', transactionsData[0]);
 
-      const totalRevenue = transactions?.reduce((sum, t) => sum + (Number(t.total_amount) || 0), 0) || 0;
-      const totalTransactions = transactions?.length || 0;
-      const totalProfit = transactions?.reduce((sum, t) => sum + (Number(t.total_amount) - Number(t.tax_amount) || 0), 0) || 0;
+      const totalRevenue = transactionsData?.reduce((sum, t) => sum + (Number(t.totalAmount) || 0), 0) || 0;
+      const totalTransactions = transactionsData?.length || 0;
+      const totalProfit = transactionsData?.reduce((sum, t) => sum + (Number(t.totalAmount) - Number(t.taxAmount) || 0), 0) || 0;
       
       console.log('📈 Analytics Summary:', { totalRevenue, totalTransactions, totalProfit });
 
       // Aggregate by member (including manager)
       const memberPerformance = allMemberIds.map(memberId => {
-        const memberTxns = transactions?.filter(t => t.sales_member_id === memberId) || [];
+        const memberTxns = transactionsData?.filter(t => t.salesMemberId === memberId) || [];
         return {
           user_id: memberId,
-          revenue: memberTxns.reduce((sum, t) => sum + (Number(t.total_amount) || 0), 0),
+          revenue: memberTxns.reduce((sum, t) => sum + (Number(t.totalAmount) || 0), 0),
           transactions: memberTxns.length,
-          profit: memberTxns.reduce((sum, t) => sum + (Number(t.total_amount) - Number(t.tax_amount) || 0), 0)
+          profit: memberTxns.reduce((sum, t) => sum + (Number(t.totalAmount) - Number(t.taxAmount) || 0), 0)
         };
       });
 
@@ -132,33 +156,45 @@ export async function GET(req: NextRequest) {
 
     } else if (viewType === 'admin') {
       // Admin sees organization-wide data - query transactions directly
-      const { data: transactions } = await supabaseAdminSales
-        .from('transactions')
-        .select('total_amount, subtotal_amount, tax_amount, discount_amount, sales_member_id')
-        .eq('organization_id', organizationId);
+      const transactionsData = await db
+        .select({
+          totalAmount: transactions.totalAmount,
+          subtotalAmount: transactions.subtotalAmount,
+          taxAmount: transactions.taxAmount,
+          discountAmount: transactions.discountAmount,
+          salesMemberId: transactions.salesMemberId
+        })
+        .from(transactions)
+        .where(eq(transactions.organizationId, organizationId));
 
-      const totalRevenue = transactions?.reduce((sum, t) => sum + (Number(t.total_amount) || 0), 0) || 0;
-      const totalTransactions = transactions?.length || 0;
-      const totalProfit = transactions?.reduce((sum, t) => sum + (Number(t.total_amount) - Number(t.tax_amount) - Number(t.discount_amount) || 0), 0) || 0;
+      const totalRevenue = transactionsData?.reduce((sum, t) => sum + (Number(t.totalAmount) || 0), 0) || 0;
+      const totalTransactions = transactionsData?.length || 0;
+      const totalProfit = transactionsData?.reduce((sum, t) => sum + (Number(t.totalAmount) - Number(t.taxAmount) - Number(t.discountAmount) || 0), 0) || 0;
 
       // Get total active clients
-      const { count: clientCount } = await supabaseAdminSales
-        .from('clients')
-        .select('*', { count: 'exact', head: true })
-        .eq('organization_id', organizationId)
-        .eq('status', 'active');
+      const clientCountResult = await db
+        .select({ count: drizzleCount() })
+        .from(clients)
+        .where(and(
+          eq(clients.organizationId, organizationId),
+          eq(clients.status, 'active')
+        ));
+      const clientCount = clientCountResult[0]?.count || 0;
 
       // Get hierarchy for manager grouping
-      const { data: hierarchy } = await supabaseAdminSales
-        .from('sales_team_hierarchy')
-        .select('user_id, manager_id')
-        .eq('organization_id', organizationId);
+      const hierarchyData = await db
+        .select({
+          userId: salesTeamHierarchy.userId,
+          managerId: salesTeamHierarchy.managerId
+        })
+        .from(salesTeamHierarchy)
+        .where(eq(salesTeamHierarchy.organizationId, organizationId));
 
       // Revenue by manager
       const managerPerformance: any = {};
-      transactions?.forEach(txn => {
-        const memberHierarchy = hierarchy?.find(h => h.user_id === txn.sales_member_id);
-        const managerId = memberHierarchy?.manager_id || 'unassigned';
+      transactionsData?.forEach(txn => {
+        const memberHierarchy = hierarchyData?.find(h => h.userId === txn.salesMemberId);
+        const managerId = memberHierarchy?.managerId || 'unassigned';
         
         if (!managerPerformance[managerId]) {
           managerPerformance[managerId] = {
@@ -167,9 +203,9 @@ export async function GET(req: NextRequest) {
             profit: 0
           };
         }
-        managerPerformance[managerId].revenue += Number(txn.total_amount) || 0;
+        managerPerformance[managerId].revenue += Number(txn.totalAmount) || 0;
         managerPerformance[managerId].transactions += 1;
-        managerPerformance[managerId].profit += Number(txn.total_amount) - Number(txn.tax_amount) || 0;
+        managerPerformance[managerId].profit += Number(txn.totalAmount) - Number(txn.taxAmount) || 0;
       });
 
       return NextResponse.json({

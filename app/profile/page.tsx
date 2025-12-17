@@ -5,6 +5,7 @@ import { Camera, Mail, Phone, MapPin, Calendar, Edit3, Save, X, User, Briefcase,
 import { useAuthStore } from '../store/authStore';
 import { UserProfile, UpdateProfileRequest } from '../../db/types';
 import PasswordChangeModal from '../../components/modals/PasswordChangeModal';
+import { AttendanceCheckInOut } from '@/components/AttendanceCheckInOut';
 
 const Profile = () => {
   const { token, organization, roles } = useAuthStore();
@@ -342,9 +343,12 @@ const Profile = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Profile</h1>
-        <p className="text-gray-600 mt-1">Manage your account settings and preferences</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Profile</h1>
+          <p className="text-gray-600 mt-1">Manage your account settings and preferences</p>
+        </div>
+        <AttendanceCheckInOut />
       </div>
 
       {/* Success/Error Messages */}

@@ -1,10 +1,8 @@
 // Enhanced RBAC helper functions for project documents
 
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+import { db } from '@/db';
+import { userProject, globalRoles } from '@/db/schema';
+import { eq, and } from 'drizzle-orm';
 
 export interface RBACResult {
   canCreate: boolean;
@@ -53,24 +51,27 @@ export async function validateProjectDocumentRBAC(
 
   try {
     // Get user's role in the project
-    const { data: userProject, error: userProjectError } = await supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        project_id,
-        role_id,
-        roles!inner(id, name)
-      `)
-      .eq('user_id', userId)
-      .eq('project_id', projectId)
-      .single();
+    const userProjectData = await db
+      .select({
+        userId: userProject.userId,
+        projectId: userProject.projectId,
+        roleId: userProject.roleId,
+        roleName: globalRoles.name
+      })
+      .from(userProject)
+      .innerJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(and(
+        eq(userProject.userId, userId),
+        eq(userProject.projectId, projectId)
+      ))
+      .limit(1);
 
-    if (userProjectError || !userProject) {
+    if (!userProjectData || userProjectData.length === 0) {
       result.reasons.push('User does not have access to this project');
       return result;
     }
 
-    const userRole = (userProject.roles as any)?.name || 'Member';
+    const userRole = userProjectData[0].roleName || 'Member';
     result.userRole = userRole;
 
     // Base permissions for project members
@@ -146,19 +147,19 @@ export async function validateProjectDocumentRBAC(
  */
 export async function getDocumentAuthorRole(authorId: string, projectId: string): Promise<string> {
   try {
-    const { data: authorProject } = await supabase
-      .from('user_project')
-      .select(`
-        user_id,
-        project_id,
-        role_id,
-        roles!inner(id, name)
-      `)
-      .eq('user_id', authorId)
-      .eq('project_id', projectId)
-      .single();
+    const authorProjectData = await db
+      .select({
+        roleName: globalRoles.name
+      })
+      .from(userProject)
+      .innerJoin(globalRoles, eq(userProject.roleId, globalRoles.id))
+      .where(and(
+        eq(userProject.userId, authorId),
+        eq(userProject.projectId, projectId)
+      ))
+      .limit(1);
 
-    return (authorProject?.roles as any)?.name || 'Member';
+    return authorProjectData[0]?.roleName || 'Member';
   } catch (error) {
     console.error('Error fetching author role:', error);
     return 'Member';

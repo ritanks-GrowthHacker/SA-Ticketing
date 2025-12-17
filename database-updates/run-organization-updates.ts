@@ -1,63 +1,26 @@
-import { supabase } from '../app/db/connections';
+// DEPRECATED: This migration script used Supabase and is no longer functional
+// The database has been migrated to PostgreSQL
+// Use Drizzle migrations or direct SQL scripts instead
+
 import fs from 'fs';
 import path from 'path';
 
-async function updateOrganizationTable() {
-  try {
-    console.log('🔄 Starting organization table updates...');
+console.warn('⚠️ This script is deprecated. Database has been migrated to PostgreSQL.');
+console.warn('⚠️ Please use Drizzle migrations or run SQL scripts directly against PostgreSQL.');
+console.warn('⚠️ See drizzle.config.ts and use: npx drizzle-kit push');
 
-    // Read the SQL file
-    const sqlPath = path.join(__dirname, 'add-organization-enhancements.sql');
-    const sqlContent = fs.readFileSync(sqlPath, 'utf8');
+/*
+// Example of how to run migrations with Drizzle:
+// 1. Update your schema in db/schema.ts
+// 2. Run: npx drizzle-kit generate
+// 3. Run: npx drizzle-kit push
 
-    // Split SQL commands by semicolon and filter empty ones
-    const sqlCommands = sqlContent
-      .split(';')
-      .map(cmd => cmd.trim())
-      .filter(cmd => cmd.length > 0 && !cmd.startsWith('--'));
+// Or run SQL directly:
+import { db } from '../db';
+import { sql } from 'drizzle-orm';
 
-    console.log(`📝 Found ${sqlCommands.length} SQL commands to execute`);
-
-    // Execute each command
-    for (let i = 0; i < sqlCommands.length; i++) {
-      const command = sqlCommands[i];
-      console.log(`⚡ Executing command ${i + 1}/${sqlCommands.length}...`);
-      
-      const { error } = await supabase.rpc('exec_sql', { 
-        sql_query: command 
-      });
-
-      if (error) {
-        console.error(`❌ Error executing command ${i + 1}:`, error);
-        console.error(`Command: ${command}`);
-        // Continue with other commands even if one fails
-      } else {
-        console.log(`✅ Command ${i + 1} executed successfully`);
-      }
-    }
-
-    // Verify the changes
-    console.log('\n🔍 Verifying table structure...');
-    const { data: tableInfo, error: infoError } = await supabase
-      .from('information_schema.columns')
-      .select('column_name, data_type, is_nullable')
-      .eq('table_name', 'organizations');
-
-    if (infoError) {
-      console.error('❌ Error getting table info:', infoError);
-    } else {
-      console.log('📊 Organizations table columns:');
-      tableInfo?.forEach(col => {
-        console.log(`   ${col.column_name}: ${col.data_type} ${col.is_nullable === 'YES' ? '(nullable)' : '(not null)'}`);
-      });
-    }
-
-    console.log('\n✅ Organization table update process completed!');
-
-  } catch (error) {
-    console.error('❌ Fatal error updating organization table:', error);
-  }
+async function runMigrations() {
+  const sqlFile = fs.readFileSync(path.join(__dirname, 'your-migration.sql'), 'utf8');
+  await db.execute(sql.raw(sqlFile));
 }
-
-// Run the update
-updateOrganizationTable();
+*/

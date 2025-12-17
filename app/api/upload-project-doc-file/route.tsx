@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAdmin } from '@/app/db/connections'; // Keep for Storage only
+// NOTE: File storage functionality disabled - Supabase storage removed
+// TODO: Implement alternative storage solution (AWS S3, Cloudinary, etc.)
 import { db, projects, eq } from '@/lib/db-helper';
 import jwt from 'jsonwebtoken';
 
@@ -134,53 +135,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate unique file path
-    const timestamp = Date.now();
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${projectId}/${timestamp}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-    const bucketName = 'project_ticket_module';
-
-    console.log('📎 Uploading to Supabase Storage:', { bucketName, fileName });
-
-    // Convert File to ArrayBuffer then to Buffer
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    // Upload to Supabase Storage using admin client
-    const { data: uploadData, error: uploadError } = await supabaseAdmin.storage
-      .from(bucketName)
-      .upload(fileName, buffer, {
-        contentType: file.type,
-        cacheControl: '3600',
-        upsert: false
-      });
-
-    if (uploadError) {
-      console.error('❌ Upload error:', uploadError);
-      return NextResponse.json(
-        { error: 'Failed to upload file', details: uploadError.message },
-        { status: 500 }
-      );
-    }
-
-    // Get public URL
-    const { data: { publicUrl } } = supabaseAdmin.storage
-      .from(bucketName)
-      .getPublicUrl(fileName);
-
-    console.log('✅ File uploaded successfully:', publicUrl);
-
-    return NextResponse.json({
-      success: true,
-      message: 'File uploaded successfully',
-      file: {
-        url: publicUrl,
-        name: file.name,
-        type: file.type,
-        size: file.size,
-        path: fileName
-      }
+    // File storage functionality temporarily disabled
+    console.error('❌ File upload disabled - Supabase storage removed');
+    console.log('📎 File details:', {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+      projectId
     });
+    
+    // TODO: Implement alternative file storage solution
+    // Options:
+    // 1. AWS S3
+    // 2. Cloudinary
+    // 3. Local file system with nginx
+    // 4. Google Cloud Storage
+    // 5. Azure Blob Storage
+    
+    return NextResponse.json({
+      error: 'File upload is temporarily unavailable',
+      details: 'File storage needs to be configured. Supabase storage has been removed. Please implement an alternative storage solution.',
+      suggestions: [
+        'Configure AWS S3 bucket',
+        'Setup Cloudinary account',
+        'Implement local file storage',
+        'Use Google Cloud Storage',
+        'Setup Azure Blob Storage'
+      ]
+    }, { status: 501 });
 
   } catch (error) {
     console.error('❌ Unexpected error in upload-project-doc-file:', error);

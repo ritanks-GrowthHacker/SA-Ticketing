@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart3, Users, FolderOpen, Ticket, TrendingUp, Clock, User, Target, Filter, LayoutGrid, List, AlertCircle } from 'lucide-react';
 import { TicketModal } from '../../../components/modals';
-import { AttendanceCheckInOut } from '../../../components/AttendanceCheckInOut';
 import DragDropTicketBoard from '../../../components/ui/DragDropTicketBoard';
 import { useAuthStore } from '../../store/authStore';
 import { useDashboardStore, DashboardMetrics, MetricValue, ActivityItem } from '../../store/dashboardStore';
@@ -448,8 +447,6 @@ const UserDashboard = ({ projectId }: UserDashboardProps) => {
               initialProjectId={selectedProject}
             />
           )}
-          
-          <AttendanceCheckInOut />
           
           <button 
             onClick={() => {
