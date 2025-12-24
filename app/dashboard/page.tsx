@@ -8,15 +8,18 @@ import ManagerDashboard from './components/ManagerDashboard';
 import UserDashboard from './components/UserDashboard';
 import { Loader2 } from 'lucide-react';
 import { AttendanceCheckInOut } from '@/components/AttendanceCheckInOut';
+import ProjectAssistantModal from '@/components/modals/ProjectAssistantModal';
 
 const Dashboard = () => {
-  const { user, role, isAuthenticated, token, currentProject, switchProject } = useAuth();
+  const { user, role, isAuthenticated, token, currentProject, switchProject, organization } = useAuth();
   const { currentDepartment } = useAuthStore();
   const searchParams = useSearchParams();
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [currentProjectRole, setCurrentProjectRole] = useState<string | null>(null);
   const [resolvedRoleName, setResolvedRoleName] = useState<string | null>(null);
   const [hasHydrated, setHasHydrated] = useState(false);
+  const [showWelcomeModal, setShowWelcomeModal] = useState(false);
+  const [welcomeChecked, setWelcomeChecked] = useState(false);
 
   // Wait for Zustand to hydrate from localStorage
   useEffect(() => {
@@ -71,6 +74,61 @@ const Dashboard = () => {
       console.log('✅ Using existing project context:', currentProject);
     }
   }, [currentProject, token, isAuthenticated]);
+
+  // Check if this is the first time loading dashboard after onboarding
+  useEffect(() => {
+    const checkFirstLogin = async () => {
+      if (!token || !isAuthenticated || welcomeChecked) {
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/check-first-login', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('🎯 First login check:', data);
+          
+          if (data.shouldShowWelcome) {
+            setShowWelcomeModal(true);
+          }
+          setWelcomeChecked(true);
+        }
+      } catch (error) {
+        console.error('❌ Error checking first login:', error);
+        setWelcomeChecked(true);
+      }
+    };
+
+    checkFirstLogin();
+  }, [token, isAuthenticated, welcomeChecked]);
+
+  // Handle closing the welcome modal
+  const handleCloseWelcomeModal = async () => {
+    setShowWelcomeModal(false);
+    
+    // Update the first login status
+    if (token) {
+      try {
+        await fetch('/api/check-first-login', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        console.log('✅ First login status updated');
+      } catch (error) {
+        console.error('❌ Error updating first login status:', error);
+      }
+    }
+  };
 
   // Get project and role from URL parameters
   useEffect(() => {
@@ -292,6 +350,17 @@ const Dashboard = () => {
   return (
     <div>
       {renderDashboard()}
+      
+      {/* Welcome/System Tour Modal */}
+      {showWelcomeModal && user && (
+        <ProjectAssistantModal
+          isOpen={showWelcomeModal}
+          onClose={handleCloseWelcomeModal}
+          userName={user.name}
+          organizationName={organization?.name || 'Your Organization'}
+          roleName={role || 'Member'}
+        />
+      )}
     </div>
   );
 };

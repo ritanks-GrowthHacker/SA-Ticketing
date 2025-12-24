@@ -5,7 +5,7 @@ import { Mail, Clock, CheckCircle } from 'lucide-react';
 
 interface OTPVerificationProps {
   email: string;
-  type: 'registration' | 'login' | 'password-reset';
+  type: 'registration' | 'login' | 'password-reset' | 'org-password-reset';
   userData?: any;
   onVerificationSuccess: (data: any) => void;
   onResendOTP: () => void;
@@ -74,6 +74,8 @@ export default function OTPVerification({
         endpoint = '/api/verify-registration-otp';
       } else if (type === 'password-reset') {
         endpoint = '/api/verify-password-reset-otp';
+      } else if (type === 'org-password-reset') {
+        endpoint = '/api/verify-org-password-reset-otp';
       }
       
       const response = await fetch(endpoint, {
@@ -93,7 +95,7 @@ export default function OTPVerification({
       if (response.ok && data.success) {
         onVerificationSuccess(data);
       } else {
-        setError(data.message || 'Invalid OTP. Please try again.');
+        setError(data.message || data.error || 'Invalid OTP. Please try again.');
         setOtp(['', '', '', '', '', '']);
       }
     } catch (error) {

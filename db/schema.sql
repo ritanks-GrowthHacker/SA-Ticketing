@@ -347,6 +347,7 @@ CREATE TABLE public.users (
   dark_mode_enabled boolean DEFAULT false,
   organization_id uuid,
   department_id uuid,
+  first_login_after_project_assignment boolean DEFAULT false,
   CONSTRAINT users_pkey PRIMARY KEY (id),
   CONSTRAINT users_department_id_fkey FOREIGN KEY (department_id) REFERENCES public.departments(id)
 );

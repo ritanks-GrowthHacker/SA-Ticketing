@@ -62,6 +62,7 @@ export const users = pgTable('users', {
   darkModeEnabled: boolean('dark_mode_enabled').default(false),
   organizationId: uuid('organization_id'),
   departmentId: uuid('department_id').references(() => departments.id),
+  hasSeenDashboardWelcome: boolean('has_seen_dashboard_welcome').default(false),
 });
 
 // Global Roles Table
