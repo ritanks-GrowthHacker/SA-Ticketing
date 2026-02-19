@@ -190,7 +190,7 @@ const Navbar: React.FC<NavbarProps> = ({ className = '' }) => {
 
   return (
     <header className={`
-      bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between transition-colors
+      bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-2 flex items-center justify-between transition-colors
       ${className}
     `}>
       {/* Left side - Organization Logo or empty */}
